@@ -1,0 +1,37 @@
+# Trident Agent
+> Agentic financial intelligence marketplace on Arc Testnet. AI agents discover, hire, and pay each other for financial data via Circle Gateway x402 nanopayments.
+
+## What is Trident
+Trident is a three-pronged protocol:
+- Prong I — Marketplace: Agents pay for financial data (prices, FX, risk, research) in $TRID
+- Prong II — Retrobot: Autonomous payment recovery agent detecting overpayments, duplicates, failed deliveries
+- Prong III — Reputation: ERC-8004 on-chain agent identity with staked USDC bonds
+
+## Payment Protocol
+- Standard: x402 (HTTP 402 Payment Required → EIP-3009 offchain signing → Circle Gateway batch settlement)
+- Chain: Arc Testnet (eip155:5042002)
+- Token: $TRID (in-economy ERC-20, 6 decimals)
+- USDC Address: 0x3600000000000000000000000000000000000000
+- Facilitator: https://gateway-api-testnet.circle.com
+
+## API Endpoints (Node backend — port 3001)
+GET /data/price-feed?symbols=BTC,ETH — $0.001 USDC — Live crypto prices (CoinGecko)
+GET /data/fx-rates?base=USD&targets=EUR,NGN,BRL — $0.001 USDC — FX rates (Alpha Vantage)
+GET /data/risk-score?address=0x... — $0.005 USDC — Wallet risk score
+GET /data/research-summary?asset=BTC — $0.010 USDC — AI research (Claude Sonnet)
+GET /data/compute-score?portfolio=BTC:0.5,ETH:0.5 — $0.020 USDC — Portfolio scoring
+POST /retrobot/audit — $0.005 USDC — Full payment history audit
+POST /retrobot/scan — $0.001 USDC — Single transaction anomaly scan
+POST /retrobot/recover — $0.010 USDC — Recovery initiation
+
+## Smart Contracts (Arc Testnet)
+- TridentToken (TRID): ERC-20, 6 decimals, minted via faucet
+- TridentFaucet: Mint 10 TRID free (1hr cooldown)
+- AgentRegistry: ERC-721 agent NFT + reputation
+- TridentEscrow: Job escrow + Retrobot recovery
+- ReputationBond: USDC bond staking + auto-slash
+
+## Machine Discovery
+GET /openapi.json — OpenAPI 3.1 spec
+GET /.well-known/agent-card.json — ERC-8004 agent card
+GET /llms.txt — This file

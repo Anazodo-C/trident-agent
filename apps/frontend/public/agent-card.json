@@ -1,0 +1,47 @@
+{
+  "@context": "https://erc8004.org/schema",
+  "name": "Trident Financial Intelligence Agent",
+  "description": "Agentic financial intelligence marketplace on Arc Testnet. Pay per call via x402/Circle Gateway.",
+  "version": "1.0.0",
+  "wallet": {
+    "caip10": "eip155:5042002:0x3315ebaab06d6266e92f6063b9360ae10d24F0a0",
+    "chain": "Arc Testnet",
+    "chain_id": 5042002
+  },
+  "payment": {
+    "protocol": "x402",
+    "currency": "USDC",
+    "network": "eip155:5042002",
+    "facilitator": "https://gateway-api-testnet.circle.com",
+    "token": {
+      "name": "Trident",
+      "symbol": "TRID",
+      "decimals": 6,
+      "address": ""
+    }
+  },
+  "capabilities": [
+    "price_feed",
+    "fx_rates",
+    "risk_score",
+    "research_summary",
+    "compute_score",
+    "payment_audit",
+    "payment_recovery",
+    "agent_registration",
+    "reputation_scoring"
+  ],
+  "endpoints": {
+    "frontend": "https://tridentagent.xyz",
+    "node_api": "https://api.tridentagent.xyz",
+    "python_api": "https://py-api.tridentagent.xyz",
+    "openapi": "https://api.tridentagent.xyz/openapi.json",
+    "llms_txt": "https://tridentagent.xyz/llms.txt"
+  },
+  "hackathon": {
+    "name": "Lepton Agents Hackathon",
+    "sponsors": ["Canteen", "Circle"],
+    "deadline": "2026-07-06",
+    "track": "x402 + Circle Gateway"
+  }
+}
