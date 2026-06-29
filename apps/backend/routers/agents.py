@@ -7,6 +7,7 @@ import logging
 
 from models.database import get_db, Agent, AgentType
 from config import get_settings
+from arc.identity import ArcIdentityClient
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -57,6 +58,22 @@ async def register_agent(request: RegisterAgentRequest, db: AsyncSession = Depen
     await db.refresh(agent)
 
     logger.info(f"Agent registered: {request.wallet_address} ({agent_type.value})")
+
+    # Register Arc-native ERC-8004 identity (non-blocking, non-fatal)
+    arc_identity = {}
+    try:
+        identity_client = ArcIdentityClient()
+        arc_identity = await identity_client.register_identity(
+            owner_address=request.wallet_address,
+            agent_name=request.name,
+            agent_type=agent_type.value,
+        )
+        if arc_identity.get("arc_agent_id"):
+            agent.agent_id_onchain = arc_identity["arc_agent_id"]
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"Arc identity registration skipped: {e}")
+
     return {
         "agent_id": agent.id,
         "wallet_address": agent.wallet_address,
@@ -64,6 +81,9 @@ async def register_agent(request: RegisterAgentRequest, db: AsyncSession = Depen
         "agent_type": agent.agent_type.value,
         "reputation_score": agent.reputation_score,
         "status": "registered",
+        "arc_identity": arc_identity,
+        "arc_identity_registry": "0x8004A818BFB912233c491871b3d84c89A494BD9e",
+        "arc_scan": f"https://testnet.arcscan.app/address/{request.wallet_address}",
     }
 
 

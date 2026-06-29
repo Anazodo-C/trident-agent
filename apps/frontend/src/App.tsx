@@ -3,6 +3,7 @@ import { ConnectButton } from "@rainbow-me/rainbowkit";
 import MarketplacePage from "./modules/marketplace/MarketplacePage";
 import RetrobotPage from "./modules/retrobot/RetrobotPage";
 import ReputationPage from "./modules/reputation/ReputationPage";
+import DashboardPage from "./modules/dashboard/DashboardPage";
 
 function Nav() {
   const linkCls = ({ isActive }: { isActive: boolean }) =>
@@ -22,8 +23,14 @@ function Nav() {
         </div>
         <div className="flex items-center gap-1">
           <NavLink to="/" end className={linkCls}>Marketplace</NavLink>
-          <NavLink to="/retrobot" className={linkCls}>Retrobot</NavLink>
+          <NavLink to="/retrobot" className={linkCls}>
+            <span className="flex items-center gap-1">
+              Retrobot
+              <span className="bg-emerald-500 w-1.5 h-1.5 rounded-full animate-pulse" />
+            </span>
+          </NavLink>
           <NavLink to="/reputation" className={linkCls}>Reputation</NavLink>
+          <NavLink to="/dashboard" className={linkCls}>Dashboard</NavLink>
         </div>
         <ConnectButton chainStatus="icon" showBalance={false} />
       </div>
@@ -41,6 +48,7 @@ export default function App() {
             <Route path="/" element={<MarketplacePage />} />
             <Route path="/retrobot" element={<RetrobotPage />} />
             <Route path="/reputation" element={<ReputationPage />} />
+            <Route path="/dashboard" element={<DashboardPage />} />
           </Routes>
         </main>
         <footer className="border-t border-gray-800 mt-16 py-6 text-center text-gray-600 text-xs">

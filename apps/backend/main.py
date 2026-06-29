@@ -3,9 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
 
-from routers import marketplace, retrobot, reputation, agents, faucet
+from routers import marketplace, retrobot, reputation, agents, faucet, stats
 from models.database import init_db
 from middleware.auth import AuthMiddleware
+from services.agent_loop import start_agent_loop
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -16,6 +17,8 @@ async def lifespan(app: FastAPI):
     logger.info("🔱 Trident Agent API starting up...")
     await init_db()
     logger.info("✅ Database initialised")
+    await start_agent_loop()
+    logger.info("🤖 Autonomous agent loop started")
     yield
     logger.info("🔱 Trident Agent API shutting down...")
 
@@ -40,6 +43,7 @@ app.include_router(retrobot.router, prefix="/api/retrobot", tags=["Retrobot"])
 app.include_router(reputation.router, prefix="/api/reputation", tags=["Reputation"])
 app.include_router(agents.router, prefix="/api/agents", tags=["Agents"])
 app.include_router(faucet.router, prefix="/api/faucet", tags=["Faucet"])
+app.include_router(stats.router, prefix="/api/stats", tags=["Stats"])
 
 
 @app.get("/")

@@ -2,7 +2,7 @@
 Web3.py wrappers for Trident smart contracts on Arc Testnet.
 """
 from web3 import Web3
-from web3.middleware import geth_poa_middleware
+from web3.middleware import ExtraDataToPOAMiddleware
 import json
 import logging
 from config import get_settings
@@ -64,7 +64,7 @@ TRID_ABI = json.loads("""[
 
 def get_w3() -> Web3:
     w3 = Web3(Web3.HTTPProvider(settings.arc_rpc_url))
-    w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+    w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
     return w3
 
 
