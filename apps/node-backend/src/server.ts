@@ -1,8 +1,8 @@
 import express from "express";
 import cors from "cors";
-import { createGatewayMiddleware } from "@circle-fin/x402-batching/server";
 import "dotenv/config";
 
+import { gateway, SELLER_ADDRESS, FACILITATOR_URL } from "./gateway.js";
 import { priceFeedRouter } from "./routes/priceFeed.js";
 import { fxRatesRouter } from "./routes/fxRates.js";
 import { riskScoreRouter } from "./routes/riskScore.js";
@@ -10,30 +10,11 @@ import { researchRouter } from "./routes/research.js";
 import { computeRouter } from "./routes/compute.js";
 import { retrobotServiceRouter } from "./routes/retrobotService.js";
 
-export type PaidRequest = express.Request & {
-  payment?: {
-    verified: boolean;
-    payer: string;
-    amount: string;
-    network: string;
-    transaction?: string;
-  };
-};
-
 const app = express();
 const PORT = process.env.NODE_PORT || 3001;
-const SELLER_ADDRESS = process.env.SELLER_ADDRESS as `0x${string}`;
-const FACILITATOR_URL =
-  process.env.GATEWAY_FACILITATOR_URL || "https://gateway-api-testnet.circle.com";
 
 app.use(cors({ origin: "*" }));
 app.use(express.json());
-
-export const gateway = createGatewayMiddleware({
-  sellerAddress: SELLER_ADDRESS,
-  facilitatorUrl: FACILITATOR_URL,
-  networks: ["eip155:5042002"],
-});
 
 app.get("/", (req, res) => {
   res.json({

@@ -41,6 +41,20 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     node_backend_url: str = "http://localhost:3001"
 
+    @property
+    def async_database_url(self) -> str:
+        """Normalise Railway/Heroku postgres:// → postgresql+asyncpg:// and add SSL."""
+        url = self.database_url
+        for prefix in ("postgres://", "postgresql://"):
+            if url.startswith(prefix):
+                url = "postgresql+asyncpg://" + url[len(prefix):]
+                break
+        # Railway requires SSL
+        if "railway.app" in url and "ssl=" not in url:
+            sep = "&" if "?" in url else "?"
+            url = url + sep + "ssl=require"
+        return url
+
     class Config:
         env_file = ".env"
         extra = "ignore"

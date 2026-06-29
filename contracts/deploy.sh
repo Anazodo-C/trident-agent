@@ -25,7 +25,7 @@ cd "$SCRIPT_DIR"
 # Install OpenZeppelin if not present
 if [ ! -d "lib/openzeppelin-contracts" ]; then
   echo "📦 Installing OpenZeppelin..."
-  forge install OpenZeppelin/openzeppelin-contracts --no-commit
+  forge install OpenZeppelin/openzeppelin-contracts
 fi
 
 echo "🔨 Building contracts..."

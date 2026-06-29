@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { gateway, PaidRequest } from "../server.js";
+import { gateway, PaidRequest } from "../gateway.js";
 import Anthropic from "@anthropic-ai/sdk";
 import axios from "axios";
 

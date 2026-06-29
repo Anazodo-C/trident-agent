@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { gateway, PaidRequest } from "../server.js";
+import { gateway, PaidRequest } from "../gateway.js";
 import axios from "axios";
 
 export const fxRatesRouter = Router();

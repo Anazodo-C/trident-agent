@@ -39,3 +39,4 @@ htmlcov/
 *.db
 *.sqlite3
 .railway/
+test_trident.db*

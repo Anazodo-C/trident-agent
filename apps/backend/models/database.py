@@ -6,11 +6,17 @@ from sqlalchemy import (
 )
 from sqlalchemy.sql import func
 import enum
+import logging
 from config import get_settings
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
-engine = create_async_engine(settings.database_url, echo=False)
+engine = create_async_engine(
+    settings.async_database_url,
+    echo=False,
+    connect_args={"ssl": "require"} if "railway.app" in settings.async_database_url else {},
+)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -117,8 +123,14 @@ class ReputationEvent(Base):
 
 
 async def init_db():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("✅ Database tables created/verified")
+    except Exception as e:
+        logger.error(f"❌ Database init failed: {e}")
+        logger.error(f"   URL used: {settings.async_database_url}")
+        raise
 
 
 async def get_db():
