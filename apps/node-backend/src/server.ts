@@ -1,3 +1,9 @@
+// Polyfill Web Crypto for Node < 19
+import { webcrypto } from "node:crypto";
+if (!globalThis.crypto) {
+  (globalThis as any).crypto = webcrypto;
+}
+
 import express from "express";
 import cors from "cors";
 import "dotenv/config";
