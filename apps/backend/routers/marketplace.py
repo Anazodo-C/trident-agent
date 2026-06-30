@@ -99,11 +99,12 @@ async def get_price_feed(symbols: str = "BTC,ETH,USDC", db: AsyncSession = Depen
 
 
 @router.get("/data/fx-rates")
-async def get_fx_rates(base: str = "USD", targets: str = "EUR,GBP,NGN,JPY,BRL"):
+async def get_fx_rates(base: str = "USD", targets: str = "EUR,GBP,NGN,JPY,BRL,GHS"):
     fin = FinancialDataService()
     target_list = [t.strip().upper() for t in targets.split(",")]
-    data = await fin.get_fx_rates(base, target_list)
-    return {"service": "fx_rates", "provider": "Trident / Alpha Vantage", "base_currency": base, "data": data, "price_paid": "0.001 TRID"}
+    # Returns flat {EUR: 0.9214, GBP: 0.7891, ...}
+    flat_rates = await fin.get_fx_rates(base, target_list)
+    return {"service": "fx_rates", "provider": "Trident / exchangerate.host", "base": base, "data": flat_rates, "price_paid": "0.001 TRID"}
 
 
 @router.get("/data/risk-score")

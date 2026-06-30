@@ -106,12 +106,13 @@ function AgentServiceCard({
   const { address, isConnected } = useAccount();
   const { show, dismiss }        = useToastHook();
   const [busy, setBusy]          = useState(false);
+  // Per-service user inputs
+  const [researchAsset,  setResearchAsset]  = useState("BTC");
+  const [portfolioInput, setPortfolioInput] = useState("BTC:0.4,ETH:0.3,SOL:0.2,USDC:0.1");
 
   /** Build the correct Python backend URL + query params for each service type */
   const buildCallUrl = (): string => {
     const base = API;
-    // The Python backend mounts marketplace routes at /api/marketplace
-    // Stored endpoint is e.g. "/data/price-feed" → full: /api/marketplace/data/price-feed
     switch (svc.service_type) {
       case "price_feed":
         return `${base}/api/marketplace/data/price-feed?symbols=BTC,ETH,USDC,SOL`;
@@ -120,13 +121,12 @@ function AgentServiceCard({
       case "risk_score":
         return `${base}/api/marketplace/data/risk-score?address=${address || "0x0000000000000000000000000000000000000001"}`;
       case "research_summary":
-        return `${base}/api/marketplace/data/research-summary?asset=BTC`;
+        return `${base}/api/marketplace/data/research-summary?asset=${encodeURIComponent(researchAsset.trim() || "BTC")}`;
       case "compute_score":
-        return `${base}/api/marketplace/data/compute-score?portfolio=BTC:0.4,ETH:0.3,SOL:0.2,USDC:0.1&model=sharpe`;
+        return `${base}/api/marketplace/data/compute-score?portfolio=${encodeURIComponent(portfolioInput.trim() || "BTC:0.5,ETH:0.5")}&model=sharpe`;
       case "retrobot_audit":
         return `${base}/api/retrobot/stats`;
       default:
-        // Fallback: try /api/marketplace + stored endpoint
         return `${base}/api/marketplace${svc.endpoint}`;
     }
   };
@@ -209,6 +209,36 @@ function AgentServiceCard({
         <span>🌟 {(svc.seller_reputation / 100).toFixed(0)}%</span>
         {svc.x402_enabled && <span className="badge badge-ocean">x402</span>}
       </div>
+
+      {/* Per-service input fields */}
+      {svc.service_type === "research_summary" && (
+        <div className="mb-3">
+          <label className="text-xs mb-1 block" style={{ color: "var(--text-muted)" }}>
+            Asset / ticker / contract address
+          </label>
+          <input
+            className="input text-xs py-1.5"
+            placeholder="e.g. BTC, ETH, SOL or 0x…"
+            value={researchAsset}
+            onChange={e => setResearchAsset(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && !busy && handleHire()}
+          />
+        </div>
+      )}
+      {svc.service_type === "compute_score" && (
+        <div className="mb-3">
+          <label className="text-xs mb-1 block" style={{ color: "var(--text-muted)" }}>
+            Portfolio <span className="opacity-60">(ASSET:weight, …)</span>
+          </label>
+          <input
+            className="input text-xs py-1.5"
+            placeholder="BTC:0.4,ETH:0.3,SOL:0.2,USDC:0.1"
+            value={portfolioInput}
+            onChange={e => setPortfolioInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && !busy && handleHire()}
+          />
+        </div>
+      )}
 
       {/* Price + CTA */}
       <div className="flex items-center justify-between">

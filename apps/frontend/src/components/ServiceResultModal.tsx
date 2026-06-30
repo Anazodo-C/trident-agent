@@ -42,7 +42,7 @@ function PriceFeedView({ data }: { data: unknown }) {
   return (
     <div className="space-y-2">
       {coins.map(([coin, info]) => {
-        const usd    = get(info, "usd");
+        const usd    = get(info, "usd") ?? get(info, "price_usd");
         const chg    = get(info, "change_24h");
         const chgNum = Number(chg);
         const up     = !isNaN(chgNum) && chgNum >= 0;
@@ -87,12 +87,28 @@ const FX_FLAGS: Record<string, string> = {
 
 function FxRatesView({ data, base }: { data: unknown; base?: unknown }) {
   const baseStr = str(base) || "USD";
-  const pairs = data && typeof data === "object" ? Object.entries(data as Record<string, unknown>) : [];
+  // Handle flat {EUR: 0.92} or old nested {base, rates: {EUR: {rate}}}
+  let rateMap: Record<string, unknown> = {};
+  if (data && typeof data === "object") {
+    const d = data as Record<string, unknown>;
+    if (d.rates && typeof d.rates === "object") {
+      for (const [k, v] of Object.entries(d.rates as Record<string, unknown>))
+        rateMap[k] = typeof v === "object" && v !== null ? (v as any).rate ?? v : v;
+    } else {
+      rateMap = d;
+    }
+  }
+  const pairs = Object.entries(rateMap).filter(([k]) => !["base", "base_currency", "success", "timestamp", "date"].includes(k));
   return (
     <div>
       <div className="text-xs mb-3 px-1" style={{ color: "var(--text-muted)" }}>
         Base currency: <span className="font-bold" style={{ color: "var(--accent)" }}>{baseStr}</span>
       </div>
+      {pairs.length === 0 && (
+        <div className="text-center py-4 text-sm" style={{ color: "var(--text-muted)" }}>
+          No rate data returned — check backend logs or API key
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2">
         {pairs.map(([currency, rate]) => (
           <div
@@ -172,49 +188,64 @@ function RiskScoreView({ data }: { data: unknown }) {
 }
 
 function ResearchSummaryView({ data, asset }: { data: unknown; asset?: string }) {
-  const summary   = str(get(data, "summary") ?? get(data, "text"));
-  const sentiment = str(get(data, "sentiment"));
+  const assetStr   = asset && asset !== "—" ? asset : str(get(data, "asset"));
+  const summary    = str(get(data, "summary") ?? get(data, "text"));
+  const sentiment  = str(get(data, "sentiment"));
   const confidence = Number(get(data, "confidence"));
-  const sentColor = sentiment === "bullish" ? "#10b981" : sentiment === "bearish" ? "#ef4444" : "#f59e0b";
+  const keyLevel   = str(get(data, "key_level"));
+  const catalyst   = str(get(data, "catalyst"));
+  const errorMsg   = str(get(data, "error"));
+  const sentColor  = sentiment === "bullish" ? "#10b981" : sentiment === "bearish" ? "#ef4444" : "#f59e0b";
 
   return (
-    <div className="space-y-4">
-      {/* Badges row */}
+    <div className="space-y-3">
+      {/* Badges */}
       <div className="flex items-center gap-2 flex-wrap">
-        {asset && (
-          <span
-            className="px-3 py-1 rounded-full text-xs font-bold"
-            style={{ background: "rgba(0,180,216,0.15)", color: "var(--accent)", border: "1px solid rgba(0,180,216,0.3)" }}
-          >
-            {str(asset)}
+        {assetStr && assetStr !== "—" && (
+          <span className="px-3 py-1 rounded-full text-xs font-bold"
+            style={{ background: "rgba(0,180,216,0.15)", color: "var(--accent)", border: "1px solid rgba(0,180,216,0.3)" }}>
+            {assetStr}
           </span>
         )}
         {sentiment && sentiment !== "—" && (
-          <span
-            className="px-3 py-1 rounded-full text-xs font-bold capitalize"
-            style={{ background: `${sentColor}20`, color: sentColor, border: `1px solid ${sentColor}50` }}
-          >
+          <span className="px-3 py-1 rounded-full text-xs font-bold capitalize"
+            style={{ background: `${sentColor}20`, color: sentColor, border: `1px solid ${sentColor}50` }}>
             {sentiment === "bullish" ? "▲" : sentiment === "bearish" ? "▼" : "◆"} {sentiment}
           </span>
         )}
-        {!isNaN(confidence) && (
-          <span
-            className="px-3 py-1 rounded-full text-xs font-semibold"
-            style={{ background: "rgba(139,92,246,0.12)", color: "#8b5cf6", border: "1px solid rgba(139,92,246,0.3)" }}
-          >
+        {!isNaN(confidence) && confidence > 0 && (
+          <span className="px-3 py-1 rounded-full text-xs font-semibold"
+            style={{ background: "rgba(139,92,246,0.12)", color: "#8b5cf6", border: "1px solid rgba(139,92,246,0.3)" }}>
             {Math.round(confidence * 100)}% confidence
           </span>
         )}
       </div>
-      {/* Summary */}
-      <div
-        className="rounded-xl p-4 text-sm leading-relaxed"
-        style={{ background: "rgba(0,180,216,0.06)", border: "1px solid rgba(0,180,216,0.18)", color: "var(--text-primary)" }}
-      >
-        {summary !== "—" ? summary : (
-          <span style={{ color: "var(--text-muted)" }}>No summary returned</span>
-        )}
+
+      {/* Summary text */}
+      <div className="rounded-xl p-4 text-sm leading-relaxed"
+        style={{ background: "rgba(0,180,216,0.06)", border: "1px solid rgba(0,180,216,0.18)", color: "var(--text-primary)" }}>
+        {summary && summary !== "—" ? summary : errorMsg && errorMsg !== "—" ? (
+          <span style={{ color: "#f59e0b" }}>⚠ {errorMsg}</span>
+        ) : <span style={{ color: "var(--text-muted)" }}>No summary returned</span>}
       </div>
+
+      {/* Key level + Catalyst */}
+      {(keyLevel !== "—" || catalyst !== "—") && (
+        <div className="grid grid-cols-2 gap-2">
+          {keyLevel !== "—" && (
+            <div className="rounded-xl p-3" style={{ background: "rgba(0,180,216,0.07)", border: "1px solid rgba(0,180,216,0.15)" }}>
+              <div className="text-xs mb-1" style={{ color: "var(--text-muted)" }}>Key Level</div>
+              <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{keyLevel}</div>
+            </div>
+          )}
+          {catalyst !== "—" && (
+            <div className="rounded-xl p-3" style={{ background: "rgba(0,180,216,0.07)", border: "1px solid rgba(0,180,216,0.15)" }}>
+              <div className="text-xs mb-1" style={{ color: "var(--text-muted)" }}>Catalyst to Watch</div>
+              <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{catalyst}</div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
