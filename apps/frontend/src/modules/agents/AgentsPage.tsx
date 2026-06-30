@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { parseUnits } from "viem";
 import axios from "axios";
 
 // TRID ERC-20 — transfer ABI (minimal)
@@ -121,7 +120,8 @@ function AgentServiceCard({
   const [pendingTxHash, setPendingTxHash]   = useState<`0x${string}` | undefined>();
 
   const { writeContractAsync } = useWriteContract();
-  const { isSuccess: txConfirmed } = useWaitForTransactionReceipt({ hash: pendingTxHash });
+  // track receipt so wagmi caches the tx; result used in ServiceResultModal via pendingTxHash
+  useWaitForTransactionReceipt({ hash: pendingTxHash });
 
   /** Build params for POST /hire based on service type */
   const buildHireParams = (): Record<string, string> => {
