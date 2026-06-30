@@ -38,15 +38,20 @@ ANOMALY_RATE = 0.12  # 12% of transactions get flagged
 
 
 async def ensure_sim_agents():
-    """Make sure all simulation agents exist in the DB."""
+    """
+    Ensure all buyer agents exist in the DB with correct names.
+    Updates names for any stale records (e.g. old BuyerX/Y/Z names).
+    """
     async with AsyncSessionLocal() as db:
         all_sim = [
-            ("0xabc5000000000000000000000000000000000005", "Beta Buyer", AgentType.BUYER),
+            ("0xabc4000000000000000000000000000000000004", "Alpha Buyer", AgentType.BUYER),
+            ("0xabc5000000000000000000000000000000000005", "Beta Buyer",  AgentType.BUYER),
             ("0xabc6000000000000000000000000000000000006", "Gamma Buyer", AgentType.BUYER),
         ]
         for wallet, name, atype in all_sim:
             result = await db.execute(select(Agent).where(Agent.wallet_address == wallet))
-            if not result.scalar_one_or_none():
+            existing = result.scalar_one_or_none()
+            if not existing:
                 agent = Agent(
                     wallet_address=wallet,
                     name=name,
@@ -56,8 +61,11 @@ async def ensure_sim_agents():
                     successful_jobs=random.randint(8, 38),
                 )
                 db.add(agent)
+            elif existing.name in ("BuyerX", "BuyerY", "BuyerZ"):
+                # Rename stale entries from old sim loop
+                existing.name = name
         await db.commit()
-    logger.info("✅ Sim agents verified")
+    logger.info("✅ Sim agents verified (Alpha / Beta / Gamma Buyer)")
 
 
 async def sim_buy_transaction():

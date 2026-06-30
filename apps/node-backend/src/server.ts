@@ -17,6 +17,7 @@ import { retrobotServiceRouter } from "./routes/retrobotService.js";
 import { hireRouter } from "./routes/hire.js";
 import { startBuyerAgents } from "./buyerAgents.js";
 import { gatewayClient } from "./gatewayClient.js";
+import { startTridFaucetLoop } from "./tridFaucet.js";
 
 const app = express();
 const PORT = process.env.PORT || process.env.NODE_PORT || 3001;
@@ -131,4 +132,6 @@ app.listen(PORT, () => {
   console.log(`   Chain:       Arc Testnet (eip155:5042002)`);
   // Start buyer agents after the server is listening so self-calls work
   startBuyerAgents();
+  // Claim TRID from faucet for the buyer agent wallet every hour
+  startTridFaucetLoop();
 });

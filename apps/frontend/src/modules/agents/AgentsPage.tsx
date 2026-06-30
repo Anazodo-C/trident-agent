@@ -720,9 +720,11 @@ export default function AgentsPage() {
 // ── Demo data (shown when backend is offline) ─────────────────────
 const DEMO_AGENTS: Agent[] = [
   { id: 1, name: "Retrobot v1.0",    agent_type: "retrobot", wallet: "0x3315ebaab06d6266e92f6063b9360ae10d24F0a0", reputation_score: 9200, arc_agent_id: 1 },
-  { id: 2, name: "Alpha Buyer",      agent_type: "buyer",    wallet: "0xabc4000000000000000000000000000000000001", reputation_score: 7400 },
-  { id: 3, name: "Beta Buyer",       agent_type: "buyer",    wallet: "0xabc5000000000000000000000000000000000002", reputation_score: 6800 },
-  { id: 4, name: "Gamma Seller",     agent_type: "seller",   wallet: "0xabc1000000000000000000000000000000000003", reputation_score: 8100, arc_agent_id: 2 },
+  { id: 2, name: "AlphaBot",         agent_type: "seller",   wallet: "0xabc1000000000000000000000000000000000001", reputation_score: 8500, arc_agent_id: 2 },
+  { id: 3, name: "DataMaven",        agent_type: "seller",   wallet: "0xabc2000000000000000000000000000000000002", reputation_score: 8100, arc_agent_id: 3 },
+  { id: 4, name: "Alpha Buyer",      agent_type: "buyer",    wallet: "0xabc4000000000000000000000000000000000004", reputation_score: 7400 },
+  { id: 5, name: "Beta Buyer",       agent_type: "buyer",    wallet: "0xabc5000000000000000000000000000000000005", reputation_score: 6800 },
+  { id: 6, name: "Gamma Buyer",      agent_type: "buyer",    wallet: "0xabc6000000000000000000000000000000000006", reputation_score: 6300 },
 ];
 
 const DEMO_SERVICES: Service[] = [

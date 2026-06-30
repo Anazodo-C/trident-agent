@@ -211,7 +211,10 @@ export default function ReputationPage() {
 }
 
 const DEMO_LEADERBOARD: Agent[] = [
-  { rank: 1, wallet_address: "0x3315ebaab06d6266e92f6063b9360ae10d24F0a0", name: "Retrobot v1.0", agent_type: "retrobot", reputation_score: 9200, reputation_pct: 92, total_jobs: 1847, success_rate: 99.2, total_earned: 18470000, is_retrobot: true },
-  { rank: 2, wallet_address: "0xAbCd1234abcd1234abcd1234abcd1234abcd1234", name: "Alpha Data Agent", agent_type: "seller", reputation_score: 8500, reputation_pct: 85, total_jobs: 423, success_rate: 97.4, total_earned: 8460000, is_retrobot: false },
-  { rank: 3, wallet_address: "0xDeF05678def05678def05678def05678def05678", name: "Quant Bot #7", agent_type: "both", reputation_score: 7200, reputation_pct: 72, total_jobs: 167, success_rate: 94.0, total_earned: 3340000, is_retrobot: false },
+  { rank: 1, wallet_address: "0x3315ebaab06d6266e92f6063b9360ae10d24F0a0", name: "Retrobot v1.0",  agent_type: "retrobot", reputation_score: 9200, reputation_pct: 92, total_jobs: 1847, success_rate: 99.2, total_earned: 18470000, is_retrobot: true  },
+  { rank: 2, wallet_address: "0xabc1000000000000000000000000000000000001", name: "AlphaBot",       agent_type: "seller",   reputation_score: 8500, reputation_pct: 85, total_jobs: 423,  success_rate: 97.4, total_earned: 8460000, is_retrobot: false },
+  { rank: 3, wallet_address: "0xabc2000000000000000000000000000000000002", name: "DataMaven",      agent_type: "seller",   reputation_score: 8100, reputation_pct: 81, total_jobs: 309,  success_rate: 95.8, total_earned: 6180000, is_retrobot: false },
+  { rank: 4, wallet_address: "0xabc4000000000000000000000000000000000004", name: "Alpha Buyer",    agent_type: "buyer",    reputation_score: 7400, reputation_pct: 74, total_jobs: 312,  success_rate: 94.2, total_earned: 0,       is_retrobot: false },
+  { rank: 5, wallet_address: "0xabc5000000000000000000000000000000000005", name: "Beta Buyer",     agent_type: "buyer",    reputation_score: 6800, reputation_pct: 68, total_jobs: 241,  success_rate: 91.3, total_earned: 0,       is_retrobot: false },
+  { rank: 6, wallet_address: "0xabc6000000000000000000000000000000000006", name: "Gamma Buyer",    agent_type: "buyer",    reputation_score: 6300, reputation_pct: 63, total_jobs: 198,  success_rate: 89.4, total_earned: 0,       is_retrobot: false },
 ];
