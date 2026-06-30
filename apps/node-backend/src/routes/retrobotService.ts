@@ -4,7 +4,7 @@ import axios from "axios";
 
 export const retrobotServiceRouter = Router();
 
-const PYTHON_BACKEND = process.env.NODE_BACKEND_URL?.replace("3001", "8000") || "http://localhost:8000";
+const PYTHON_BACKEND = process.env.PYTHON_API_URL || "http://localhost:8000";
 
 retrobotServiceRouter.post("/audit", gateway.require("$0.005"), async (req: PaidRequest, res) => {
   const { wallet_address, lookback_hours = 24 } = req.body;

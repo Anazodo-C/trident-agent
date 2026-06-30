@@ -41,8 +41,8 @@ async def ensure_sim_agents():
     """Make sure all simulation agents exist in the DB."""
     async with AsyncSessionLocal() as db:
         all_sim = [
-            ("0xabc5000000000000000000000000000000000005", "BuyerY", AgentType.BUYER),
-            ("0xabc6000000000000000000000000000000000006", "BuyerZ", AgentType.BUYER),
+            ("0xabc5000000000000000000000000000000000005", "Beta Buyer", AgentType.BUYER),
+            ("0xabc6000000000000000000000000000000000006", "Gamma Buyer", AgentType.BUYER),
         ]
         for wallet, name, atype in all_sim:
             result = await db.execute(select(Agent).where(Agent.wallet_address == wallet))
@@ -182,8 +182,12 @@ async def buyer_loop(buyer_addr: str):
 
 
 async def start_agent_loop():
-    """Start all autonomous agent loops as background tasks."""
+    """
+    Start background tasks.
+    Simulated purchase loops are DISABLED — real purchases now come from
+    Node backend buyer agents via Circle Gateway x402 (buyerAgents.ts).
+    Only Retrobot anomaly scanning runs here.
+    """
     await ensure_sim_agents()
-    logger.info(f"🤖 Starting autonomous agent loop — {len(BUYER_AGENTS)} buyers active")
-    for buyer in BUYER_AGENTS:
-        asyncio.create_task(buyer_loop(buyer))
+    logger.info("🤖 Agent loop: simulated buys disabled (real x402 payments active)")
+    logger.info("🔍 Retrobot anomaly scanner active")
