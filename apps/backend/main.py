@@ -7,6 +7,7 @@ from routers import marketplace, retrobot, reputation, agents, faucet, stats
 from models.database import init_db
 from middleware.auth import AuthMiddleware
 from services.agent_loop import start_agent_loop
+from services import cache as api_cache
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -19,6 +20,9 @@ async def lifespan(app: FastAPI):
     logger.info("✅ Database initialised")
     await start_agent_loop()
     logger.info("🤖 Autonomous agent loop started")
+    import asyncio
+    asyncio.create_task(api_cache.start_sweep_task())
+    logger.info("🗑️  Cache sweep task started (hourly)")
     yield
     logger.info("🔱 Trident Agent API shutting down...")
 
