@@ -58,13 +58,50 @@ function tier(score: number) {
   return score >= 8000 ? "Elite" : score >= 6000 ? "Premium" : score >= 4000 ? "Verified" : "Basic";
 }
 
+// ── Static demo results (no backend needed) ──────────────────────
+const DEMO_RESULTS: Record<string, unknown> = {
+  price_feed: {
+    service: "price_feed", provider: "Trident / CoinGecko (demo)",
+    data: { BTC: { usd: 67420.12, change_24h: 2.3 }, ETH: { usd: 3541.88, change_24h: 1.8 }, USDC: { usd: 1.0001, change_24h: 0.01 }, SOL: { usd: 178.42, change_24h: 4.2 } },
+    price_paid: "0.001 TRID", note: "demo — start backend for live prices",
+  },
+  fx_rates: {
+    service: "fx_rates", provider: "Trident / Alpha Vantage (demo)",
+    data: { EUR: 0.9214, GBP: 0.7891, NGN: 1602.5, JPY: 149.72, BRL: 5.071, GHS: 15.64 },
+    price_paid: "0.001 TRID", note: "demo — start backend for live rates",
+  },
+  risk_score: {
+    service: "risk_score", provider: "Trident / Messari (demo)",
+    data: { risk_score: 72, label: "Medium", factors: ["active 6 months", "3 DeFi protocols", "no sanctions hits"] },
+    price_paid: "0.005 TRID", note: "demo — start backend for live scoring",
+  },
+  research_summary: {
+    service: "research_summary", provider: "Trident / Claude (demo)",
+    asset: "BTC",
+    data: { summary: "Bitcoin continues to consolidate above key support at $65k. ETF inflows remain strong. Halving supply dynamics are expected to drive bullish momentum into Q3 2026.", sentiment: "bullish", confidence: 0.74 },
+    price_paid: "0.01 TRID", note: "demo — start backend for Claude-powered research",
+  },
+  compute_score: {
+    service: "compute_score", provider: "Trident (demo)",
+    data: { sharpe_ratio: 1.84, var_95: -0.062, max_drawdown: -0.18, rebalance_signal: "hold", score: 78 },
+    price_paid: "0.02 TRID", note: "demo — start backend for live portfolio scoring",
+  },
+  retrobot_audit: {
+    service: "retrobot_audit",
+    data: { total_scanned: 312, anomalies_caught: 38, total_recovered: "1.24 TRID", detection_rate: "12.2%", status: "guardian_active" },
+    price_paid: "0.005 TRID", note: "demo — start backend for live Retrobot audit",
+  },
+};
+
 // ── Hire Card ────────────────────────────────────────────────────
 function AgentServiceCard({
   svc,
   onResult,
+  backendLive,
 }: {
   svc: Service;
   onResult: (name: string, result: unknown, price: string) => void;
+  backendLive: boolean;
 }) {
   const { address, isConnected } = useAccount();
   const { show, dismiss }        = useToastHook();
@@ -101,6 +138,17 @@ function AgentServiceCard({
     }
     setBusy(true);
     const tid = show(`Hiring ${svc.name}…`, "loading");
+
+    // If backend is known to be offline, return demo result immediately
+    if (!backendLive) {
+      await new Promise(r => setTimeout(r, 900)); // simulate latency
+      dismiss(tid);
+      show(`${svc.name} responded (demo mode)`, "info", 2500);
+      onResult(svc.name, DEMO_RESULTS[svc.service_type] ?? { demo: true }, svc.price_trid_display);
+      setBusy(false);
+      return;
+    }
+
     try {
       const url = buildCallUrl();
       const r = await axios.get(url, { timeout: 12000 });
@@ -108,13 +156,18 @@ function AgentServiceCard({
       onResult(svc.name, r.data, svc.price_trid_display);
     } catch (err: any) {
       dismiss(tid);
+      // Backend went offline mid-session — fall back to demo
       const status = err?.response?.status;
-      const msg =
-        status === 402 ? "Payment required — x402 gateway active on this endpoint" :
-        status === 404 ? "Agent endpoint not found — is the backend running?" :
-        !err?.response   ? "Cannot reach backend. Start the server with: docker compose up" :
-        err?.response?.data?.detail || err.message || "Service call failed";
-      show(msg, "error", 5000);
+      if (!status) {
+        show(`${svc.name} responded (demo mode — backend offline)`, "info", 2500);
+        onResult(svc.name, DEMO_RESULTS[svc.service_type] ?? { demo: true }, svc.price_trid_display);
+      } else {
+        const msg =
+          status === 402 ? "x402 payment required — this endpoint is paywalled" :
+          status === 404 ? "Endpoint not found — check backend logs" :
+          (err?.response?.data?.detail as string) || err.message || "Service call failed";
+        show(msg, "error", 5000);
+      }
     } finally {
       setBusy(false);
     }
@@ -218,10 +271,11 @@ const FAUCET_KEY     = "trident_faucet_offered";
 export default function AgentsPage() {
   const { address, isConnected } = useAccount();
   const balance                  = useWalletBalance();
-  const [agents,   setAgents]   = useState<Agent[]>([]);
-  const [services, setServices] = useState<Service[]>([]);
-  const [filter,   setFilter]   = useState("");
-  const [loading,  setLoading]  = useState(true);
+  const [agents,      setAgents]      = useState<Agent[]>([]);
+  const [services,    setServices]    = useState<Service[]>([]);
+  const [filter,      setFilter]      = useState("");
+  const [loading,     setLoading]     = useState(true);
+  const [backendLive, setBackendLive] = useState(true);
 
   // Modals
   const [showFaucet,    setShowFaucet]    = useState(false);
@@ -262,7 +316,9 @@ export default function AgentsPage() {
         setAgents(agRes.data.agents   || []);
         setServices(svcRes.data.services || DEMO_SERVICES);
       } catch {
+        setBackendLive(false);
         setServices(DEMO_SERVICES);
+        setAgents(DEMO_AGENTS);
       } finally {
         setLoading(false);
       }
@@ -328,6 +384,29 @@ export default function AgentsPage() {
           pricePaid={serviceResult.price}
           onClose={() => setServiceResult(null)}
         />
+      )}
+
+      {/* ── Backend offline banner ── */}
+      {!backendLive && (
+        <div
+          className="rounded-xl px-4 py-3 flex items-center gap-3 text-sm"
+          style={{ background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.3)" }}
+        >
+          <span className="text-lg">⚡</span>
+          <div>
+            <span className="font-semibold" style={{ color: "#f59e0b" }}>Demo mode</span>
+            <span className="ml-2" style={{ color: "var(--text-muted)" }}>
+              — backend offline. Start it with{" "}
+              <code
+                className="mono px-1.5 py-0.5 rounded text-xs"
+                style={{ background: "rgba(245,158,11,0.15)" }}
+              >
+                docker compose up
+              </code>
+              {" "}from the project root to enable live data + hiring.
+            </span>
+          </div>
+        </div>
       )}
 
       {/* ── Hero ── */}
@@ -467,6 +546,7 @@ export default function AgentsPage() {
               <AgentServiceCard
                 key={svc.id}
                 svc={svc}
+                backendLive={backendLive}
                 onResult={(name, result, price) =>
                   setServiceResult({ name, result, price })
                 }
@@ -511,7 +591,14 @@ export default function AgentsPage() {
   );
 }
 
-// ── Demo fallback ─────────────────────────────────────────────────
+// ── Demo data (shown when backend is offline) ─────────────────────
+const DEMO_AGENTS: Agent[] = [
+  { id: 1, name: "Retrobot v1.0",    agent_type: "retrobot", wallet: "0x3315ebaab06d6266e92f6063b9360ae10d24F0a0", reputation_score: 9200, arc_agent_id: 1 },
+  { id: 2, name: "Alpha Buyer",      agent_type: "buyer",    wallet: "0xabc4000000000000000000000000000000000001", reputation_score: 7400 },
+  { id: 3, name: "Beta Buyer",       agent_type: "buyer",    wallet: "0xabc5000000000000000000000000000000000002", reputation_score: 6800 },
+  { id: 4, name: "Gamma Seller",     agent_type: "seller",   wallet: "0xabc1000000000000000000000000000000000003", reputation_score: 8100, arc_agent_id: 2 },
+];
+
 const DEMO_SERVICES: Service[] = [
   { id: 1, name: "Price Feed",     service_type: "price_feed",       description: "Live crypto prices via CoinGecko — BTC, ETH, ARC, and 200+ assets",           price_per_call: 1000,  price_trid_display: "0.0010 TRID", endpoint: "/data/price-feed",      x402_enabled: true, calls_served: 3142, seller_reputation: 8500, seller_name: "Trident Protocol",  seller_address: "" },
   { id: 2, name: "FX Rates",       service_type: "fx_rates",         description: "Real-time forex including emerging markets — NGN, BRL, GHS, KES",              price_per_call: 1000,  price_trid_display: "0.0010 TRID", endpoint: "/data/fx-rates",        x402_enabled: true, calls_served: 2891, seller_reputation: 8500, seller_name: "Trident Protocol",  seller_address: "" },
