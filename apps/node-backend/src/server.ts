@@ -8,6 +8,9 @@ import { fxRatesRouter } from "./routes/fxRates.js";
 import { riskScoreRouter } from "./routes/riskScore.js";
 import { computeRouter } from "./routes/compute.js";
 import { retrobotServiceRouter } from "./routes/retrobotService.js";
+import { hireRouter } from "./routes/hire.js";
+import { startBuyerAgents } from "./buyerAgents.js";
+import { gatewayClient } from "./gatewayClient.js";
 
 const app = express();
 const PORT = process.env.PORT || process.env.NODE_PORT || 3001;
@@ -102,10 +105,24 @@ app.use("/data", fxRatesRouter);
 app.use("/data", riskScoreRouter);
 app.use("/data", computeRouter);
 app.use("/retrobot", retrobotServiceRouter);
+app.use("/hire", hireRouter);
+
+app.get("/buyer-agent-status", (req, res) => {
+  res.json({
+    enabled: gatewayClient !== null,
+    address: gatewayClient?.address ?? null,
+    chain: "arcTestnet",
+    message: gatewayClient
+      ? "Circle Gateway buyer agent active — making real x402 payments"
+      : "Set BUYER_AGENT_PRIVATE_KEY and fund at faucet.circle.com to enable",
+  });
+});
 
 app.listen(PORT, () => {
   console.log(`🔱 Trident Node Backend running on port ${PORT}`);
-  console.log(`   Seller: ${SELLER_ADDRESS}`);
+  console.log(`   Seller:      ${SELLER_ADDRESS}`);
   console.log(`   Facilitator: ${FACILITATOR_URL}`);
-  console.log(`   Chain: Arc Testnet (eip155:5042002)`);
+  console.log(`   Chain:       Arc Testnet (eip155:5042002)`);
+  // Start buyer agents after the server is listening so self-calls work
+  startBuyerAgents();
 });

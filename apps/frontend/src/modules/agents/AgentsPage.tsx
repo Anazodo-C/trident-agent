@@ -11,7 +11,7 @@ import { useToast as useToastHook } from "../../components/Toast";
 import { useWalletBalance } from "../../hooks/useWalletBalance";
 
 const API      = import.meta.env.VITE_API_URL      || "http://localhost:8000";
-// NODE_API removed — direct Python backend calls used for hire
+const NODE_API = import.meta.env.VITE_NODE_API_URL || "http://localhost:3001";
 
 interface Agent {
   id: number;
@@ -101,22 +101,21 @@ function AgentServiceCard({
   const [busy, setBusy]          = useState(false);
   const [portfolioInput, setPortfolioInput] = useState("BTC:0.4,ETH:0.3,SOL:0.2,USDC:0.1");
 
-  /** Build the correct Python backend URL + query params for each service type */
-  const buildCallUrl = (): string => {
-    const base = API;
+  /** Build params for POST /hire based on service type */
+  const buildHireParams = (): Record<string, string> => {
     switch (svc.service_type) {
       case "price_feed":
-        return `${base}/api/marketplace/data/price-feed?symbols=BTC,ETH,USDC,SOL`;
+        return { symbols: "BTC,ETH,USDC,SOL" };
       case "fx_rates":
-        return `${base}/api/marketplace/data/fx-rates?base=USD&targets=EUR,GBP,NGN,JPY,BRL,GHS`;
+        return { base: "USD", targets: "EUR,GBP,NGN,JPY,BRL,GHS" };
       case "risk_score":
-        return `${base}/api/marketplace/data/risk-score?address=${address || "0x0000000000000000000000000000000000000001"}`;
+        return { address: address || "0x0000000000000000000000000000000000000001" };
       case "compute_score":
-        return `${base}/api/marketplace/data/compute-score?portfolio=${encodeURIComponent(portfolioInput.trim() || "BTC:0.5,ETH:0.5")}&model=sharpe`;
+        return { portfolio: portfolioInput.trim() || "BTC:0.5,ETH:0.5", model: "sharpe" };
       case "retrobot_audit":
-        return `${base}/api/retrobot/stats`;
+        return { buyer_address: address || "0x0000000000000000000000000000000000000001" };
       default:
-        return `${base}/api/marketplace${svc.endpoint}`;
+        return {};
     }
   };
 
@@ -126,11 +125,11 @@ function AgentServiceCard({
       return;
     }
     setBusy(true);
-    const tid = show(`Hiring ${svc.name}…`, "loading");
+    const tid = show(`Sending x402 payment for ${svc.name}…`, "loading");
 
-    // If backend is known to be offline, return demo result immediately
+    // Demo fallback if backend is offline
     if (!backendLive) {
-      await new Promise(r => setTimeout(r, 900)); // simulate latency
+      await new Promise(r => setTimeout(r, 900));
       dismiss(tid);
       show(`${svc.name} responded (demo mode)`, "info", 2500);
       onResult(svc.name, DEMO_RESULTS[svc.service_type] ?? { demo: true }, svc.price_trid_display);
@@ -139,22 +138,61 @@ function AgentServiceCard({
     }
 
     try {
-      const url = buildCallUrl();
-      const r = await axios.get(url, { timeout: 12000 });
+      // POST to Node backend /hire — triggers real Circle Gateway x402 payment
+      const r = await axios.post(
+        `${NODE_API}/hire`,
+        {
+          service_type: svc.service_type,
+          params: buildHireParams(),
+          buyer_address: address,
+        },
+        { timeout: 20000 }
+      );
+
       dismiss(tid);
-      onResult(svc.name, r.data, svc.price_trid_display);
+      const payload = r.data;
+
+      // Annotate result with x402 payment info if present
+      const resultData = payload.x402
+        ? { ...payload.data, _x402: { amount_paid: payload.amount_paid, transaction: payload.transaction, paid_by: payload.paid_by } }
+        : payload.data;
+
+      const priceDisplay = payload.amount_paid ? `${payload.amount_paid} USDC` : svc.price_trid_display;
+      onResult(svc.name, resultData, priceDisplay);
+
+      if (payload.x402) {
+        show(`✅ Paid ${payload.amount_paid} USDC via Circle Gateway x402`, "success", 4000);
+      }
     } catch (err: any) {
       dismiss(tid);
-      // Backend went offline mid-session — fall back to demo
       const status = err?.response?.status;
+      const data   = err?.response?.data;
+
       if (!status) {
-        show(`${svc.name} responded (demo mode — backend offline)`, "info", 2500);
-        onResult(svc.name, DEMO_RESULTS[svc.service_type] ?? { demo: true }, svc.price_trid_display);
+        // Node backend offline → try Python backend directly (no x402)
+        try {
+          const base = API;
+          let url = "";
+          switch (svc.service_type) {
+            case "price_feed":     url = `${base}/api/marketplace/data/price-feed?symbols=BTC,ETH,USDC,SOL`; break;
+            case "fx_rates":       url = `${base}/api/marketplace/data/fx-rates?base=USD&targets=EUR,GBP,NGN,JPY,BRL,GHS`; break;
+            case "risk_score":     url = `${base}/api/marketplace/data/risk-score?address=${address || "0x1"}`; break;
+            case "compute_score":  url = `${base}/api/marketplace/data/compute-score?portfolio=${encodeURIComponent(portfolioInput || "BTC:0.5,ETH:0.5")}&model=sharpe`; break;
+            case "retrobot_audit": url = `${base}/api/retrobot/stats`; break;
+            default:               url = `${base}/api/marketplace${svc.endpoint}`;
+          }
+          const fallback = await axios.get(url, { timeout: 10000 });
+          show(`${svc.name} responded (no x402 — node backend offline)`, "info", 3000);
+          onResult(svc.name, fallback.data, svc.price_trid_display);
+        } catch {
+          show(`${svc.name} responded (demo mode — backends offline)`, "info", 2500);
+          onResult(svc.name, DEMO_RESULTS[svc.service_type] ?? { demo: true }, svc.price_trid_display);
+        }
+      } else if (status === 402) {
+        const msg = data?.message || "x402: fund the buyer agent wallet at faucet.circle.com";
+        show(`Payment required — ${msg}`, "error", 7000);
       } else {
-        const msg =
-          status === 402 ? "x402 payment required — this endpoint is paywalled" :
-          status === 404 ? "Endpoint not found — check backend logs" :
-          (err?.response?.data?.detail as string) || err.message || "Service call failed";
+        const msg = data?.error || data?.message || data?.detail || err.message || "Service call failed";
         show(msg, "error", 5000);
       }
     } finally {
@@ -228,7 +266,7 @@ function AgentServiceCard({
           disabled={busy}
           className="btn-primary text-xs py-1.5 px-4"
         >
-          {busy ? "Calling…" : "Hire →"}
+          {busy ? "⏳ Paying…" : "Hire → x402"}
         </button>
       </div>
     </div>

@@ -299,14 +299,19 @@ function detectType(result: unknown): string {
 // ── main component ───────────────────────────────────────────────────────────
 export default function ServiceResultModal({ serviceName, result, pricePaid, onClose }: Props) {
   const type    = detectType(result);
-  const data    = get(result, "data") ?? result;
-  const note    = str(get(result, "note") ?? "");
+  // Strip _x402 metadata before passing to sub-renderers
+  const x402Info = get(result, "_x402") as { amount_paid?: string; transaction?: string; paid_by?: string } | undefined;
+  const resultWithoutMeta = result && typeof result === "object"
+    ? Object.fromEntries(Object.entries(result as object).filter(([k]) => k !== "_x402"))
+    : result;
+  const data    = get(resultWithoutMeta, "data") ?? resultWithoutMeta;
+  const note    = str(get(resultWithoutMeta, "note") ?? "");
   const isDemoNote = note && note.toLowerCase().includes("demo");
 
   function renderBody() {
     switch (type) {
       case "price_feed":        return <PriceFeedView data={data} />;
-      case "fx_rates":          return <FxRatesView data={data} base={get(result, "base") ?? "USD"} />;
+      case "fx_rates":          return <FxRatesView data={data} base={get(resultWithoutMeta, "base") ?? "USD"} />;
       case "risk_score":        return <RiskScoreView data={data} />;
       case "compute_score":     return <ComputeScoreView data={data} />;
       case "retrobot_audit":    return <RetrobotAuditView data={data} />;
@@ -348,8 +353,23 @@ export default function ServiceResultModal({ serviceName, result, pricePaid, onC
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-mono" style={{ color: "var(--text-muted)" }}>
-                {pricePaid} · x402 · Arc Testnet
+                {pricePaid} · Arc Testnet
               </span>
+              {x402Info?.amount_paid ? (
+                <span
+                  className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                  style={{ background: "rgba(16,185,129,0.15)", color: "#10b981", border: "1px solid rgba(16,185,129,0.3)" }}
+                >
+                  ✓ paid via x402
+                </span>
+              ) : (
+                <span
+                  className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                  style={{ background: "rgba(0,180,216,0.12)", color: "var(--accent)", border: "1px solid rgba(0,180,216,0.25)" }}
+                >
+                  x402
+                </span>
+              )}
               {isDemoNote && (
                 <span
                   className="text-xs px-2 py-0.5 rounded-full font-semibold"
@@ -359,6 +379,11 @@ export default function ServiceResultModal({ serviceName, result, pricePaid, onC
                 </span>
               )}
             </div>
+            {x402Info?.transaction && (
+              <div className="text-xs mt-1 font-mono opacity-50" style={{ color: "var(--text-muted)" }}>
+                tx: {x402Info.transaction.slice(0, 20)}…
+              </div>
+            )}
           </div>
           <button onClick={onClose} className="btn-ghost text-lg leading-none -mr-1 -mt-1">✕</button>
         </div>
