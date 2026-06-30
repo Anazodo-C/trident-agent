@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Legend,
@@ -20,12 +19,7 @@ interface Overview {
   retrobot_recovery_rate: string;
 }
 
-interface VolumePoint {
-  time: string;
-  volume: number;
-  transactions: number;
-  recovered: number;
-}
+interface VolumePoint { time: string; volume: number; transactions: number; recovered: number; }
 
 interface RetrobotStats {
   total_scanned: number;
@@ -34,36 +28,37 @@ interface RetrobotStats {
   detection_rate: string;
   anomaly_breakdown: Record<string, number>;
   recent_anomalies: {
-    id: number;
-    buyer: string;
-    seller: string;
-    amount: string;
-    type: string;
-    reason: string;
-    recovered: string | null;
-    status: string;
-    timestamp: string;
+    id: number; buyer: string; seller: string; amount: string;
+    type: string; reason: string; recovered: string | null;
+    status: string; timestamp: string;
   }[];
 }
 
 const DEMO_VOLUME: VolumePoint[] = Array.from({ length: 12 }, (_, i) => ({
-  time: `${i * 2}:00`,
-  volume: Math.random() * 2 + 0.1,
+  time: `${(i * 2).toString().padStart(2, "0")}:00`,
+  volume:       parseFloat((Math.random() * 2 + 0.1).toFixed(3)),
   transactions: Math.floor(Math.random() * 8) + 1,
-  recovered: Math.random() * 0.3,
+  recovered:    parseFloat((Math.random() * 0.3).toFixed(3)),
 }));
 
 const ANOMALY_COLORS: Record<string, string> = {
-  overpayment: "#f59e0b",
-  duplicate: "#ef4444",
-  failed_delivery: "#8b5cf6",
+  overpayment:    "#f59e0b",
+  duplicate:      "#ef4444",
+  failed_delivery:"#8b5cf6",
+};
+
+const CHART_STYLE = {
+  backgroundColor: "var(--bg-card)",
+  border:          "1px solid var(--border)",
+  borderRadius:    12,
+  color:           "var(--text-primary)",
 };
 
 export default function DashboardPage() {
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [volumeData, setVolumeData] = useState<VolumePoint[]>(DEMO_VOLUME);
-  const [retrobot, setRetrobot] = useState<RetrobotStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [overview,    setOverview]    = useState<Overview | null>(null);
+  const [volumeData,  setVolumeData]  = useState<VolumePoint[]>(DEMO_VOLUME);
+  const [retrobot,    setRetrobot]    = useState<RetrobotStats | null>(null);
+  const [loading,     setLoading]     = useState(true);
 
   const fetchAll = async () => {
     try {
@@ -75,177 +70,144 @@ export default function DashboardPage() {
       setOverview(ov.data);
       if (vol.data.data?.length > 0) setVolumeData(vol.data.data);
       setRetrobot(rb.data);
-    } catch {
-      // keep demo data
-    } finally {
-      setLoading(false);
-    }
+    } catch { /* keep demo */ } finally { setLoading(false); }
   };
 
   useEffect(() => {
     fetchAll();
-    const interval = setInterval(fetchAll, 15000); // refresh every 15s
-    return () => clearInterval(interval);
+    const iv = setInterval(fetchAll, 15_000);
+    return () => clearInterval(iv);
   }, []);
 
-  const statCards = [
-    {
-      label: "Total Volume",
-      value: overview?.total_volume_display ?? "—",
-      sub: `${overview?.transactions_24h ?? 0} tx today`,
-      color: "text-violet-400",
-      bg: "bg-violet-500/10",
-    },
-    {
-      label: "Retrobot Recovered",
-      value: overview?.total_recovered_display ?? "—",
-      sub: `${overview?.anomalies_caught ?? 0} anomalies caught`,
-      color: "text-emerald-400",
-      bg: "bg-emerald-500/10",
-    },
-    {
-      label: "Active Agents",
-      value: overview?.active_agents ?? "—",
-      sub: `${overview?.active_services ?? 0} services live`,
-      color: "text-blue-400",
-      bg: "bg-blue-500/10",
-    },
-    {
-      label: "Recovery Rate",
-      value: overview?.retrobot_recovery_rate ?? "—",
-      sub: "of flagged volume",
-      color: "text-amber-400",
-      bg: "bg-amber-500/10",
-    },
-  ];
+  const stat = (label: string, value: string | number | undefined, sub: string, color: string) => (
+    <div
+      key={label}
+      className="card flex flex-col gap-1"
+      style={{ borderLeft: `3px solid ${color}` }}
+    >
+      <div className="text-2xl font-bold" style={{ color }}>{value ?? "—"}</div>
+      <div className="text-sm font-medium" style={{ color: "var(--text-primary)" }}>{label}</div>
+      <div className="text-xs" style={{ color: "var(--text-muted)" }}>{sub}</div>
+    </div>
+  );
 
   return (
     <div className="space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold text-white flex items-center gap-3">
-          <span className="text-4xl">📊</span> Live Dashboard
+        <h1 className="text-3xl font-bold flex items-center gap-3" style={{ color: "var(--text-primary)" }}>
+          <span>📊</span> Live Dashboard
         </h1>
-        <p className="text-gray-400 mt-1">
-          Autonomous agent activity — real-time volume, Retrobot recoveries, and anomaly detection.
+        <p className="mt-1 text-sm" style={{ color: "var(--text-muted)" }}>
+          Autonomous agent activity — real-time volume, Retrobot recoveries, anomaly detection.
         </p>
       </div>
 
-      {/* Retrobot Hero Banner */}
-      <motion.div
-        initial={{ opacity: 0, y: -10 }}
-        animate={{ opacity: 1, y: 0 }}
-        className="bg-gradient-to-r from-violet-900/60 via-purple-900/60 to-indigo-900/60 border border-violet-500/30 rounded-2xl p-6"
+      {/* Retrobot Hero */}
+      <div
+        className="rounded-2xl p-6"
+        style={{
+          background: "linear-gradient(135deg, rgba(2,62,138,0.22) 0%, rgba(0,150,199,0.14) 100%)",
+          border:     "1.5px solid rgba(0,180,216,0.3)",
+        }}
       >
-        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-5">
           <div>
-            <div className="flex items-center gap-2 mb-1">
+            <div className="flex items-center gap-2 mb-1.5">
               <span className="text-2xl">🤖</span>
-              <span className="text-violet-300 font-bold text-lg">Retrobot — Autonomous Payment Guardian</span>
-              <span className="bg-emerald-500/20 text-emerald-400 text-xs px-2 py-0.5 rounded-full border border-emerald-500/30">
+              <span className="font-bold text-lg" style={{ color: "var(--text-primary)" }}>
+                Retrobot — Payment Guardian
+              </span>
+              <span
+                className="text-xs px-2 py-0.5 rounded-full font-semibold"
+                style={{ background: "rgba(16,185,129,0.15)", color: "#10b981", border: "1px solid rgba(16,185,129,0.3)" }}
+              >
                 LIVE
               </span>
             </div>
-            <p className="text-gray-300 text-sm max-w-xl">
-              Retrobot scans every agent transaction in real-time using LangChain + Claude. It autonomously detects
-              overpayments, duplicates, and failed deliveries — then executes on-chain recovery via TridentEscrow.
+            <p className="text-sm max-w-xl" style={{ color: "var(--text-muted)" }}>
+              Scans every agent transaction with LangChain + Claude. Autonomously detects overpayments,
+              duplicates, failed deliveries — executes on-chain recovery via TridentEscrow.
             </p>
           </div>
-          <div className="flex gap-6 text-center shrink-0">
-            <div>
-              <div className="text-2xl font-bold text-emerald-400">{retrobot?.total_recovered_display ?? "0 TRID"}</div>
-              <div className="text-xs text-gray-500">Total Recovered</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-amber-400">{retrobot?.detection_rate ?? "0%"}</div>
-              <div className="text-xs text-gray-500">Detection Rate</div>
-            </div>
-            <div>
-              <div className="text-2xl font-bold text-violet-400">{retrobot?.total_scanned ?? 0}</div>
-              <div className="text-xs text-gray-500">Tx Scanned</div>
-            </div>
+          <div className="flex gap-7 text-center shrink-0">
+            {[
+              { v: retrobot?.total_recovered_display ?? "0 TRID", l: "Recovered",    c: "#10b981" },
+              { v: retrobot?.detection_rate ?? "0%",              l: "Detection",     c: "#f59e0b" },
+              { v: retrobot?.total_scanned ?? 0,                  l: "Tx Scanned",   c: "var(--accent)" },
+            ].map(s => (
+              <div key={s.l}>
+                <div className="text-2xl font-bold" style={{ color: s.c }}>{s.v}</div>
+                <div className="text-xs" style={{ color: "var(--text-muted)" }}>{s.l}</div>
+              </div>
+            ))}
           </div>
         </div>
-      </motion.div>
+      </div>
 
-      {/* Stat Cards */}
+      {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {statCards.map((card, i) => (
-          <motion.div
-            key={card.label}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.05 }}
-            className={`${card.bg} border border-gray-800 rounded-xl p-4`}
-          >
-            <div className={`text-2xl font-bold ${card.color}`}>{card.value}</div>
-            <div className="text-gray-300 text-sm font-medium mt-1">{card.label}</div>
-            <div className="text-gray-500 text-xs mt-0.5">{card.sub}</div>
-          </motion.div>
-        ))}
+        {stat("Total Volume",   overview?.total_volume_display ?? "—",        `${overview?.transactions_24h ?? 0} tx today`,      "#00b4d8")}
+        {stat("Recovered",      overview?.total_recovered_display ?? "—",     `${overview?.anomalies_caught ?? 0} anomalies`,     "#10b981")}
+        {stat("Active Agents",  overview?.active_agents ?? "—",               `${overview?.active_services ?? 0} services live`, "#8b5cf6")}
+        {stat("Recovery Rate",  overview?.retrobot_recovery_rate ?? "—",      "of flagged volume",                                "#f59e0b")}
       </div>
 
       {/* Volume Chart */}
-      <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-6">
-        <h2 className="text-white font-semibold mb-4 flex items-center gap-2">
-          <span>📈</span> TRID Volume (24h)
+      <div className="card">
+        <h2 className="font-semibold mb-5 flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
+          📈 TRID Volume (24h)
         </h2>
         <ResponsiveContainer width="100%" height={260}>
           <LineChart data={volumeData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-            <XAxis
-              dataKey="time"
-              tick={{ fill: "#6b7280", fontSize: 11 }}
-              tickFormatter={(v) => v.slice(11, 16) || v}
-            />
-            <YAxis tick={{ fill: "#6b7280", fontSize: 11 }} />
-            <Tooltip
-              contentStyle={{ backgroundColor: "#111827", border: "1px solid #374151", borderRadius: 8 }}
-              labelStyle={{ color: "#9ca3af" }}
-            />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+            <XAxis dataKey="time" tick={{ fill: "var(--text-muted)", fontSize: 11 }} />
+            <YAxis tick={{ fill: "var(--text-muted)", fontSize: 11 }} />
+            <Tooltip contentStyle={CHART_STYLE} />
             <Legend />
-            <Line type="monotone" dataKey="volume" stroke="#7c3aed" strokeWidth={2} dot={false} name="Volume (TRID)" />
+            <Line type="monotone" dataKey="volume"    stroke="#00b4d8" strokeWidth={2} dot={false} name="Volume (TRID)" />
             <Line type="monotone" dataKey="recovered" stroke="#10b981" strokeWidth={2} dot={false} name="Recovered (TRID)" />
           </LineChart>
         </ResponsiveContainer>
       </div>
 
-      {/* Transaction Bar Chart + Anomaly Breakdown side by side */}
+      {/* Tx Chart + Anomaly Breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-6">
-          <h2 className="text-white font-semibold mb-4">⚡ Transactions per Hour</h2>
+        <div className="card">
+          <h2 className="font-semibold mb-4" style={{ color: "var(--text-primary)" }}>
+            ⚡ Transactions per Hour
+          </h2>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={volumeData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-              <XAxis dataKey="time" tick={{ fill: "#6b7280", fontSize: 10 }} tickFormatter={(v) => v.slice(11, 16) || v} />
-              <YAxis tick={{ fill: "#6b7280", fontSize: 10 }} />
-              <Tooltip contentStyle={{ backgroundColor: "#111827", border: "1px solid #374151", borderRadius: 8 }} />
-              <Bar dataKey="transactions" fill="#7c3aed" radius={[4, 4, 0, 0]} name="Transactions" />
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+              <XAxis dataKey="time" tick={{ fill: "var(--text-muted)", fontSize: 10 }} />
+              <YAxis  tick={{ fill: "var(--text-muted)", fontSize: 10 }} />
+              <Tooltip contentStyle={CHART_STYLE} />
+              <Bar dataKey="transactions" fill="#0096c7" radius={[4, 4, 0, 0]} name="Transactions" />
             </BarChart>
           </ResponsiveContainer>
         </div>
 
-        <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-6">
-          <h2 className="text-white font-semibold mb-4">🚨 Anomaly Breakdown</h2>
+        <div className="card">
+          <h2 className="font-semibold mb-4" style={{ color: "var(--text-primary)" }}>
+            🚨 Anomaly Breakdown
+          </h2>
           {retrobot?.anomaly_breakdown && Object.keys(retrobot.anomaly_breakdown).length > 0 ? (
-            <div className="space-y-3 mt-2">
+            <div className="space-y-3 mt-1">
               {Object.entries(retrobot.anomaly_breakdown).map(([type, count]) => (
                 <div key={type} className="flex items-center gap-3">
-                  <div
-                    className="w-3 h-3 rounded-full shrink-0"
-                    style={{ backgroundColor: ANOMALY_COLORS[type] ?? "#6b7280" }}
-                  />
+                  <div className="w-3 h-3 rounded-full shrink-0" style={{ background: ANOMALY_COLORS[type] ?? "#6b7280" }} />
                   <div className="flex-1">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-300 capitalize">{type.replace("_", " ")}</span>
-                      <span className="text-gray-400">{count} caught</span>
+                    <div className="flex justify-between text-sm mb-1">
+                      <span className="capitalize" style={{ color: "var(--text-secondary)" }}>{type.replace("_", " ")}</span>
+                      <span style={{ color: "var(--text-muted)" }}>{count} caught</span>
                     </div>
-                    <div className="h-1.5 bg-gray-800 rounded-full mt-1">
+                    <div className="h-1.5 rounded-full" style={{ background: "var(--border)" }}>
                       <div
                         className="h-full rounded-full"
                         style={{
-                          width: `${(count / (retrobot.anomalies_caught || 1)) * 100}%`,
-                          backgroundColor: ANOMALY_COLORS[type] ?? "#6b7280",
+                          width:      `${(count / (retrobot.anomalies_caught || 1)) * 100}%`,
+                          background: ANOMALY_COLORS[type] ?? "#6b7280",
                         }}
                       />
                     </div>
@@ -254,42 +216,48 @@ export default function DashboardPage() {
               ))}
             </div>
           ) : (
-            <div className="flex items-center justify-center h-32 text-gray-600 text-sm">
-              No anomalies yet — agents are warming up
+            <div
+              className="flex items-center justify-center h-32 text-sm"
+              style={{ color: "var(--text-muted)" }}
+            >
+              {loading ? "Loading…" : "Agents are warming up — anomalies appear here"}
             </div>
           )}
         </div>
       </div>
 
-      {/* Recent Retrobot Catches */}
-      {retrobot?.recent_anomalies && retrobot.recent_anomalies.length > 0 && (
-        <div className="bg-gray-900/60 border border-gray-800 rounded-2xl p-6">
-          <h2 className="text-white font-semibold mb-4">🔍 Recent Retrobot Catches</h2>
+      {/* Recent Catches */}
+      {(retrobot?.recent_anomalies?.length ?? 0) > 0 && (
+        <div className="card">
+          <h2 className="font-semibold mb-4" style={{ color: "var(--text-primary)" }}>
+            🔍 Recent Retrobot Catches
+          </h2>
           <div className="space-y-3">
-            {retrobot.recent_anomalies.slice(0, 5).map((a) => (
+            {retrobot!.recent_anomalies.slice(0, 5).map(a => (
               <div
                 key={a.id}
-                className="flex items-start justify-between p-3 bg-gray-800/50 rounded-xl border border-gray-700/50"
+                className="flex items-start justify-between p-3 rounded-xl"
+                style={{ background: "rgba(0,180,216,0.05)", border: "1px solid rgba(0,180,216,0.12)" }}
               >
                 <div className="flex items-start gap-3">
                   <div
                     className="w-2 h-2 rounded-full mt-1.5 shrink-0"
-                    style={{ backgroundColor: ANOMALY_COLORS[a.type] ?? "#6b7280" }}
+                    style={{ background: ANOMALY_COLORS[a.type] ?? "#6b7280" }}
                   />
                   <div>
-                    <div className="text-sm text-gray-200">{a.reason}</div>
-                    <div className="text-xs text-gray-500 mt-0.5">
+                    <div className="text-sm" style={{ color: "var(--text-primary)" }}>{a.reason}</div>
+                    <div className="text-xs mt-0.5 mono" style={{ color: "var(--text-muted)" }}>
                       {a.buyer} → {a.seller} · {a.amount}
                     </div>
                   </div>
                 </div>
                 <div className="text-right shrink-0 ml-4">
                   {a.recovered ? (
-                    <span className="text-emerald-400 text-xs font-medium">+{a.recovered}</span>
+                    <span className="text-emerald-500 text-xs font-medium">+{a.recovered}</span>
                   ) : (
-                    <span className="text-amber-400 text-xs">flagged</span>
+                    <span className="text-amber-500 text-xs">flagged</span>
                   )}
-                  <div className="text-xs text-gray-600 mt-0.5">
+                  <div className="text-xs mt-0.5" style={{ color: "var(--text-muted)" }}>
                     {a.timestamp ? new Date(a.timestamp).toLocaleTimeString() : ""}
                   </div>
                 </div>

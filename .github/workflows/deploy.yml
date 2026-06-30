@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  # ── Frontend: build check on every push/PR ─────────────────────
+  # ── Frontend: build check (runs on every push/PR) ──────────────
   build-frontend:
     name: Build Frontend
     runs-on: ubuntu-latest
@@ -38,7 +38,7 @@ jobs:
           VITE_REPUTATION_BOND_ADDRESS: ${{ secrets.VITE_REPUTATION_BOND_ADDRESS || '' }}
         run: npm run build
 
-  # ── Deploy Frontend → Vercel (main branch only) ────────────────
+  # ── Deploy Frontend → Vercel (main only) ───────────────────────
   deploy-frontend:
     name: Deploy Frontend to Vercel
     runs-on: ubuntu-latest
@@ -62,8 +62,8 @@ jobs:
         uses: amondnet/vercel-action@v25
         with:
           vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
-          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-org-id: team_iu2N0RKkPhEWf0a2qG5JQnSm
+          vercel-project-id: prj_HcpfwYrOEIGlEOigeIRPdtEIZoec
           working-directory: apps/frontend
           vercel-args: "--prod"
         env:
@@ -76,7 +76,7 @@ jobs:
           VITE_TRIDENT_ESCROW_ADDRESS: ${{ secrets.VITE_TRIDENT_ESCROW_ADDRESS }}
           VITE_REPUTATION_BOND_ADDRESS: ${{ secrets.VITE_REPUTATION_BOND_ADDRESS }}
 
-  # ── Deploy Python Backend → Railway (main branch only) ─────────
+  # ── Deploy Python Backend → Railway (main only) ────────────────
   deploy-python-backend:
     name: Deploy Python Backend to Railway
     runs-on: ubuntu-latest
@@ -87,12 +87,13 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Deploy Python backend
+      - name: Deploy
+        working-directory: apps/backend
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_PYTHON }}
-        run: railway up --directory apps/backend
+        run: railway up --detach
 
-  # ── Deploy Node Backend → Railway (main branch only) ───────────
+  # ── Deploy Node Backend → Railway (main only) ──────────────────
   deploy-node-backend:
     name: Deploy Node Backend to Railway
     runs-on: ubuntu-latest
@@ -103,7 +104,8 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Deploy Node backend
+      - name: Deploy
+        working-directory: apps/node-backend
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_NODE }}
-        run: railway up --directory apps/node-backend
+        run: railway up --detach

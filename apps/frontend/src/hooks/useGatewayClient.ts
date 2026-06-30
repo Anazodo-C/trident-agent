@@ -3,7 +3,7 @@ import { useWalletClient, useAccount } from "wagmi";
 import { useState, useCallback } from "react";
 
 export function useGatewayClient() {
-  const { data: walletClient } = useWalletClient();
+  const { data: _walletClient } = useWalletClient();
   const { address } = useAccount();
   const [balances, setBalances] = useState<{
     gateway: { formattedAvailable: string; available: bigint };
