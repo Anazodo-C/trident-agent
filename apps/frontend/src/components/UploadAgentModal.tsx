@@ -9,7 +9,6 @@ const SERVICE_TYPES = [
   { value: "price_feed",       label: "Price Feed" },
   { value: "fx_rates",         label: "FX Rates" },
   { value: "risk_score",       label: "Risk Score" },
-  { value: "research_summary", label: "AI Research" },
   { value: "compute_score",    label: "Portfolio Score" },
   { value: "retrobot_audit",   label: "Retrobot Audit" },
   { value: "custom",           label: "Custom" },

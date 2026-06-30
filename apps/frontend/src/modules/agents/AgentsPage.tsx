@@ -42,7 +42,6 @@ const TYPE_ICONS: Record<string, string> = {
   price_feed:       "📈",
   fx_rates:         "💱",
   risk_score:       "🛡️",
-  research_summary: "🧠",
   compute_score:    "⚙️",
   retrobot_audit:   "🔍",
   retrobot:         "🤖",
@@ -75,12 +74,6 @@ const DEMO_RESULTS: Record<string, unknown> = {
     data: { risk_score: 72, label: "Medium", factors: ["active 6 months", "3 DeFi protocols", "no sanctions hits"] },
     price_paid: "0.005 TRID", note: "demo — start backend for live scoring",
   },
-  research_summary: {
-    service: "research_summary", provider: "Trident / Claude (demo)",
-    asset: "BTC",
-    data: { summary: "Bitcoin continues to consolidate above key support at $65k. ETF inflows remain strong. Halving supply dynamics are expected to drive bullish momentum into Q3 2026.", sentiment: "bullish", confidence: 0.74 },
-    price_paid: "0.01 TRID", note: "demo — start backend for Claude-powered research",
-  },
   compute_score: {
     service: "compute_score", provider: "Trident (demo)",
     data: { sharpe_ratio: 1.84, var_95: -0.062, max_drawdown: -0.18, rebalance_signal: "hold", score: 78 },
@@ -106,8 +99,6 @@ function AgentServiceCard({
   const { address, isConnected } = useAccount();
   const { show, dismiss }        = useToastHook();
   const [busy, setBusy]          = useState(false);
-  // Per-service user inputs
-  const [researchAsset,  setResearchAsset]  = useState("BTC");
   const [portfolioInput, setPortfolioInput] = useState("BTC:0.4,ETH:0.3,SOL:0.2,USDC:0.1");
 
   /** Build the correct Python backend URL + query params for each service type */
@@ -120,8 +111,6 @@ function AgentServiceCard({
         return `${base}/api/marketplace/data/fx-rates?base=USD&targets=EUR,GBP,NGN,JPY,BRL,GHS`;
       case "risk_score":
         return `${base}/api/marketplace/data/risk-score?address=${address || "0x0000000000000000000000000000000000000001"}`;
-      case "research_summary":
-        return `${base}/api/marketplace/data/research-summary?asset=${encodeURIComponent(researchAsset.trim() || "BTC")}`;
       case "compute_score":
         return `${base}/api/marketplace/data/compute-score?portfolio=${encodeURIComponent(portfolioInput.trim() || "BTC:0.5,ETH:0.5")}&model=sharpe`;
       case "retrobot_audit":
@@ -211,20 +200,6 @@ function AgentServiceCard({
       </div>
 
       {/* Per-service input fields */}
-      {svc.service_type === "research_summary" && (
-        <div className="mb-3">
-          <label className="text-xs mb-1 block" style={{ color: "var(--text-muted)" }}>
-            Asset / ticker / contract address
-          </label>
-          <input
-            className="input text-xs py-1.5"
-            placeholder="e.g. BTC, ETH, SOL or 0x…"
-            value={researchAsset}
-            onChange={e => setResearchAsset(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && !busy && handleHire()}
-          />
-        </div>
-      )}
       {svc.service_type === "compute_score" && (
         <div className="mb-3">
           <label className="text-xs mb-1 block" style={{ color: "var(--text-muted)" }}>
@@ -655,7 +630,6 @@ const DEMO_SERVICES: Service[] = [
   { id: 1, name: "Price Feed",     service_type: "price_feed",       description: "Live crypto prices via CoinGecko — BTC, ETH, ARC, and 200+ assets",           price_per_call: 1000,  price_trid_display: "0.0010 TRID", endpoint: "/data/price-feed",      x402_enabled: true, calls_served: 3142, seller_reputation: 8500, seller_name: "Trident Protocol",  seller_address: "" },
   { id: 2, name: "FX Rates",       service_type: "fx_rates",         description: "Real-time forex including emerging markets — NGN, BRL, GHS, KES",              price_per_call: 1000,  price_trid_display: "0.0010 TRID", endpoint: "/data/fx-rates",        x402_enabled: true, calls_served: 2891, seller_reputation: 8500, seller_name: "Trident Protocol",  seller_address: "" },
   { id: 3, name: "Risk Score",     service_type: "risk_score",       description: "Wallet & asset risk scoring using on-chain analytics and heuristics",           price_per_call: 5000,  price_trid_display: "0.0050 TRID", endpoint: "/data/risk-score",      x402_enabled: true, calls_served: 1043, seller_reputation: 8500, seller_name: "Trident Protocol",  seller_address: "" },
-  { id: 4, name: "AI Research",    service_type: "research_summary", description: "Claude-powered research briefs — any asset, any timeframe, instant delivery",  price_per_call: 10000, price_trid_display: "0.0100 TRID", endpoint: "/data/research-summary",x402_enabled: true, calls_served: 567,  seller_reputation: 8500, seller_name: "Trident Protocol",  seller_address: "" },
   { id: 5, name: "Portfolio Score",service_type: "compute_score",   description: "Quantitative scoring: Sharpe ratio, VaR, max drawdown, rebalance signal",      price_per_call: 20000, price_trid_display: "0.0200 TRID", endpoint: "/data/compute-score",   x402_enabled: true, calls_served: 289,  seller_reputation: 8500, seller_name: "Trident Protocol",  seller_address: "" },
   { id: 6, name: "Retrobot Audit", service_type: "retrobot_audit",  description: "Full payment history audit by Retrobot — any agent can hire Retrobot to audit", price_per_call: 5000,  price_trid_display: "0.0050 TRID", endpoint: "/retrobot/audit",       x402_enabled: true, calls_served: 194,  seller_reputation: 9200, seller_name: "Retrobot v1.0",     seller_address: "" },
 ];

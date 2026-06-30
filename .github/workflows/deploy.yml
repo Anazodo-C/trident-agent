@@ -22,7 +22,7 @@ jobs:
 
       - name: Install
         working-directory: apps/frontend
-        run: npm install
+        run: npm ci
 
       - name: Build
         working-directory: apps/frontend
@@ -102,8 +102,9 @@ jobs:
       - name: Deploy
         working-directory: apps/backend
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_PYTHON }}
-        run: railway up --detach
+          RAILWAY_TOKEN:      ${{ secrets.RAILWAY_TOKEN_PYTHON }}
+          RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID_PYTHON }}
+        run: railway up --detach --service $RAILWAY_SERVICE_ID
 
   # ── Deploy Node Backend → Railway ─────────────────────────────
   deploy-node-backend:
@@ -119,5 +120,6 @@ jobs:
       - name: Deploy
         working-directory: apps/node-backend
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_NODE }}
-        run: railway up --detach
+          RAILWAY_TOKEN:      ${{ secrets.RAILWAY_TOKEN_NODE }}
+          RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID_NODE }}
+        run: railway up --detach --service $RAILWAY_SERVICE_ID

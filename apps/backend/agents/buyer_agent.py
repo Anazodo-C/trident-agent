@@ -61,18 +61,6 @@ async def get_fx_rates(base: str = "USD", targets: str = "EUR,GBP,NGN") -> str:
 
 
 @tool
-async def get_research_summary(asset: str = "BTC") -> str:
-    """
-    Buy an AI research summary for an asset via x402 payment.
-    Args: asset — asset ticker e.g. 'ETH', 'SOL'
-    Cost: 0.01 TRID per call.
-    """
-    async with httpx.AsyncClient() as client:
-        r = await client.get(f"{NODE_API}/research/{asset}", timeout=20)
-        return r.text
-
-
-@tool
 async def scan_for_anomalies(payment_data: str) -> str:
     """
     Submit a payment to Retrobot for anomaly scanning.
@@ -100,7 +88,6 @@ TOOLS = [
     list_marketplace_services,
     get_price_feed,
     get_fx_rates,
-    get_research_summary,
     scan_for_anomalies,
     check_agent_reputation,
 ]

@@ -187,69 +187,6 @@ function RiskScoreView({ data }: { data: unknown }) {
   );
 }
 
-function ResearchSummaryView({ data, asset }: { data: unknown; asset?: string }) {
-  const assetStr   = asset && asset !== "—" ? asset : str(get(data, "asset"));
-  const summary    = str(get(data, "summary") ?? get(data, "text"));
-  const sentiment  = str(get(data, "sentiment"));
-  const confidence = Number(get(data, "confidence"));
-  const keyLevel   = str(get(data, "key_level"));
-  const catalyst   = str(get(data, "catalyst"));
-  const errorMsg   = str(get(data, "error"));
-  const sentColor  = sentiment === "bullish" ? "#10b981" : sentiment === "bearish" ? "#ef4444" : "#f59e0b";
-
-  return (
-    <div className="space-y-3">
-      {/* Badges */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {assetStr && assetStr !== "—" && (
-          <span className="px-3 py-1 rounded-full text-xs font-bold"
-            style={{ background: "rgba(0,180,216,0.15)", color: "var(--accent)", border: "1px solid rgba(0,180,216,0.3)" }}>
-            {assetStr}
-          </span>
-        )}
-        {sentiment && sentiment !== "—" && (
-          <span className="px-3 py-1 rounded-full text-xs font-bold capitalize"
-            style={{ background: `${sentColor}20`, color: sentColor, border: `1px solid ${sentColor}50` }}>
-            {sentiment === "bullish" ? "▲" : sentiment === "bearish" ? "▼" : "◆"} {sentiment}
-          </span>
-        )}
-        {!isNaN(confidence) && confidence > 0 && (
-          <span className="px-3 py-1 rounded-full text-xs font-semibold"
-            style={{ background: "rgba(139,92,246,0.12)", color: "#8b5cf6", border: "1px solid rgba(139,92,246,0.3)" }}>
-            {Math.round(confidence * 100)}% confidence
-          </span>
-        )}
-      </div>
-
-      {/* Summary text */}
-      <div className="rounded-xl p-4 text-sm leading-relaxed"
-        style={{ background: "rgba(0,180,216,0.06)", border: "1px solid rgba(0,180,216,0.18)", color: "var(--text-primary)" }}>
-        {summary && summary !== "—" ? summary : errorMsg && errorMsg !== "—" ? (
-          <span style={{ color: "#f59e0b" }}>⚠ {errorMsg}</span>
-        ) : <span style={{ color: "var(--text-muted)" }}>No summary returned</span>}
-      </div>
-
-      {/* Key level + Catalyst */}
-      {(keyLevel !== "—" || catalyst !== "—") && (
-        <div className="grid grid-cols-2 gap-2">
-          {keyLevel !== "—" && (
-            <div className="rounded-xl p-3" style={{ background: "rgba(0,180,216,0.07)", border: "1px solid rgba(0,180,216,0.15)" }}>
-              <div className="text-xs mb-1" style={{ color: "var(--text-muted)" }}>Key Level</div>
-              <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{keyLevel}</div>
-            </div>
-          )}
-          {catalyst !== "—" && (
-            <div className="rounded-xl p-3" style={{ background: "rgba(0,180,216,0.07)", border: "1px solid rgba(0,180,216,0.15)" }}>
-              <div className="text-xs mb-1" style={{ color: "var(--text-muted)" }}>Catalyst to Watch</div>
-              <div className="text-sm font-semibold" style={{ color: "var(--text-primary)" }}>{catalyst}</div>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function ComputeScoreView({ data }: { data: unknown }) {
   const sharpe  = get(data, "sharpe_ratio");
   const varVal  = get(data, "var_95");
@@ -353,7 +290,6 @@ function detectType(result: unknown): string {
     if (keys.includes("BTC") || keys.includes("ETH")) return "price_feed";
     if (keys.includes("EUR") || keys.includes("GBP")) return "fx_rates";
     if (keys.some(k => ["risk_score", "score", "label", "factors"].includes(k))) return "risk_score";
-    if (keys.some(k => ["summary", "sentiment"].includes(k))) return "research_summary";
     if (keys.some(k => ["sharpe_ratio", "var_95", "rebalance_signal"].includes(k))) return "compute_score";
     if (keys.some(k => ["total_scanned", "anomalies_caught", "detection_rate"].includes(k))) return "retrobot_audit";
   }
@@ -372,7 +308,6 @@ export default function ServiceResultModal({ serviceName, result, pricePaid, onC
       case "price_feed":        return <PriceFeedView data={data} />;
       case "fx_rates":          return <FxRatesView data={data} base={get(result, "base") ?? "USD"} />;
       case "risk_score":        return <RiskScoreView data={data} />;
-      case "research_summary":  return <ResearchSummaryView data={data} asset={str(get(result, "asset"))} />;
       case "compute_score":     return <ComputeScoreView data={data} />;
       case "retrobot_audit":    return <RetrobotAuditView data={data} />;
       default:
@@ -391,7 +326,6 @@ export default function ServiceResultModal({ serviceName, result, pricePaid, onC
     price_feed:       "Live Price Feed",
     fx_rates:         "FX Exchange Rates",
     risk_score:       "On-chain Risk Score",
-    research_summary: "AI Research Brief",
     compute_score:    "Portfolio Analysis",
     retrobot_audit:   "Retrobot Audit",
   };

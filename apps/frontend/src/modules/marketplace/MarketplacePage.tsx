@@ -32,7 +32,7 @@ interface Activity {
 
 const SERVICE_ICONS: Record<string, string> = {
   price_feed: "📈", fx_rates: "💱", risk_score: "🛡️",
-  research_summary: "🧠", compute_score: "⚙️", retrobot_audit: "🔍",
+  compute_score: "⚙️", retrobot_audit: "🔍",
 };
 
 function ServiceCard({ svc }: { svc: Service }) {
@@ -222,7 +222,6 @@ const DEMO_SERVICES: Service[] = [
   { id: 1, name: "Price Feed", service_type: "price_feed", description: "Live crypto asset prices via CoinGecko", price_per_call: 1000, price_trid_display: "0.0010 TRID", endpoint: "/data/price-feed", x402_enabled: true, calls_served: 1247, seller_reputation: 8500, seller_name: "Trident Protocol", seller_address: "0x3315..." },
   { id: 2, name: "FX Rates", service_type: "fx_rates", description: "Real-time forex rates including emerging markets (NGN, BRL, GHS)", price_per_call: 1000, price_trid_display: "0.0010 TRID", endpoint: "/data/fx-rates", x402_enabled: true, calls_served: 892, seller_reputation: 8500, seller_name: "Trident Protocol", seller_address: "0x3315..." },
   { id: 3, name: "Risk Score", service_type: "risk_score", description: "Wallet and asset risk scoring powered by on-chain analysis", price_per_call: 5000, price_trid_display: "0.0050 TRID", endpoint: "/data/risk-score", x402_enabled: true, calls_served: 423, seller_reputation: 8500, seller_name: "Trident Protocol", seller_address: "0x3315..." },
-  { id: 4, name: "AI Research", service_type: "research_summary", description: "Claude-powered financial research summaries for any asset", price_per_call: 10000, price_trid_display: "0.0100 TRID", endpoint: "/data/research-summary", x402_enabled: true, calls_served: 167, seller_reputation: 8500, seller_name: "Trident Protocol", seller_address: "0x3315..." },
   { id: 5, name: "Portfolio Score", service_type: "compute_score", description: "Quantitative portfolio scoring — Sharpe ratio, VaR, drawdown", price_per_call: 20000, price_trid_display: "0.0200 TRID", endpoint: "/data/compute-score", x402_enabled: true, calls_served: 89, seller_reputation: 8500, seller_name: "Trident Protocol", seller_address: "0x3315..." },
   { id: 6, name: "Retrobot Audit", service_type: "retrobot_audit", description: "Full payment history audit — any agent can hire Retrobot", price_per_call: 5000, price_trid_display: "0.0050 TRID", endpoint: "/retrobot/audit", x402_enabled: true, calls_served: 54, seller_reputation: 9200, seller_name: "Retrobot v1.0", seller_address: "0x3315..." },
 ];

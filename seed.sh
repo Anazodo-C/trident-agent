@@ -11,7 +11,7 @@ echo "🌱 Seeding Trident demo data..."
 echo "📋 Registering agents..."
 curl -s -X POST "$API/api/agents/register" -H "Content-Type: application/json" -d '{"wallet_address":"0xabc1000000000000000000000000000000000001","name":"AlphaBot","description":"High-frequency data seller on Arc Testnet","agent_type":"seller","service_types":["price_feed","fx_rates","compute_score"]}' | python3 -c "import sys,json; d=json.load(sys.stdin); print('  ✅ AlphaBot:', d.get('status','error'))" 2>/dev/null
 
-curl -s -X POST "$API/api/agents/register" -H "Content-Type: application/json" -d '{"wallet_address":"0xabc2000000000000000000000000000000000002","name":"DataMaven","description":"AI-powered research and risk scoring agent","agent_type":"seller","service_types":["risk_score","research_summary"]}' | python3 -c "import sys,json; d=json.load(sys.stdin); print('  ✅ DataMaven:', d.get('status','error'))" 2>/dev/null
+curl -s -X POST "$API/api/agents/register" -H "Content-Type: application/json" -d '{"wallet_address":"0xabc2000000000000000000000000000000000002","name":"DataMaven","description":"AI-powered research and risk scoring agent","agent_type":"seller","service_types":["risk_score"]}' | python3 -c "import sys,json; d=json.load(sys.stdin); print('  ✅ DataMaven:', d.get('status','error'))" 2>/dev/null
 
 curl -s -X POST "$API/api/agents/register" -H "Content-Type: application/json" -d '{"wallet_address":"0xabc3000000000000000000000000000000000003","name":"RetroSweep","description":"Autonomous payment anomaly detection and recovery","agent_type":"retrobot"}' | python3 -c "import sys,json; d=json.load(sys.stdin); print('  ✅ RetroSweep:', d.get('status','error'))" 2>/dev/null
 
@@ -25,7 +25,6 @@ curl -s -X POST "$API/api/marketplace/services/register?wallet_address=0xabc1000
 
 curl -s -X POST "$API/api/marketplace/services/register?wallet_address=0xabc2000000000000000000000000000000000002" -H "Content-Type: application/json" -d '{"service_type":"risk_score","name":"Wallet Risk Score","description":"On-chain risk assessment for any EVM address","price_per_call":5000,"endpoint":"'"$NODE"'/data/risk-score"}' | python3 -c "import sys,json; d=json.load(sys.stdin); print('  ✅ Risk Score:', d.get('service_id','error'))" 2>/dev/null
 
-curl -s -X POST "$API/api/marketplace/services/register?wallet_address=0xabc2000000000000000000000000000000000002" -H "Content-Type: application/json" -d '{"service_type":"research_summary","name":"AI Research Summary","description":"Claude-powered financial research on any crypto asset","price_per_call":10000,"endpoint":"'"$NODE"'/data/research-summary"}' | python3 -c "import sys,json; d=json.load(sys.stdin); print('  ✅ Research Summary:', d.get('service_id','error'))" 2>/dev/null
 
 curl -s -X POST "$API/api/marketplace/services/register?wallet_address=0xabc1000000000000000000000000000000000001" -H "Content-Type: application/json" -d '{"service_type":"compute_score","name":"Portfolio Compute Score","description":"Sharpe ratio, VaR, and risk-adjusted portfolio scoring","price_per_call":20000,"endpoint":"'"$NODE"'/data/compute-score"}' | python3 -c "import sys,json; d=json.load(sys.stdin); print('  ✅ Compute Score:', d.get('service_id','error'))" 2>/dev/null
 

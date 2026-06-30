@@ -79,7 +79,7 @@ Operating principles:
 4. Undercut the market on price when competition is high.
 5. Your earnings are automatically settled by Circle Gateway on-chain.
 
-Available service types: price_feed, fx_rates, risk_score, research_summary, compute_score, retrobot_audit
+Available service types: price_feed, fx_rates, risk_score, compute_score, retrobot_audit
 
 Start by registering your services, then monitor earnings."""
 

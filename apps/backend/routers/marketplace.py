@@ -114,13 +114,6 @@ async def get_risk_score(address: str):
     return {"service": "risk_score", "provider": "Trident / Messari", "address": address, "data": data, "price_paid": "0.005 TRID"}
 
 
-@router.get("/data/research-summary")
-async def get_research_summary(asset: str = "BTC"):
-    fin = FinancialDataService()
-    data = await fin.get_research_summary(asset)
-    return {"service": "research_summary", "provider": "Trident / Claude", "asset": asset, "data": data, "price_paid": "0.01 TRID"}
-
-
 @router.get("/data/compute-score")
 async def get_compute_score(portfolio: str, model: str = "sharpe"):
     fin = FinancialDataService()
