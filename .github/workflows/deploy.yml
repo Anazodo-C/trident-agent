@@ -7,78 +7,90 @@ on:
     branches: [main]
 
 jobs:
-  # ── Frontend: build check (runs on every push/PR) ──────────────
+  # ── Build check (every push / PR) ─────────────────────────────
   build-frontend:
     name: Build Frontend
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/frontend
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/frontend/package-lock.json
 
-      - name: Install dependencies
+      - name: Install
+        working-directory: apps/frontend
         run: npm install
 
       - name: Build
+        working-directory: apps/frontend
         env:
-          VITE_API_URL: ${{ secrets.VITE_API_URL || 'http://localhost:8000' }}
-          VITE_NODE_API_URL: ${{ secrets.VITE_NODE_API_URL || 'http://localhost:3001' }}
-          VITE_WC_PROJECT_ID: ${{ secrets.VITE_WC_PROJECT_ID || 'placeholder' }}
-          VITE_ARC_RPC_URL: https://rpc.testnet.arc.network
-          VITE_ARC_CHAIN_ID: "5042002"
-          VITE_TRIDENT_TOKEN_ADDRESS: ${{ secrets.VITE_TRIDENT_TOKEN_ADDRESS || '' }}
-          VITE_AGENT_REGISTRY_ADDRESS: ${{ secrets.VITE_AGENT_REGISTRY_ADDRESS || '' }}
-          VITE_TRIDENT_ESCROW_ADDRESS: ${{ secrets.VITE_TRIDENT_ESCROW_ADDRESS || '' }}
-          VITE_REPUTATION_BOND_ADDRESS: ${{ secrets.VITE_REPUTATION_BOND_ADDRESS || '' }}
+          VITE_API_URL:                    ${{ secrets.VITE_API_URL || 'https://placeholder.railway.app' }}
+          VITE_NODE_API_URL:               ${{ secrets.VITE_NODE_API_URL || 'https://placeholder-node.railway.app' }}
+          VITE_WC_PROJECT_ID:              ${{ secrets.VITE_WC_PROJECT_ID || 'placeholder' }}
+          VITE_ARC_RPC_URL:                https://rpc.testnet.arc.network
+          VITE_ARC_CHAIN_ID:               "5042002"
+          VITE_TRIDENT_TOKEN_ADDRESS:      ${{ secrets.VITE_TRIDENT_TOKEN_ADDRESS || '0x5fc8e8b3DC37Bcbb7bC7F013F6a8C56375B40dF7' }}
+          VITE_AGENT_REGISTRY_ADDRESS:     ${{ secrets.VITE_AGENT_REGISTRY_ADDRESS || '0x4C0b02279E7323d1EB5C4104B6f5e9d0EF87f4E5' }}
+          VITE_TRIDENT_ESCROW_ADDRESS:     ${{ secrets.VITE_TRIDENT_ESCROW_ADDRESS || '0xA067efE0e348a36Cc411C098b5e537180366B460' }}
+          VITE_REPUTATION_BOND_ADDRESS:    ${{ secrets.VITE_REPUTATION_BOND_ADDRESS || '0xF2e7c4A63eE02dc036b239511c2a40Bc9973f32D' }}
         run: npm run build
 
-  # ── Deploy Frontend → Vercel (main only) ───────────────────────
+      # Upload the built dist/ so the deploy job can use it
+      - name: Upload dist artifact
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: apps/frontend/dist
+          retention-days: 1
+
+  # ── Deploy to Vercel (main only, prebuilt) ─────────────────────
   deploy-frontend:
-    name: Deploy Frontend to Vercel
+    name: Deploy Frontend → Vercel
     runs-on: ubuntu-latest
     needs: build-frontend
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    defaults:
-      run:
-        working-directory: apps/frontend
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
 
-      - name: Install dependencies
-        run: npm install
-
-      - name: Deploy to Vercel
-        uses: amondnet/vercel-action@v25
+      # Restore the already-built dist/
+      - name: Download dist artifact
+        uses: actions/download-artifact@v4
         with:
-          vercel-token: ${{ secrets.VERCEL_TOKEN }}
-          vercel-org-id: team_iu2N0RKkPhEWf0a2qG5JQnSm
-          vercel-project-id: prj_HcpfwYrOEIGlEOigeIRPdtEIZoec
-          working-directory: apps/frontend
-          vercel-args: "--prod"
-        env:
-          VITE_API_URL: ${{ secrets.VITE_API_URL }}
-          VITE_NODE_API_URL: ${{ secrets.VITE_NODE_API_URL }}
-          VITE_WC_PROJECT_ID: ${{ secrets.VITE_WC_PROJECT_ID }}
-          VITE_ARC_RPC_URL: https://rpc.testnet.arc.network
-          VITE_TRIDENT_TOKEN_ADDRESS: ${{ secrets.VITE_TRIDENT_TOKEN_ADDRESS }}
-          VITE_AGENT_REGISTRY_ADDRESS: ${{ secrets.VITE_AGENT_REGISTRY_ADDRESS }}
-          VITE_TRIDENT_ESCROW_ADDRESS: ${{ secrets.VITE_TRIDENT_ESCROW_ADDRESS }}
-          VITE_REPUTATION_BOND_ADDRESS: ${{ secrets.VITE_REPUTATION_BOND_ADDRESS }}
+          name: frontend-dist
+          path: apps/frontend/dist
 
-  # ── Deploy Python Backend → Railway (main only) ────────────────
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      # Pull project settings so vercel knows the project/org
+      - name: Link Vercel project
+        working-directory: apps/frontend
+        env:
+          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID:     team_iu2N0RKkPhEWf0a2qG5JQnSm
+          VERCEL_PROJECT_ID: prj_HcpfwYrOEIGlEOigeIRPdtEIZoec
+        run: vercel pull --yes --environment=production --token=$VERCEL_TOKEN
+
+      # Build the Vercel output format from the pre-built dist
+      - name: Deploy prebuilt to Vercel
+        working-directory: apps/frontend
+        env:
+          VERCEL_TOKEN:      ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID:     team_iu2N0RKkPhEWf0a2qG5JQnSm
+          VERCEL_PROJECT_ID: prj_HcpfwYrOEIGlEOigeIRPdtEIZoec
+        run: vercel deploy dist --prod --token=$VERCEL_TOKEN --yes
+
+  # ── Deploy Python Backend → Railway ───────────────────────────
   deploy-python-backend:
-    name: Deploy Python Backend to Railway
+    name: Deploy Python Backend → Railway
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
@@ -93,9 +105,9 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_PYTHON }}
         run: railway up --detach
 
-  # ── Deploy Node Backend → Railway (main only) ──────────────────
+  # ── Deploy Node Backend → Railway ─────────────────────────────
   deploy-node-backend:
-    name: Deploy Node Backend to Railway
+    name: Deploy Node Backend → Railway
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:

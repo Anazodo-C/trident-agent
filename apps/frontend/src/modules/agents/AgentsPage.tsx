@@ -11,7 +11,7 @@ import { useToast as useToastHook } from "../../components/Toast";
 import { useWalletBalance } from "../../hooks/useWalletBalance";
 
 const API      = import.meta.env.VITE_API_URL      || "http://localhost:8000";
-const NODE_API = import.meta.env.VITE_NODE_API_URL || "http://localhost:3001";
+// NODE_API removed — direct Python backend calls used for hire
 
 interface Agent {
   id: number;
@@ -70,38 +70,51 @@ function AgentServiceCard({
   const { show, dismiss }        = useToastHook();
   const [busy, setBusy]          = useState(false);
 
+  /** Build the correct Python backend URL + query params for each service type */
+  const buildCallUrl = (): string => {
+    const base = API;
+    // The Python backend mounts marketplace routes at /api/marketplace
+    // Stored endpoint is e.g. "/data/price-feed" → full: /api/marketplace/data/price-feed
+    switch (svc.service_type) {
+      case "price_feed":
+        return `${base}/api/marketplace/data/price-feed?symbols=BTC,ETH,USDC,SOL`;
+      case "fx_rates":
+        return `${base}/api/marketplace/data/fx-rates?base=USD&targets=EUR,GBP,NGN,JPY,BRL,GHS`;
+      case "risk_score":
+        return `${base}/api/marketplace/data/risk-score?address=${address || "0x0000000000000000000000000000000000000001"}`;
+      case "research_summary":
+        return `${base}/api/marketplace/data/research-summary?asset=BTC`;
+      case "compute_score":
+        return `${base}/api/marketplace/data/compute-score?portfolio=BTC:0.4,ETH:0.3,SOL:0.2,USDC:0.1&model=sharpe`;
+      case "retrobot_audit":
+        return `${base}/api/retrobot/stats`;
+      default:
+        // Fallback: try /api/marketplace + stored endpoint
+        return `${base}/api/marketplace${svc.endpoint}`;
+    }
+  };
+
   const handleHire = async () => {
     if (!isConnected) {
       show("Connect your wallet to hire agents", "error");
       return;
     }
     setBusy(true);
-    const tid = show(`Calling ${svc.name}…`, "loading");
+    const tid = show(`Hiring ${svc.name}…`, "loading");
     try {
-      // First try x402-enabled endpoint via Node gateway
-      const endpoint = svc.endpoint.startsWith("http")
-        ? svc.endpoint
-        : `${NODE_API}${svc.endpoint}`;
-
-      let result: unknown;
-      try {
-        const r = await axios.get(endpoint, {
-          headers: address ? { "x-buyer-address": address } : {},
-          timeout: 8000,
-        });
-        result = r.data;
-      } catch (gateErr: any) {
-        // Fall back to Python backend data endpoint
-        const fallback = `${API}${svc.endpoint}`;
-        const r = await axios.get(fallback, { timeout: 8000 });
-        result = r.data;
-      }
-
+      const url = buildCallUrl();
+      const r = await axios.get(url, { timeout: 12000 });
       dismiss(tid);
-      onResult(svc.name, result, svc.price_trid_display);
+      onResult(svc.name, r.data, svc.price_trid_display);
     } catch (err: any) {
       dismiss(tid);
-      show(err?.message || "Service call failed", "error", 4000);
+      const status = err?.response?.status;
+      const msg =
+        status === 402 ? "Payment required — x402 gateway active on this endpoint" :
+        status === 404 ? "Agent endpoint not found — is the backend running?" :
+        !err?.response   ? "Cannot reach backend. Start the server with: docker compose up" :
+        err?.response?.data?.detail || err.message || "Service call failed";
+      show(msg, "error", 5000);
     } finally {
       setBusy(false);
     }

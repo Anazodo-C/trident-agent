@@ -1,31 +1,50 @@
 import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { useAccount } from "wagmi";
 
 import AgentsPage     from "./modules/agents/AgentsPage";
 import RetrobotPage   from "./modules/retrobot/RetrobotPage";
 import ReputationPage from "./modules/reputation/ReputationPage";
 import DashboardPage  from "./modules/dashboard/DashboardPage";
 import { ToastProvider } from "./components/Toast";
+import FaucetModal from "./components/FaucetModal";
 
-function ThemeToggle({ dark, onToggle }: { dark: boolean; onToggle: () => void }) {
+function FaucetButton({ onClick }: { onClick: () => void }) {
   return (
     <button
-      onClick={onToggle}
-      aria-label="Toggle theme"
-      className="w-9 h-9 rounded-xl flex items-center justify-center transition-all text-base"
+      onClick={onClick}
+      title="Claim free $TRID"
+      className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-semibold transition-all"
       style={{
         background: "rgba(0,180,216,0.12)",
-        border:     "1px solid rgba(0,180,216,0.22)",
+        border:     "1px solid rgba(0,180,216,0.28)",
         color:      "var(--accent)",
       }}
+      onMouseEnter={e => {
+        (e.currentTarget as HTMLElement).style.background = "rgba(0,180,216,0.22)";
+        (e.currentTarget as HTMLElement).style.boxShadow = "0 0 12px rgba(0,180,216,0.25)";
+      }}
+      onMouseLeave={e => {
+        (e.currentTarget as HTMLElement).style.background = "rgba(0,180,216,0.12)";
+        (e.currentTarget as HTMLElement).style.boxShadow = "none";
+      }}
     >
-      {dark ? "☀️" : "🌙"}
+      💧 <span className="hidden sm:inline">Faucet</span>
     </button>
   );
 }
 
-function Nav({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void }) {
+function Nav({
+  dark,
+  onToggleTheme,
+  onFaucet,
+}: {
+  dark: boolean;
+  onToggleTheme: () => void;
+  onFaucet: () => void;
+}) {
+  const { isConnected } = useAccount();
   const linkCls = ({ isActive }: { isActive: boolean }) =>
     `nav-link${isActive ? " active" : ""}`;
 
@@ -33,8 +52,8 @@ function Nav({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void
     <nav
       className="sticky top-0 z-50"
       style={{
-        background:   "var(--bg-card)",
-        borderBottom: "1px solid var(--border)",
+        background:     "var(--bg-card)",
+        borderBottom:   "1px solid var(--border)",
         backdropFilter: "blur(16px)",
       }}
     >
@@ -70,9 +89,21 @@ function Nav({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void
           <NavLink to="/dashboard" className={linkCls}>Dashboard</NavLink>
         </div>
 
-        {/* Right: theme + wallet */}
+        {/* Right: faucet + theme + wallet */}
         <div className="flex items-center gap-2">
-          <ThemeToggle dark={dark} onToggle={onToggleTheme} />
+          {isConnected && <FaucetButton onClick={onFaucet} />}
+          <button
+            onClick={onToggleTheme}
+            aria-label="Toggle theme"
+            className="w-9 h-9 rounded-xl flex items-center justify-center transition-all text-base"
+            style={{
+              background: "rgba(0,180,216,0.10)",
+              border:     "1px solid rgba(0,180,216,0.20)",
+              color:      "var(--accent)",
+            }}
+          >
+            {dark ? "☀️" : "🌙"}
+          </button>
           <ConnectButton chainStatus="icon" showBalance={false} />
         </div>
       </div>
@@ -86,6 +117,7 @@ export default function App() {
     if (stored) return stored === "dark";
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches;
   });
+  const [showFaucet, setShowFaucet] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -97,7 +129,19 @@ export default function App() {
     <BrowserRouter>
       <ToastProvider>
         <div className="min-h-screen">
-          <Nav dark={dark} onToggleTheme={() => setDark(d => !d)} />
+          <Nav
+            dark={dark}
+            onToggleTheme={() => setDark(d => !d)}
+            onFaucet={() => setShowFaucet(true)}
+          />
+
+          {showFaucet && (
+            <FaucetModal
+              onAccept={() => setShowFaucet(false)}
+              onSkip={() => setShowFaucet(false)}
+            />
+          )}
+
           <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <Routes>
               <Route path="/"           element={<AgentsPage />} />
@@ -106,12 +150,10 @@ export default function App() {
               <Route path="/dashboard"  element={<DashboardPage />} />
             </Routes>
           </main>
+
           <footer
             className="mt-16 py-5 text-center text-xs"
-            style={{
-              borderTop: "1px solid var(--border)",
-              color:     "var(--text-muted)",
-            }}
+            style={{ borderTop: "1px solid var(--border)", color: "var(--text-muted)" }}
           >
             Trident Agent · Arc Testnet (Chain ID: 5042002) · Powered by Circle Gateway x402
           </footer>
