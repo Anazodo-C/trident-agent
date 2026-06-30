@@ -1,7 +1,25 @@
 import { useState, useEffect, useRef } from "react";
-import { useAccount } from "wagmi";
+import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { parseUnits } from "viem";
 import axios from "axios";
+
+// TRID ERC-20 — transfer ABI (minimal)
+const TRID_ABI = [
+  {
+    name: "transfer",
+    type: "function",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "to",    type: "address" },
+      { name: "value", type: "uint256" },
+    ],
+    outputs: [{ type: "bool" }],
+  },
+] as const;
+
+const TRID_ADDRESS = (import.meta.env.VITE_TRIDENT_TOKEN_ADDRESS ||
+  "0x5fc8e8b3DC37Bcbb7bC7F013F6a8C56375B40dF7") as `0x${string}`;
 
 import FaucetModal       from "../../components/FaucetModal";
 import OnboardingModal   from "../../components/OnboardingModal";
@@ -100,6 +118,10 @@ function AgentServiceCard({
   const { show, dismiss }        = useToastHook();
   const [busy, setBusy]          = useState(false);
   const [portfolioInput, setPortfolioInput] = useState("BTC:0.4,ETH:0.3,SOL:0.2,USDC:0.1");
+  const [pendingTxHash, setPendingTxHash]   = useState<`0x${string}` | undefined>();
+
+  const { writeContractAsync } = useWriteContract();
+  const { isSuccess: txConfirmed } = useWaitForTransactionReceipt({ hash: pendingTxHash });
 
   /** Build params for POST /hire based on service type */
   const buildHireParams = (): Record<string, string> => {
@@ -138,7 +160,34 @@ function AgentServiceCard({
     }
 
     try {
-      // POST to Node backend /hire — triggers real Circle Gateway x402 payment
+      // ── Step 1: TRID on-chain transfer (verifiable on ArcScan) ──
+      const sellerAddr = (svc.seller_address || "0x3315ebaab06d6266e92f6063b9360ae10d24F0a0") as `0x${string}`;
+      const tridAmount = BigInt(svc.price_per_call); // already in micro-units (6 decimals)
+
+      let txHash: `0x${string}` | undefined;
+      try {
+        show(`Sign TRID payment in your wallet…`, "loading");
+        txHash = await writeContractAsync({
+          address:      TRID_ADDRESS,
+          abi:          TRID_ABI,
+          functionName: "transfer",
+          args:         [sellerAddr, tridAmount],
+        });
+        setPendingTxHash(txHash);
+        show(`⛓ TRID tx submitted — fetching data…`, "loading");
+      } catch (txErr: any) {
+        // User rejected or insufficient TRID — still fetch data but note it
+        const rejected = txErr?.message?.includes("rejected") || txErr?.code === 4001;
+        if (rejected) {
+          dismiss(tid);
+          show("Transaction rejected — hire cancelled", "error", 4000);
+          setBusy(false);
+          return;
+        }
+        show(`TRID tx failed (${txErr?.shortMessage || "insufficient balance?"}) — fetching data anyway`, "info", 4000);
+      }
+
+      // ── Step 2: Fetch data via x402 (Circle Gateway nanopayment) ──
       const r = await axios.post(
         `${NODE_API}/hire`,
         {
@@ -152,15 +201,27 @@ function AgentServiceCard({
       dismiss(tid);
       const payload = r.data;
 
-      // Annotate result with x402 payment info if present
-      const resultData = payload.x402
-        ? { ...payload.data, _x402: { amount_paid: payload.amount_paid, transaction: payload.transaction, paid_by: payload.paid_by } }
-        : payload.data;
+      // Annotate result with both payment proofs
+      const resultData = {
+        ...(payload.data ?? payload),
+        _x402: {
+          amount_paid: payload.amount_paid,
+          transaction: payload.transaction,
+          paid_by:     payload.paid_by,
+        },
+        _trid: txHash ? {
+          tx_hash:  txHash,
+          amount:   svc.price_trid_display,
+          arcscan:  `https://explorer.testnet.arc.network/tx/${txHash}`,
+        } : undefined,
+      };
 
-      const priceDisplay = payload.amount_paid ? `${payload.amount_paid} USDC` : svc.price_trid_display;
+      const priceDisplay = `${svc.price_trid_display} TRID${payload.amount_paid ? ` + ${payload.amount_paid} USDC` : ""}`;
       onResult(svc.name, resultData, priceDisplay);
 
-      if (payload.x402) {
+      if (txHash) {
+        show(`✅ Paid ${svc.price_trid_display} TRID on-chain + x402 data fee`, "success", 5000);
+      } else if (payload.x402) {
         show(`✅ Paid ${payload.amount_paid} USDC via Circle Gateway x402`, "success", 4000);
       }
     } catch (err: any) {

@@ -301,8 +301,9 @@ export default function ServiceResultModal({ serviceName, result, pricePaid, onC
   const type    = detectType(result);
   // Strip _x402 metadata before passing to sub-renderers
   const x402Info = get(result, "_x402") as { amount_paid?: string; transaction?: string; paid_by?: string } | undefined;
+  const tridInfo = get(result, "_trid") as { tx_hash?: string; amount?: string; arcscan?: string } | undefined;
   const resultWithoutMeta = result && typeof result === "object"
-    ? Object.fromEntries(Object.entries(result as object).filter(([k]) => k !== "_x402"))
+    ? Object.fromEntries(Object.entries(result as object).filter(([k]) => !["_x402","_trid"].includes(k)))
     : result;
   const data    = get(resultWithoutMeta, "data") ?? resultWithoutMeta;
   const note    = str(get(resultWithoutMeta, "note") ?? "");
@@ -379,9 +380,20 @@ export default function ServiceResultModal({ serviceName, result, pricePaid, onC
                 </span>
               )}
             </div>
-            {x402Info?.transaction && (
+            {tridInfo?.arcscan && (
+              <a
+                href={tridInfo.arcscan}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs mt-1 block font-mono"
+                style={{ color: "var(--accent)", opacity: 0.8 }}
+              >
+                ⛓ {tridInfo.amount} TRID on ArcScan ↗
+              </a>
+            )}
+            {x402Info?.transaction && !tridInfo && (
               <div className="text-xs mt-1 font-mono opacity-50" style={{ color: "var(--text-muted)" }}>
-                tx: {x402Info.transaction.slice(0, 20)}…
+                x402 tx: {x402Info.transaction.slice(0, 20)}…
               </div>
             )}
           </div>
