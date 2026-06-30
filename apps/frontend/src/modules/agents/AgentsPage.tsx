@@ -36,6 +36,8 @@ interface Agent {
   agent_type: string;
   wallet: string;
   reputation_score: number;
+  trid_balance?: number;   // micro-units (6 dec) — buyer agents only
+  total_spent?:  number;   // micro-units
   arc_agent_id?: number;
   registered_at?: string;
 }
@@ -350,7 +352,7 @@ function AgentChip({ ag }: { ag: Agent }) {
       >
         {TYPE_ICONS[ag.agent_type] || "🤖"}
       </div>
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <div className="text-xs font-semibold truncate" style={{ color: "var(--text-primary)" }}>
           {ag.name}
         </div>
@@ -358,8 +360,18 @@ function AgentChip({ ag }: { ag: Agent }) {
           {ag.wallet.slice(0, 6)}…{ag.wallet.slice(-4)}
           {ag.arc_agent_id ? ` · Arc #${ag.arc_agent_id}` : ""}
         </div>
+        {ag.agent_type === "buyer" && ag.trid_balance !== undefined && (
+          <div className="text-xs mt-0.5 font-mono" style={{ color: "var(--accent)", opacity: 0.85 }}>
+            {(ag.trid_balance / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 4 })} TRID
+            {ag.total_spent ? (
+              <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>
+                {" "}· {(ag.total_spent / 1_000_000).toFixed(4)} spent
+              </span>
+            ) : null}
+          </div>
+        )}
       </div>
-      <div className="ml-auto">
+      <div className="ml-auto shrink-0">
         <span className={`badge ${TIER_LABELS[tier(ag.reputation_score)]}`}>
           {tier(ag.reputation_score)}
         </span>
@@ -436,6 +448,8 @@ export default function AgentsPage() {
             agent_type:       a.agent_type ?? "seller",
             wallet:           a.wallet ?? a.wallet_address ?? "",
             reputation_score: a.reputation_score ?? 5000,
+            trid_balance:     a.trid_balance,
+            total_spent:      a.total_spent,
             arc_agent_id:     a.arc_agent_id,
             registered_at:    a.registered_at,
           })));
@@ -722,9 +736,9 @@ const DEMO_AGENTS: Agent[] = [
   { id: 1, name: "Retrobot v1.0",    agent_type: "retrobot", wallet: "0x3315ebaab06d6266e92f6063b9360ae10d24F0a0", reputation_score: 9200, arc_agent_id: 1 },
   { id: 2, name: "AlphaBot",         agent_type: "seller",   wallet: "0xabc1000000000000000000000000000000000001", reputation_score: 8500, arc_agent_id: 2 },
   { id: 3, name: "DataMaven",        agent_type: "seller",   wallet: "0xabc2000000000000000000000000000000000002", reputation_score: 8100, arc_agent_id: 3 },
-  { id: 4, name: "Alpha Buyer",      agent_type: "buyer",    wallet: "0xabc4000000000000000000000000000000000004", reputation_score: 7400 },
-  { id: 5, name: "Beta Buyer",       agent_type: "buyer",    wallet: "0xabc5000000000000000000000000000000000005", reputation_score: 6800 },
-  { id: 6, name: "Gamma Buyer",      agent_type: "buyer",    wallet: "0xabc6000000000000000000000000000000000006", reputation_score: 6300 },
+  { id: 4, name: "Alpha Buyer",      agent_type: "buyer",    wallet: "0xabc4000000000000000000000000000000000004", reputation_score: 7400, trid_balance: 100_000_000_000, total_spent: 0 },
+  { id: 5, name: "Beta Buyer",       agent_type: "buyer",    wallet: "0xabc5000000000000000000000000000000000005", reputation_score: 6800, trid_balance: 100_000_000_000, total_spent: 0 },
+  { id: 6, name: "Gamma Buyer",      agent_type: "buyer",    wallet: "0xabc6000000000000000000000000000000000006", reputation_score: 6300, trid_balance: 100_000_000_000, total_spent: 0 },
 ];
 
 const DEMO_SERVICES: Service[] = [

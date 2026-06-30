@@ -17,7 +17,8 @@ import { retrobotServiceRouter } from "./routes/retrobotService.js";
 import { hireRouter } from "./routes/hire.js";
 import { startBuyerAgents } from "./buyerAgents.js";
 import { gatewayClient } from "./gatewayClient.js";
-import { startTridFaucetLoop } from "./tridFaucet.js";
+// tridFaucet: disabled — buyer agents get a one-time 100k TRID drop via DB seed
+// import { startTridFaucetLoop } from "./tridFaucet.js";
 
 const app = express();
 const PORT = process.env.PORT || process.env.NODE_PORT || 3001;
@@ -114,6 +115,31 @@ app.use("/data", computeRouter);
 app.use("/retrobot", retrobotServiceRouter);
 app.use("/hire", hireRouter);
 
+app.get("/wallet-status", async (req, res) => {
+  try {
+    const balances = gatewayClient ? await gatewayClient.getBalances() : null;
+    res.json({
+      seller: {
+        address: SELLER_ADDRESS,
+        arcscan: `https://testnet.arcscan.app/address/${SELLER_ADDRESS}`,
+        note: "Receives TRID on-chain (from user MetaMask) + USDC via Circle Gateway",
+      },
+      buyer_agent: {
+        address: gatewayClient?.address ?? null,
+        arcscan: gatewayClient?.address
+          ? `https://testnet.arcscan.app/address/${gatewayClient.address}`
+          : null,
+        usdc_wallet: balances?.wallet?.formatted ?? "n/a",
+        usdc_gateway: balances?.gateway?.formattedTotal ?? "n/a",
+        enabled: gatewayClient !== null,
+        note: "Circle EOA wallet — owned via your Circle Developer account",
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "balance fetch failed" });
+  }
+});
+
 app.get("/buyer-agent-status", (req, res) => {
   res.json({
     enabled: gatewayClient !== null,
@@ -132,6 +158,5 @@ app.listen(PORT, () => {
   console.log(`   Chain:       Arc Testnet (eip155:5042002)`);
   // Start buyer agents after the server is listening so self-calls work
   startBuyerAgents();
-  // Claim TRID from faucet for the buyer agent wallet every hour
-  startTridFaucetLoop();
+  // tridFaucetLoop disabled — demo buyers get 100k TRID via DB seed on Python startup
 });

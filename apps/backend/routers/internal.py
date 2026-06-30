@@ -81,10 +81,11 @@ async def record_payment(req: RecordPaymentRequest, db: AsyncSession = Depends(g
     )
     db.add(payment)
 
-    # Update buyer stats
+    # Update buyer stats — deduct from TRID balance, floor at 0
     buyer.total_jobs = (buyer.total_jobs or 0) + 1
     buyer.successful_jobs = (buyer.successful_jobs or 0) + 1
     buyer.total_spent = (buyer.total_spent or 0) + amount_trid
+    buyer.trid_balance = max(0, (buyer.trid_balance or 0) - amount_trid)
     buyer.reputation_score = min(10000, (buyer.reputation_score or 5000) + 3)
 
     # Update seller stats

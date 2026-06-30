@@ -37,10 +37,15 @@ BUY_INTERVAL_MAX = 90
 ANOMALY_RATE = 0.12  # 12% of transactions get flagged
 
 
+BUYER_INITIAL_TRID = 100_000 * 1_000_000  # 100,000 TRID (6 decimals) — one-time demo drop
+
+
 async def ensure_sim_agents():
     """
-    Ensure all buyer agents exist in the DB with correct names.
-    Updates names for any stale records (e.g. old BuyerX/Y/Z names).
+    Ensure all demo buyer agents exist with correct names and a 100,000 TRID starting balance.
+    - Creates agents if missing
+    - Renames stale BuyerX/Y/Z entries
+    - Sets trid_balance to 100k if it's still 0 (one-time drop, never repeats)
     """
     async with AsyncSessionLocal() as db:
         all_sim = [
@@ -59,13 +64,18 @@ async def ensure_sim_agents():
                     reputation_score=7000 + random.randint(0, 2000),
                     total_jobs=random.randint(10, 40),
                     successful_jobs=random.randint(8, 38),
+                    trid_balance=BUYER_INITIAL_TRID,
                 )
                 db.add(agent)
-            elif existing.name in ("BuyerX", "BuyerY", "BuyerZ"):
-                # Rename stale entries from old sim loop
-                existing.name = name
+            else:
+                # Rename stale entries
+                if existing.name in ("BuyerX", "BuyerY", "BuyerZ"):
+                    existing.name = name
+                # One-time TRID drop: only set if still at 0
+                if (existing.trid_balance or 0) == 0:
+                    existing.trid_balance = BUYER_INITIAL_TRID
         await db.commit()
-    logger.info("✅ Sim agents verified (Alpha / Beta / Gamma Buyer)")
+    logger.info("✅ Demo agents: Alpha / Beta / Gamma Buyer — each seeded with 100,000 TRID")
 
 
 async def sim_buy_transaction():
