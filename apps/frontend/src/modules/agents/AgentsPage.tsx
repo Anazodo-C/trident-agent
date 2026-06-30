@@ -168,7 +168,8 @@ function AgentServiceCard({
 
       let txHash: `0x${string}` | undefined;
       try {
-        show(`Sign TRID payment in your wallet…`, "loading");
+        dismiss(tid);
+        const tid2 = show(`Sign TRID payment in your wallet…`, "loading");
         txHash = await writeContractAsync({
           address:      TRID_ADDRESS,
           abi:          TRID_ABI,
@@ -176,7 +177,8 @@ function AgentServiceCard({
           args:         [sellerAddr, tridAmount],
         });
         setPendingTxHash(txHash);
-        show(`⛓ TRID tx submitted — fetching data…`, "loading");
+        dismiss(tid2);
+        show(`⛓ TRID tx submitted — fetching data…`, "loading", 3000);
       } catch (txErr: any) {
         // User rejected or insufficient TRID — still fetch data but note it
         const rejected = txErr?.message?.includes("rejected") || txErr?.code === 4001;
