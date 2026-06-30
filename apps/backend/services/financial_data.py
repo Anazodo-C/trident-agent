@@ -105,27 +105,49 @@ class FinancialDataService:
 
         flat_rates: dict[str, float] = {}
 
-        # 2. exchangerate.host — single bulk call
-        try:
-            async with httpx.AsyncClient() as client:
-                r = await client.get(
-                    "https://api.exchangerate.host/latest",
-                    params={"base": base, "symbols": ",".join(targets)},
-                    timeout=10,
-                )
-                data = r.json()
-                if data.get("success") and data.get("rates"):
-                    flat_rates = {k: round(v, 6) for k, v in data["rates"].items() if k in targets}
-                    logger.info(f"[fx] exchangerate.host returned {len(flat_rates)}/{len(targets)} pairs")
-        except Exception as e:
-            logger.warning(f"[fx] exchangerate.host failed: {e}")
+        # 2a. frankfurter.app — ECB-backed, unlimited free, no key, reliable for major pairs
+        #     Supports: EUR GBP JPY and ~30 other OECD currencies. Does NOT support NGN/GHS.
+        FRANKFURTER_SUPPORTED = {"EUR","GBP","JPY","CHF","AUD","CAD","NZD","SEK","NOK","DKK","PLN","CZK","HUF","RON","BGN","HRK","TRY","ZAR","MXN","BRL","SGD","HKD","INR","KRW","IDR","MYR","PHP","THB","VND","AED","SAR","ILS","CNY"}
+        frank_targets = [t for t in targets if t in FRANKFURTER_SUPPORTED]
+        if frank_targets:
+            try:
+                async with httpx.AsyncClient() as client:
+                    r = await client.get(
+                        "https://api.frankfurter.app/latest",
+                        params={"from": base, "to": ",".join(frank_targets)},
+                        timeout=8,
+                    )
+                    data = r.json()
+                    for k, v in data.get("rates", {}).items():
+                        if k in targets:
+                            flat_rates[k] = round(float(v), 6)
+                    logger.info(f"[fx] frankfurter returned {len(flat_rates)}/{len(frank_targets)} pairs")
+            except Exception as e:
+                logger.warning(f"[fx] frankfurter.app failed: {e}")
+
+        # 2b. exchangerate-api.com v6 free tier — no key, supports NGN, GHS and 160+ currencies
+        remaining_after_frank = [t for t in targets if t not in flat_rates]
+        if remaining_after_frank:
+            try:
+                async with httpx.AsyncClient() as client:
+                    r = await client.get(
+                        f"https://api.exchangerate-api.com/v4/latest/{base}",
+                        timeout=10,
+                    )
+                    data = r.json()
+                    for k, v in data.get("rates", {}).items():
+                        if k in remaining_after_frank:
+                            flat_rates[k] = round(float(v), 6)
+                    logger.info(f"[fx] exchangerate-api.com filled: {remaining_after_frank}")
+            except Exception as e:
+                logger.warning(f"[fx] exchangerate-api.com failed: {e}")
 
         # 3. Alpha Vantage per-pair fallback (skip AV_EXCLUDED, max 5 calls)
         missing = [t for t in targets if t not in flat_rates and t not in AV_EXCLUDED]
         if missing and settings.alpha_vantage_api_key:
             try:
                 async with httpx.AsyncClient() as client:
-                    for target in missing[:5]:   # hard cap at 5 to respect rate limit
+                    for target in missing[:5]:
                         r = await client.get(
                             "https://www.alphavantage.co/query",
                             params={
@@ -198,8 +220,23 @@ class FinancialDataService:
         }
 
     async def get_research_summary(self, asset: str) -> dict:
+        # Pre-flight: refuse early with a clear message if key is absent
+        if not settings.anthropic_api_key:
+            logger.error("[research] ANTHROPIC_API_KEY is empty — check .env and docker-compose env_file")
+            return {
+                "asset": asset,
+                "sentiment": "neutral",
+                "key_level": "—",
+                "catalyst": "—",
+                "summary": f"ANTHROPIC_API_KEY is not set in the backend environment. Add it to .env and restart the containers.",
+                "error": "missing_api_key",
+            }
+
         from anthropic import AsyncAnthropic
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+        # Refresh settings each call to avoid lru_cache stale key on first boot
+        from config import Settings
+        live_settings = Settings()
+        client = AsyncAnthropic(api_key=live_settings.anthropic_api_key)
 
         prompt = (
             f"You are a financial analyst. Give a concise research brief for {asset} as of today (June 2026). "
@@ -210,45 +247,53 @@ class FinancialDataService:
             f'\"summary\": \"2-3 sentence plain-English summary\"}}'
         )
 
-        try:
-            response = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=400,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            text = response.content[0].text.strip()
+        # Try haiku first, fall back to sonnet if model not found
+        for model in ("claude-haiku-4-5-20251001", "claude-3-5-haiku-20241022", "claude-3-haiku-20240307"):
+            try:
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=400,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text = response.content[0].text.strip()
+                logger.info(f"[research] {asset} got response from {model} ({len(text)} chars)")
 
-            # Strip markdown fences if Claude wrapped the JSON
-            if text.startswith("```"):
-                text = text.split("```")[1]
-                if text.startswith("json"):
-                    text = text[4:]
-                text = text.strip()
+                # Strip markdown fences if Claude wrapped the JSON anyway
+                if text.startswith("```"):
+                    text = text.split("```")[1]
+                    if text.startswith("json"):
+                        text = text[4:]
+                    text = text.strip()
 
-            parsed = json.loads(text)
-            parsed["asset"] = asset
-            return parsed
+                parsed = json.loads(text)
+                parsed["asset"] = asset
+                parsed["model_used"] = model
+                return parsed
 
-        except json.JSONDecodeError as e:
-            logger.warning(f"Research JSON parse failed for {asset}: {e}")
-            return {
-                "asset": asset,
-                "sentiment": "neutral",
-                "key_level": "—",
-                "catalyst": "—",
-                "summary": f"Research data for {asset} is temporarily unavailable. Try again in a moment.",
-                "error": "parse_failed",
-            }
-        except Exception as e:
-            logger.warning(f"Research summary failed for {asset}: {e}")
-            return {
-                "asset": asset,
-                "sentiment": "neutral",
-                "key_level": "—",
-                "catalyst": "—",
-                "summary": "Research service temporarily unavailable. Ensure ANTHROPIC_API_KEY is set in .env.",
-                "error": str(e)[:80],
-            }
+            except json.JSONDecodeError as e:
+                logger.warning(f"[research] JSON parse failed for {asset} ({model}): {e} | raw: {text[:200]!r}")
+                return {
+                    "asset": asset, "sentiment": "neutral", "key_level": "—", "catalyst": "—",
+                    "summary": f"Model returned non-JSON for {asset}. Raw: {text[:120]}",
+                    "error": "parse_failed",
+                }
+            except Exception as e:
+                err_type = type(e).__name__
+                logger.warning(f"[research] {err_type} for {asset} ({model}): {e}")
+                if "not_found" in str(e).lower() or "model" in str(e).lower():
+                    continue   # try next model in list
+                # Auth error, rate limit, or network — don't retry
+                return {
+                    "asset": asset, "sentiment": "neutral", "key_level": "—", "catalyst": "—",
+                    "summary": f"Research API error ({err_type}): {str(e)[:200]}",
+                    "error": err_type,
+                }
+
+        return {
+            "asset": asset, "sentiment": "neutral", "key_level": "—", "catalyst": "—",
+            "summary": "All Claude models unavailable. Check ANTHROPIC_API_KEY and model access.",
+            "error": "all_models_failed",
+        }
 
     async def get_compute_score(self, portfolio: str, model: str = "sharpe") -> dict:
         """
