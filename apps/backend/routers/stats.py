@@ -120,6 +120,13 @@ async def get_volume_chart(hours: int = 24, db: AsyncSession = Depends(get_db)):
 @router.get("/retrobot")
 async def get_retrobot_stats(db: AsyncSession = Depends(get_db)):
     """Retrobot-specific stats for the USP section."""
+    # Total anomaly count (separate query — not capped by LIMIT)
+    total_anomalies_result = await db.execute(
+        select(func.count(Payment.id)).where(Payment.anomaly_flagged == True)
+    )
+    total_anomalies = total_anomalies_result.scalar() or 0
+
+    # Recent 10 for the feed
     anomalies_result = await db.execute(
         select(Payment).where(Payment.anomaly_flagged == True)
         .order_by(Payment.created_at.desc()).limit(10)
@@ -145,10 +152,10 @@ async def get_retrobot_stats(db: AsyncSession = Depends(get_db)):
 
     return {
         "total_scanned": total_scanned,
-        "anomalies_caught": len(recent_anomalies),
+        "anomalies_caught": total_anomalies,
         "total_recovered_trid": total_recovered,
         "total_recovered_display": f"{total_recovered / 1e6:.2f} TRID",
-        "detection_rate": f"{(len(recent_anomalies) / max(total_scanned, 1)) * 100:.1f}%",
+        "detection_rate": f"{(total_anomalies / max(total_scanned, 1)) * 100:.1f}%",
         "anomaly_breakdown": by_type,
         "recent_anomalies": [
             {

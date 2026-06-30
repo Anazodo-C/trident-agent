@@ -305,23 +305,36 @@ export default function AgentsPage() {
     }
   }, [address, isConnected]);
 
-  // Load data
+  // Load data — use allSettled so one failure doesn't kill everything
   useEffect(() => {
     const load = async () => {
-      try {
-        const [agRes, svcRes] = await Promise.all([
-          axios.get(`${API}/api/agents/list`),
-          axios.get(`${API}/api/marketplace/services`),
-        ]);
-        setAgents(agRes.data.agents   || []);
-        setServices(svcRes.data.services || DEMO_SERVICES);
-      } catch {
+      const [agRes, svcRes] = await Promise.allSettled([
+        axios.get(`${API}/api/agents/`),
+        axios.get(`${API}/api/marketplace/services`),
+      ]);
+
+      const agOk  = agRes.status  === "fulfilled";
+      const svcOk = svcRes.status === "fulfilled";
+
+      if (!agOk && !svcOk) {
+        // Both failed — backend truly offline
         setBackendLive(false);
         setServices(DEMO_SERVICES);
         setAgents(DEMO_AGENTS);
-      } finally {
-        setLoading(false);
+      } else {
+        setBackendLive(true);
+        if (agOk) {
+          setAgents((agRes as PromiseFulfilledResult<any>).value.data.agents || []);
+        }
+        if (svcOk) {
+          const svcs = (svcRes as PromiseFulfilledResult<any>).value.data.services;
+          // Empty array from DB still means live — show whatever the server has
+          setServices(svcs ?? DEMO_SERVICES);
+        } else {
+          setServices(DEMO_SERVICES);
+        }
       }
+      setLoading(false);
     };
     load();
   }, []);
@@ -372,7 +385,7 @@ export default function AgentsPage() {
           onClose={() => setShowUpload(false)}
           onSuccess={() => {
             setShowUpload(false);
-            axios.get(`${API}/api/agents/list`).then(r => setAgents(r.data.agents || [])).catch(() => {});
+            axios.get(`${API}/api/agents/`).then(r => setAgents(r.data.agents || [])).catch(() => {});
           }}
         />
       )}

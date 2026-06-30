@@ -61,16 +61,16 @@ export default function DashboardPage() {
   const [loading,     setLoading]     = useState(true);
 
   const fetchAll = async () => {
-    try {
-      const [ov, vol, rb] = await Promise.all([
-        axios.get(`${API}/api/stats/overview`),
-        axios.get(`${API}/api/stats/volume?hours=24`),
-        axios.get(`${API}/api/stats/retrobot`),
-      ]);
-      setOverview(ov.data);
-      if (vol.data.data?.length > 0) setVolumeData(vol.data.data);
-      setRetrobot(rb.data);
-    } catch { /* keep demo */ } finally { setLoading(false); }
+    const [ov, vol, rb] = await Promise.allSettled([
+      axios.get(`${API}/api/stats/overview`),
+      axios.get(`${API}/api/stats/volume?hours=24`),
+      axios.get(`${API}/api/stats/retrobot`),
+    ]);
+    if (ov.status  === "fulfilled") setOverview(ov.value.data);
+    if (vol.status === "fulfilled" && vol.value.data.data?.length > 0)
+      setVolumeData(vol.value.data.data);
+    if (rb.status  === "fulfilled") setRetrobot(rb.value.data);
+    setLoading(false);
   };
 
   useEffect(() => {
