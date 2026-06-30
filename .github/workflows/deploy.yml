@@ -88,38 +88,6 @@ jobs:
           VERCEL_PROJECT_ID: prj_HcpfwYrOEIGlEOigeIRPdtEIZoec
         run: vercel deploy dist --prod --token=$VERCEL_TOKEN --yes
 
-  # ── Deploy Python Backend → Railway ───────────────────────────
-  deploy-python-backend:
-    name: Deploy Python Backend → Railway
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy
-        working-directory: apps/backend
-        env:
-          RAILWAY_TOKEN:      ${{ secrets.RAILWAY_TOKEN_PYTHON }}
-          RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID_PYTHON }}
-        run: railway up --detach --service $RAILWAY_SERVICE_ID
-
-  # ── Deploy Node Backend → Railway ─────────────────────────────
-  deploy-node-backend:
-    name: Deploy Node Backend → Railway
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy
-        working-directory: apps/node-backend
-        env:
-          RAILWAY_TOKEN:      ${{ secrets.RAILWAY_TOKEN_NODE }}
-          RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID_NODE }}
-        run: railway up --detach --service $RAILWAY_SERVICE_ID
+  # ── Railway backends deploy automatically via GitHub integration ──
+  # Both services are connected to this repo in Railway dashboard and
+  # redeploy on every push to main — no CLI step needed here.

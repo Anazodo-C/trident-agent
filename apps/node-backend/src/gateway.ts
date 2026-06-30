@@ -12,7 +12,10 @@ export type PaidRequest = express.Request & {
   };
 };
 
-const SELLER_ADDRESS = process.env.SELLER_ADDRESS as `0x${string}`;
+const SELLER_ADDRESS = (
+  process.env.SELLER_ADDRESS || "0x3315ebaab06d6266e92f6063b9360ae10d24F0a0"
+) as `0x${string}`;
+
 const FACILITATOR_URL =
   process.env.GATEWAY_FACILITATOR_URL || "https://gateway-api-testnet.circle.com";
 

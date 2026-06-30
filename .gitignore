@@ -40,3 +40,4 @@ htmlcov/
 *.sqlite3
 .railway/
 test_trident.db*
+vite.config.ts.timestamp-*
