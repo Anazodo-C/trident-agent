@@ -1,5 +1,5 @@
 import { createConfig, http } from "wagmi";
-import { arcTestnet } from "viem/chains";
+import { defineChain } from "viem";
 import { connectorsForWallets } from "@rainbow-me/rainbowkit";
 import {
   metaMaskWallet,
@@ -7,6 +7,19 @@ import {
   walletConnectWallet,
   rainbowWallet,
 } from "@rainbow-me/rainbowkit/wallets";
+
+const arcTestnet = defineChain({
+  id: 5042002,
+  name: "Arc Testnet",
+  nativeCurrency: { name: "ARC", symbol: "ARC", decimals: 18 },
+  rpcUrls: {
+    default: { http: [import.meta.env.VITE_ARC_RPC_URL || "https://rpc.testnet.arc.network"] },
+  },
+  blockExplorers: {
+    default: { name: "ArcScan", url: "https://explorer.testnet.arc.network" },
+  },
+  testnet: true,
+});
 
 const projectId = import.meta.env.VITE_WC_PROJECT_ID || "";
 
