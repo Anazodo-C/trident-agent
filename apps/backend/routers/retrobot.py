@@ -125,13 +125,15 @@ async def get_retrobot_stats(db: AsyncSession = Depends(get_db)):
     )
     recovered_trid = float(total_recovered or 0)
     rate = round((total_flagged / total_scanned * 100), 2) if total_scanned else 0
-    return {
-        # canonical field names matched by frontend detectType + RetrobotAuditView
-        "total_scanned":          total_scanned or 0,
-        "anomalies_caught":       total_flagged or 0,
-        "total_recovered":        recovered_trid,
+    payload = {
+        "total_scanned":           total_scanned or 0,
+        "anomalies_caught":        total_flagged or 0,
+        "total_recovered":         recovered_trid,
         "total_recovered_display": f"{recovered_trid / 1_000_000:.4f} TRID",
-        "detection_rate":         f"{rate}%",
-        "status":                 "guardian_active",
-        "retrobot_agent":         "Retrobot v1.0 — Trident Payment Recovery",
+        "detection_rate":          f"{rate}%",
+        "status":                  "guardian_active",
+    }
+    return {
+        "service": "retrobot_audit",
+        "data":    payload,
     }
