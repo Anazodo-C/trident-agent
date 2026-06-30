@@ -324,12 +324,21 @@ export default function AgentsPage() {
       } else {
         setBackendLive(true);
         if (agOk) {
-          setAgents((agRes as PromiseFulfilledResult<any>).value.data.agents || []);
+          // Normalise backend field names: wallet_address → wallet, agent_id → id
+          const raw = (agRes as PromiseFulfilledResult<any>).value.data.agents || [];
+          setAgents(raw.map((a: any) => ({
+            id:               a.id ?? a.agent_id ?? 0,
+            name:             a.name ?? "Unknown",
+            agent_type:       a.agent_type ?? "seller",
+            wallet:           a.wallet ?? a.wallet_address ?? "",
+            reputation_score: a.reputation_score ?? 5000,
+            arc_agent_id:     a.arc_agent_id,
+            registered_at:    a.registered_at,
+          })));
         }
         if (svcOk) {
           const svcs = (svcRes as PromiseFulfilledResult<any>).value.data.services;
-          // Empty array from DB still means live — show whatever the server has
-          setServices(svcs ?? DEMO_SERVICES);
+          setServices(svcs?.length ? svcs : DEMO_SERVICES);
         } else {
           setServices(DEMO_SERVICES);
         }

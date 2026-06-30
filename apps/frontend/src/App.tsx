@@ -9,6 +9,7 @@ import ReputationPage from "./modules/reputation/ReputationPage";
 import DashboardPage  from "./modules/dashboard/DashboardPage";
 import { ToastProvider } from "./components/Toast";
 import FaucetModal from "./components/FaucetModal";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 function FaucetButton({ onClick }: { onClick: () => void }) {
   return (
@@ -144,10 +145,10 @@ export default function App() {
 
           <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
             <Routes>
-              <Route path="/"           element={<AgentsPage />} />
-              <Route path="/retrobot"   element={<RetrobotPage />} />
-              <Route path="/reputation" element={<ReputationPage />} />
-              <Route path="/dashboard"  element={<DashboardPage />} />
+              <Route path="/"           element={<ErrorBoundary label="Agents"><AgentsPage /></ErrorBoundary>} />
+              <Route path="/retrobot"   element={<ErrorBoundary label="Retrobot"><RetrobotPage /></ErrorBoundary>} />
+              <Route path="/reputation" element={<ErrorBoundary label="Reputation"><ReputationPage /></ErrorBoundary>} />
+              <Route path="/dashboard"  element={<ErrorBoundary label="Dashboard"><DashboardPage /></ErrorBoundary>} />
             </Routes>
           </main>
 
