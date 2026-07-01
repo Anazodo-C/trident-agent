@@ -178,7 +178,7 @@ function AgentServiceCard({
         });
         setPendingTxHash(txHash);
         dismiss(tid2);
-        show(`⛓ TRID tx submitted — fetching data…`, "loading", 3000);
+        show(`⛓ TRID tx submitted — fetching data…`, "info", 4000);
       } catch (txErr: any) {
         // User rejected or insufficient TRID — still fetch data but note it
         const rejected = txErr?.message?.includes("rejected") || txErr?.code === 4001;
