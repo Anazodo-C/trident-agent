@@ -109,11 +109,30 @@ async function buyOnce(buyer: (typeof BUYERS)[0]) {
   }
 }
 
+async function checkGatewayBalance(): Promise<number> {
+  try {
+    const balances = await gatewayClient!.getBalances();
+    return Number(balances.gateway.formattedTotal ?? "0");
+  } catch {
+    return 0;
+  }
+}
+
 async function buyerLoop(buyer: (typeof BUYERS)[0], initialDelay: number) {
   await sleep(initialDelay);
   while (true) {
+    // Skip buy if Gateway balance is critically low — preserve for manual /hire calls
+    const gwBalance = await checkGatewayBalance();
+    if (gwBalance < 0.05) {
+      console.warn(
+        `[BuyerAgent] Gateway balance low (${gwBalance} USDC) — pausing auto-buys.\n` +
+        `   Refill: re-run scripts/deposit-gateway.mjs after funding ${gatewayClient!.address} at faucet.circle.com`
+      );
+      await sleep(10 * 60_000); // check again in 10 min
+      continue;
+    }
     await buyOnce(buyer);
-    await sleep(jitter(30_000, 90_000)); // 30–90 s between purchases
+    await sleep(jitter(60_000, 3 * 60_000)); // 1–3 min between purchases
   }
 }
 
