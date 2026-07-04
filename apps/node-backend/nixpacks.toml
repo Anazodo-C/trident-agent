@@ -1,0 +1,10 @@
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = [
+  "npx esbuild src/server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js"
+]
+
+[start]
+cmd = "node dist/server.js"
