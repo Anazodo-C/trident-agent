@@ -132,7 +132,7 @@ async function buyerLoop(buyer: (typeof BUYERS)[0], initialDelay: number) {
       continue;
     }
     await buyOnce(buyer);
-    await sleep(jitter(60_000, 3 * 60_000)); // 1–3 min between purchases
+    await sleep(jitter(50 * 60_000, 70 * 60_000)); // ~1 call per hour per buyer
   }
 }
 
