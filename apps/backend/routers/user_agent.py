@@ -38,7 +38,9 @@ MICRO_TRID_TO_USDC = 1e-9  # 1 micro-TRID → USDC value
 class HireRequest(BaseModel):
     service_type: str
     params: dict = {}
-    auto_select: bool = True   # if True, pick best agent automatically
+    auto_select: bool = True            # if True, pick best agent automatically
+    agent_private_key: str | None = None  # user's decrypted EOA key — forwarded to Node
+    # NOTE: only in-flight over HTTPS, never logged or stored here
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 
@@ -133,16 +135,19 @@ async def user_agent_hire(
 
     # ── 3. Call Node /hire (x402 USDC Circle Gateway) ────────────────────────
     buyer_addr = user.agent_address or user.wallet_address or "0x0000000000000000000000000000000000000001"
+    node_payload: dict = {
+        "service_type": body.service_type,
+        "params": body.params,
+        "buyer_address": buyer_addr,
+    }
+    # Forward user's private key so Node can pay from their own Gateway balance.
+    # The key is never logged here — httpx sends it over HTTPS only.
+    if body.agent_private_key:
+        node_payload["agent_private_key"] = body.agent_private_key
+
     try:
         async with httpx.AsyncClient(timeout=25) as client:
-            r = await client.post(
-                f"{NODE_API}/hire",
-                json={
-                    "service_type": body.service_type,
-                    "params": body.params,
-                    "buyer_address": buyer_addr,
-                },
-            )
+            r = await client.post(f"{NODE_API}/hire", json=node_payload)
     except httpx.RequestError as e:
         raise HTTPException(status_code=503, detail=f"Node backend unreachable: {e}")
 
@@ -190,7 +195,8 @@ async def user_agent_hire(
             "trid_value_in_usdc": f"${trid_in_usdc:.6f}",
             "x402": payload.get("x402", False),
             "transaction_ref": payload.get("transaction"),
-            "paid_by_agent": buyer_addr,
+            "paid_by_agent": payload.get("paid_by", buyer_addr),
+            "payment_source": payload.get("payment_source", "shared_agent"),
         },
         "budget": {
             "max_trid_budget": user.max_trid_budget,
