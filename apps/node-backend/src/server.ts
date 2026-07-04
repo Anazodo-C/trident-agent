@@ -4,6 +4,12 @@ if (!globalThis.crypto) {
   (globalThis as any).crypto = webcrypto;
 }
 
+// BigInt JSON serialization — GatewayClient returns token amounts as BigInt,
+// which JSON.stringify() cannot handle natively. Convert to string globally.
+(BigInt.prototype as any).toJSON = function () {
+  return this.toString();
+};
+
 import express from "express";
 import cors from "cors";
 import "dotenv/config";
@@ -189,13 +195,20 @@ app.post("/user/gateway-deposit", async (req, res) => {
     });
 
     const amountStr = amount_usdc.toFixed(6);
-    const result = await client.deposit(amountStr as any);
+    await client.deposit(amountStr as any);
+
+    // Fetch updated balances to confirm deposit (getBalances returns formatted strings, no BigInt)
+    let gatewayUsdc: string | null = null;
+    try {
+      const bal = await client.getBalances();
+      gatewayUsdc = bal?.gateway?.formattedTotal ?? null;
+    } catch { /* non-fatal */ }
 
     res.json({
       success: true,
       address: client.address,
       amount_deposited: amountStr,
-      gateway_balance: result,
+      gateway_usdc: gatewayUsdc,
       note: "USDC deposited into Circle Gateway — your agent can now make x402 payments",
     });
   } catch (err: any) {
