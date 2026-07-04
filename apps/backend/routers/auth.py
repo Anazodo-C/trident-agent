@@ -80,21 +80,26 @@ async def get_current_user(
     return user
 
 
-async def _ensure_agent_in_db(db: AsyncSession, user: User):
+async def _ensure_agent_in_db(db: AsyncSession, user: User, agent_name: str | None = None):
     """Mirror user's agent into the agents table so it appears on the marketplace."""
     if not user.agent_address:
         return
-    result = await db.execute(
-        select(Agent).where(Agent.wallet_address == user.agent_address.lower())
-    )
-    if not result.scalar_one_or_none():
+    addr = user.agent_address.lower()
+    result = await db.execute(select(Agent).where(Agent.wallet_address == addr))
+    existing = result.scalar_one_or_none()
+    display_name = agent_name or f"{user.name or user.email or 'User'}'s Agent"
+    if not existing:
         db.add(Agent(
-            wallet_address=user.agent_address.lower(),
-            name=f"{user.name or user.email or 'User'}'s Agent",
+            wallet_address=addr,
+            name=display_name,
             agent_type=AgentType.BUYER,
             reputation_score=5000,
             trid_balance=0,
         ))
+        await db.commit()
+    elif agent_name:
+        # Allow rename if a name was explicitly provided
+        existing.name = agent_name
         await db.commit()
 
 
@@ -109,6 +114,7 @@ class WalletAuthRequest(BaseModel):
 
 class RegisterAgentRequest(BaseModel):
     agent_address: str
+    agent_name: str | None = None  # user-chosen name for their agent
 
 class BudgetRequest(BaseModel):
     max_trid_budget: int  # micro-TRID
@@ -261,10 +267,11 @@ async def register_agent(
     user.agent_address = body.agent_address.lower()
     user.agent_created = True
     await db.commit()
-    await _ensure_agent_in_db(db, user)
+    await _ensure_agent_in_db(db, user, agent_name=body.agent_name)
 
     return {
         "agent_address": user.agent_address,
+        "agent_name": body.agent_name,
         "message": "Agent registered — private key is your responsibility",
     }
 

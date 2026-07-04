@@ -78,6 +78,139 @@ async def ensure_sim_agents():
     logger.info("✅ Demo agents: Alpha / Beta / Gamma Buyer — each seeded with 100,000 TRID")
 
 
+async def ensure_marketplace_services():
+    """
+    Ensure seller agents (AlphaBot, DataMaven, RetroSweep) and all marketplace
+    services exist in the DB. This mirrors seed.sh but runs on every startup so
+    Railway's production DB is always correctly populated.
+    """
+    NODE_URL = "https://node-backend-production-f7a5.up.railway.app"  # Node backend base URL
+
+    # (wallet, name, description, agent_type, reputation, jobs)
+    SELLERS = [
+        (
+            "0xabc1000000000000000000000000000000000001",
+            "AlphaBot",
+            "High-frequency data seller on Arc Testnet",
+            AgentType.SELLER,
+            9200,
+            500,
+        ),
+        (
+            "0xabc2000000000000000000000000000000000002",
+            "DataMaven",
+            "AI-powered research and risk scoring agent",
+            AgentType.SELLER,
+            8800,
+            380,
+        ),
+        (
+            "0xabc3000000000000000000000000000000000003",
+            "RetroSweep",
+            "Autonomous payment anomaly detection and recovery",
+            AgentType.RETROBOT,
+            9500,
+            620,
+        ),
+    ]
+
+    # (seller_wallet, service_type, name, description, price_per_call, endpoint_path)
+    SERVICES = [
+        (
+            "0xabc1000000000000000000000000000000000001",
+            "price_feed",
+            "Live Crypto Price Feed",
+            "Real-time BTC/ETH/SOL prices via CoinGecko",
+            1_000,
+            f"{NODE_URL}/data/price-feed",
+        ),
+        (
+            "0xabc1000000000000000000000000000000000001",
+            "fx_rates",
+            "FX Rates (Emerging Markets)",
+            "USD/NGN, USD/GHS, USD/KES and 10+ currency pairs",
+            1_000,
+            f"{NODE_URL}/data/fx-rates",
+        ),
+        (
+            "0xabc2000000000000000000000000000000000002",
+            "risk_score",
+            "Wallet Risk Score",
+            "On-chain risk assessment for any EVM address",
+            5_000,
+            f"{NODE_URL}/data/risk-score",
+        ),
+        (
+            "0xabc1000000000000000000000000000000000001",
+            "compute_score",
+            "Portfolio Compute Score",
+            "Sharpe ratio, VaR, and risk-adjusted portfolio scoring",
+            20_000,
+            f"{NODE_URL}/data/compute-score",
+        ),
+        (
+            "0xabc3000000000000000000000000000000000003",
+            "retrobot_audit",
+            "Retrobot Payment Audit",
+            "Real-time anomaly detection and recovery for payments",
+            10_000,
+            f"{NODE_URL}/data/retrobot-audit",
+        ),
+    ]
+
+    async with AsyncSessionLocal() as db:
+        # 1. Ensure seller agents
+        for wallet, name, description, atype, rep, jobs in SELLERS:
+            result = await db.execute(select(Agent).where(Agent.wallet_address == wallet))
+            existing = result.scalar_one_or_none()
+            if not existing:
+                db.add(Agent(
+                    wallet_address=wallet,
+                    name=name,
+                    description=description,
+                    agent_type=atype,
+                    reputation_score=rep,
+                    total_jobs=jobs,
+                    successful_jobs=int(jobs * 0.97),
+                    total_earned=jobs * 5_000,
+                    active=True,
+                ))
+                logger.info(f"✅ Created seller agent: {name}")
+            else:
+                # Ensure name/type are correct even if stale
+                existing.name = name
+                existing.agent_type = atype
+                existing.active = True
+
+        # 2. Ensure services (upsert by seller_address + service_type)
+        for wallet, svc_type, svc_name, description, price, endpoint in SERVICES:
+            result = await db.execute(
+                select(Service)
+                .where(Service.seller_address == wallet)
+                .where(Service.service_type == svc_type)
+            )
+            existing = result.scalar_one_or_none()
+            if not existing:
+                db.add(Service(
+                    seller_address=wallet,
+                    service_type=svc_type,
+                    name=svc_name,
+                    description=description,
+                    price_per_call=price,
+                    endpoint=endpoint,
+                    x402_enabled=True,
+                    active=True,
+                ))
+                logger.info(f"✅ Created service: {svc_name}")
+            else:
+                # Keep endpoint up to date
+                existing.endpoint = endpoint
+                existing.active = True
+
+        await db.commit()
+    logger.info("✅ Marketplace services seeded: price_feed / fx_rates / risk_score / compute_score / retrobot_audit")
+
+
 async def sim_buy_transaction():
     """Single autonomous buy: buyer picks a random service and purchases it."""
     async with AsyncSessionLocal() as db:
@@ -207,5 +340,6 @@ async def start_agent_loop():
     Only Retrobot anomaly scanning runs here.
     """
     await ensure_sim_agents()
+    await ensure_marketplace_services()
     logger.info("🤖 Agent loop: simulated buys disabled (real x402 payments active)")
     logger.info("🔍 Retrobot anomaly scanner active")

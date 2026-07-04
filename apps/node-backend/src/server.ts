@@ -168,6 +168,73 @@ app.get("/buyer-agent-status", (req, res) => {
   });
 });
 
+// ── User agent: deposit USDC into Circle Gateway ──────────────────────────────
+// Called from the frontend after decrypting the user's agent private key.
+// privateKey + amount_usdc → creates a one-shot GatewayClient → deposits.
+app.post("/user/gateway-deposit", async (req, res) => {
+  const { private_key, amount_usdc } = req.body as { private_key?: string; amount_usdc?: number };
+
+  if (!private_key || !amount_usdc || amount_usdc <= 0) {
+    return res.status(400).json({ error: "private_key and amount_usdc (>0) are required" });
+  }
+
+  try {
+    const { GatewayClient } = await import("@circle-fin/x402-batching/client");
+    const pk = (private_key.startsWith("0x") ? private_key : `0x${private_key}`) as `0x${string}`;
+
+    const client = new GatewayClient({
+      chain: "arcTestnet",
+      privateKey: pk,
+      rpcUrl: "https://rpc.testnet.arc.network",
+    });
+
+    const amountStr = amount_usdc.toFixed(6);
+    const result = await client.deposit(amountStr as any);
+
+    res.json({
+      success: true,
+      address: client.address,
+      amount_deposited: amountStr,
+      gateway_balance: result,
+      note: "USDC deposited into Circle Gateway — your agent can now make x402 payments",
+    });
+  } catch (err: any) {
+    const msg = err?.message ?? String(err);
+    res.status(500).json({
+      error: "Deposit failed",
+      detail: msg,
+      hint: msg.includes("insufficient") || msg.includes("balance")
+        ? "Your agent wallet may not have enough USDC. Get testnet USDC at faucet.circle.com."
+        : undefined,
+    });
+  }
+});
+
+// ── User agent: check gateway balance for any private key ─────────────────────
+app.post("/user/gateway-balance", async (req, res) => {
+  const { private_key } = req.body as { private_key?: string };
+  if (!private_key) {
+    return res.status(400).json({ error: "private_key is required" });
+  }
+  try {
+    const { GatewayClient } = await import("@circle-fin/x402-batching/client");
+    const pk = (private_key.startsWith("0x") ? private_key : `0x${private_key}`) as `0x${string}`;
+    const client = new GatewayClient({
+      chain: "arcTestnet",
+      privateKey: pk,
+      rpcUrl: "https://rpc.testnet.arc.network",
+    });
+    const balances = await client.getBalances();
+    res.json({
+      address: client.address,
+      wallet_usdc: balances?.wallet?.formatted ?? "0",
+      gateway_usdc: balances?.gateway?.formattedTotal ?? "0",
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message ?? "balance check failed" });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`🔱 Trident Node Backend running on port ${PORT}`);
   console.log(`   Seller:      ${SELLER_ADDRESS}`);
