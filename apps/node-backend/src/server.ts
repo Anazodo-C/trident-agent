@@ -115,6 +115,23 @@ app.use("/data", computeRouter);
 app.use("/retrobot", retrobotServiceRouter);
 app.use("/hire", hireRouter);
 
+// ── Agent key generation (one-time, called on signup) ────────────────────────
+app.post("/auth/create-agent", (req, res) => {
+  // Dynamically import viem/accounts to generate a fresh EOA
+  import("viem/accounts").then(({ generatePrivateKey, privateKeyToAccount }) => {
+    const privateKey = generatePrivateKey();               // 0x + 64 hex chars
+    const account    = privateKeyToAccount(privateKey);
+    res.json({
+      address:    account.address,
+      privateKey,                                          // shown to user ONCE — never stored
+      warning:    "SAVE THIS PRIVATE KEY NOW. It will never be shown again. Anyone with this key controls your agent wallet.",
+      arcscan:    `https://testnet.arcscan.app/address/${account.address}`,
+    });
+  }).catch(err => {
+    res.status(500).json({ error: "Key generation failed", detail: err.message });
+  });
+});
+
 app.get("/wallet-status", async (req, res) => {
   try {
     const balances = gatewayClient ? await gatewayClient.getBalances() : null;

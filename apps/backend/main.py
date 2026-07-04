@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
 
-from routers import marketplace, retrobot, reputation, agents, faucet, stats, internal
+from routers import marketplace, retrobot, reputation, agents, faucet, stats, internal, auth, user_agent
 from models.database import init_db
 from middleware.auth import AuthMiddleware
 from services.agent_loop import start_agent_loop
@@ -48,7 +48,9 @@ app.include_router(reputation.router, prefix="/api/reputation", tags=["Reputatio
 app.include_router(agents.router, prefix="/api/agents", tags=["Agents"])
 app.include_router(faucet.router, prefix="/api/faucet", tags=["Faucet"])
 app.include_router(stats.router, prefix="/api/stats", tags=["Stats"])
-app.include_router(internal.router, prefix="/api/internal", tags=["Internal"])
+app.include_router(internal.router,    prefix="/api/internal",    tags=["Internal"])
+app.include_router(auth.router,        prefix="/auth",             tags=["Auth"])
+app.include_router(user_agent.router,  prefix="/api/user-agent",   tags=["UserAgent"])
 
 
 @app.get("/")

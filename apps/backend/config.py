@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:5173"
     node_backend_url: str = "http://localhost:3001"
 
+    # Auth
+    jwt_secret: str = "trident-jwt-secret-change-in-prod"
+    google_client_id: str = ""   # VITE_GOOGLE_CLIENT_ID — for token audience verification
+
+    # Node API (for user-agent forwarding)
+    node_api_url: str = "http://localhost:3001"
+
     @property
     def async_database_url(self) -> str:
         """Normalise Railway/Heroku postgres:// → postgresql+asyncpg:// and add SSL."""

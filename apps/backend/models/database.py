@@ -122,6 +122,26 @@ class ReputationEvent(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
 
+class User(Base):
+    """A Trident marketplace user — linked to Google account and/or wallet address."""
+    __tablename__ = "users"
+
+    id              = Column(Integer, primary_key=True, index=True)
+    email           = Column(String(255), nullable=True, unique=True, index=True)
+    google_id       = Column(String(100), nullable=True, unique=True, index=True)
+    wallet_address  = Column(String(42),  nullable=True, unique=True, index=True)
+    name            = Column(String(200), nullable=True)
+    avatar_url      = Column(String(500), nullable=True)
+    # Agent created on signup — key shown once, never stored
+    agent_address   = Column(String(42),  nullable=True, unique=True, index=True)
+    agent_created   = Column(Boolean, default=False)
+    # Spend control — all values in micro-TRID (6 decimals, like USDC)
+    max_trid_budget = Column(BigInteger, default=0)
+    trid_spent      = Column(BigInteger, default=0)
+    created_at      = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at      = Column(DateTime(timezone=True), onupdate=func.now())
+
+
 async def init_db():
     try:
         async with engine.begin() as conn:

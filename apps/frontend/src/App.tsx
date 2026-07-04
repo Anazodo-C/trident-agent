@@ -1,15 +1,21 @@
 import { useState, useEffect } from "react";
 import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { GoogleOAuthProvider } from "@react-oauth/google";
 import { useAccount } from "wagmi";
 
 import AgentsPage     from "./modules/agents/AgentsPage";
 import RetrobotPage   from "./modules/retrobot/RetrobotPage";
 import ReputationPage from "./modules/reputation/ReputationPage";
 import DashboardPage  from "./modules/dashboard/DashboardPage";
+import AuthPage       from "./modules/auth/AuthPage";
+import { AuthProvider, useAuth } from "./modules/auth/AuthContext";
+import MyAgentPanel   from "./modules/auth/MyAgentPanel";
 import { ToastProvider } from "./components/Toast";
 import FaucetModal from "./components/FaucetModal";
 import ErrorBoundary from "./components/ErrorBoundary";
+
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "";
 
 function FaucetButton({ onClick }: { onClick: () => void }) {
   return (
@@ -112,6 +118,49 @@ function Nav({
   );
 }
 
+function AppShell({
+  dark, setDark, showFaucet, setShowFaucet,
+}: {
+  dark: boolean; setDark: (v: boolean | ((b: boolean) => boolean)) => void;
+  showFaucet: boolean; setShowFaucet: (v: boolean) => void;
+}) {
+  const { user, loading } = useAuth();
+
+  if (loading) return null;
+  if (!user) return <AuthPage />;
+
+  return (
+    <div className="min-h-screen">
+      <Nav dark={dark} onToggleTheme={() => setDark(d => !d)} onFaucet={() => setShowFaucet(true)} />
+
+      {showFaucet && (
+        <FaucetModal onAccept={() => setShowFaucet(false)} onSkip={() => setShowFaucet(false)} />
+      )}
+
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* My Agent panel — always visible at top when signed in */}
+        <div className="mb-6">
+          <MyAgentPanel />
+        </div>
+
+        <Routes>
+          <Route path="/"           element={<ErrorBoundary label="Agents"><AgentsPage /></ErrorBoundary>} />
+          <Route path="/retrobot"   element={<ErrorBoundary label="Retrobot"><RetrobotPage /></ErrorBoundary>} />
+          <Route path="/reputation" element={<ErrorBoundary label="Reputation"><ReputationPage /></ErrorBoundary>} />
+          <Route path="/dashboard"  element={<ErrorBoundary label="Dashboard"><DashboardPage /></ErrorBoundary>} />
+        </Routes>
+      </main>
+
+      <footer
+        className="mt-16 py-5 text-center text-xs"
+        style={{ borderTop: "1px solid var(--border)", color: "var(--text-muted)" }}
+      >
+        Trident Agent · Arc Testnet (Chain ID: 5042002) · Powered by Circle Gateway x402
+      </footer>
+    </div>
+  );
+}
+
 export default function App() {
   const [dark, setDark] = useState(() => {
     const stored = localStorage.getItem("trident_theme");
@@ -127,39 +176,14 @@ export default function App() {
   }, [dark]);
 
   return (
-    <BrowserRouter>
-      <ToastProvider>
-        <div className="min-h-screen">
-          <Nav
-            dark={dark}
-            onToggleTheme={() => setDark(d => !d)}
-            onFaucet={() => setShowFaucet(true)}
-          />
-
-          {showFaucet && (
-            <FaucetModal
-              onAccept={() => setShowFaucet(false)}
-              onSkip={() => setShowFaucet(false)}
-            />
-          )}
-
-          <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <Routes>
-              <Route path="/"           element={<ErrorBoundary label="Agents"><AgentsPage /></ErrorBoundary>} />
-              <Route path="/retrobot"   element={<ErrorBoundary label="Retrobot"><RetrobotPage /></ErrorBoundary>} />
-              <Route path="/reputation" element={<ErrorBoundary label="Reputation"><ReputationPage /></ErrorBoundary>} />
-              <Route path="/dashboard"  element={<ErrorBoundary label="Dashboard"><DashboardPage /></ErrorBoundary>} />
-            </Routes>
-          </main>
-
-          <footer
-            className="mt-16 py-5 text-center text-xs"
-            style={{ borderTop: "1px solid var(--border)", color: "var(--text-muted)" }}
-          >
-            Trident Agent · Arc Testnet (Chain ID: 5042002) · Powered by Circle Gateway x402
-          </footer>
-        </div>
-      </ToastProvider>
-    </BrowserRouter>
+    <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+      <AuthProvider>
+        <BrowserRouter>
+          <ToastProvider>
+            <AppShell dark={dark} setDark={setDark} showFaucet={showFaucet} setShowFaucet={setShowFaucet} />
+          </ToastProvider>
+        </BrowserRouter>
+      </AuthProvider>
+    </GoogleOAuthProvider>
   );
 }
