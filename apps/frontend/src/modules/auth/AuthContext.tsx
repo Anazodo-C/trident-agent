@@ -2,7 +2,9 @@
  * AuthContext — holds the current Trident user session (JWT + profile).
  * Supports both Google OAuth (Web2) and wallet sign-in (Web3).
  *
- * Persists JWT to localStorage. On load, re-fetches /auth/me to validate.
+ * Also manages the session-only agent key unlock state so any page
+ * (ProfilePage, AgentsPage) can use the same decrypted key without
+ * re-prompting the passphrase.
  */
 import {
   createContext, useContext, useState, useEffect, useCallback,
@@ -36,19 +38,23 @@ interface AuthContextValue {
   signOut: () => void;
   refreshUser: () => Promise<void>;
   setBudget: (microTrid: number) => Promise<void>;
+  /** Session-only decrypted agent private key — in memory only, never persisted */
+  unlockedKey: string | null;
+  unlockAgent: (key: string) => void;
+  lockAgent: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue>({} as AuthContextValue);
 export const useAuth = () => useContext(AuthContext);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser]     = useState<TridentUser | null>(null);
-  const [token, setToken]   = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const { address }           = useAccount();
-  const { signMessageAsync }  = useSignMessage();
+  const [user, setUser]           = useState<TridentUser | null>(null);
+  const [token, setToken]         = useState<string | null>(null);
+  const [loading, setLoading]     = useState(true);
+  const [unlockedKey, setUnlockedKey] = useState<string | null>(null);
+  const { address }               = useAccount();
+  const { signMessageAsync }      = useSignMessage();
 
-  // Restore session on mount
   useEffect(() => {
     const saved = localStorage.getItem(JWT_KEY);
     if (saved) {
@@ -103,13 +109,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     delete axios.defaults.headers.common["Authorization"];
     setToken(null);
     setUser(null);
+    setUnlockedKey(null); // clear session key on sign-out
   }, []);
+
+  const unlockAgent = useCallback((key: string) => setUnlockedKey(key), []);
+  const lockAgent   = useCallback(() => setUnlockedKey(null), []);
 
   return (
     <AuthContext.Provider value={{
       user, token, loading,
       signInWithGoogle, signInWithWallet,
       signOut, refreshUser, setBudget,
+      unlockedKey, unlockAgent, lockAgent,
     }}>
       {children}
     </AuthContext.Provider>

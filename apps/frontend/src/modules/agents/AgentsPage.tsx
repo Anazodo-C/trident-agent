@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
-import { ConnectButton } from "@rainbow-me/rainbowkit";
+import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import { useAuth } from "../auth/AuthContext";
 
 // TRID ERC-20 — transfer ABI (minimal)
 const TRID_ABI = [
@@ -20,7 +21,6 @@ const TRID_ABI = [
 const TRID_ADDRESS = (import.meta.env.VITE_TRIDENT_TOKEN_ADDRESS ||
   "0x5fc8e8b3DC37Bcbb7bC7F013F6a8C56375B40dF7") as `0x${string}`;
 
-import FaucetModal       from "../../components/FaucetModal";
 import OnboardingModal   from "../../components/OnboardingModal";
 import UploadAgentModal  from "../../components/UploadAgentModal";
 import ServiceResultModal from "../../components/ServiceResultModal";
@@ -116,36 +116,38 @@ function AgentServiceCard({
   backendLive: boolean;
 }) {
   const { address, isConnected } = useAccount();
+  const { user, unlockedKey }    = useAuth();
   const { show, dismiss }        = useToastHook();
+  const navigate                 = useNavigate();
   const [busy, setBusy]          = useState(false);
   const [portfolioInput, setPortfolioInput] = useState("BTC:0.4,ETH:0.3,SOL:0.2,USDC:0.1");
   const [pendingTxHash, setPendingTxHash]   = useState<`0x${string}` | undefined>();
 
   const { writeContractAsync } = useWriteContract();
-  // track receipt so wagmi caches the tx; result used in ServiceResultModal via pendingTxHash
   useWaitForTransactionReceipt({ hash: pendingTxHash });
 
-  /** Build params for POST /hire based on service type */
+  // User is "authorized" if they have a JWT (Web2 or Web3) OR have a wallet connected
+  const isAuthorized = !!user || isConnected;
+  // Web3 TRID transfer only possible when wallet is actually connected
+  const canTransferTrid = isConnected && !!address;
+
   const buildHireParams = (): Record<string, string> => {
+    const buyerAddr = address || user?.agent_address || "0x0000000000000000000000000000000000000001";
     switch (svc.service_type) {
-      case "price_feed":
-        return { symbols: "BTC,ETH,USDC,SOL" };
-      case "fx_rates":
-        return { base: "USD", targets: "EUR,GBP,NGN,JPY,BRL,GHS" };
-      case "risk_score":
-        return { address: address || "0x0000000000000000000000000000000000000001" };
-      case "compute_score":
-        return { portfolio: portfolioInput.trim() || "BTC:0.5,ETH:0.5", model: "sharpe" };
-      case "retrobot_audit":
-        return { buyer_address: address || "0x0000000000000000000000000000000000000001" };
-      default:
-        return {};
+      case "price_feed":    return { symbols: "BTC,ETH,USDC,SOL" };
+      case "fx_rates":      return { base: "USD", targets: "EUR,GBP,NGN,JPY,BRL,GHS" };
+      case "risk_score":    return { address: buyerAddr };
+      case "compute_score": return { portfolio: portfolioInput.trim() || "BTC:0.5,ETH:0.5", model: "sharpe" };
+      case "retrobot_audit":return { buyer_address: buyerAddr };
+      default:              return {};
     }
   };
 
   const handleHire = async () => {
-    if (!isConnected) {
-      show("Connect your wallet to hire agents", "error");
+    if (!isAuthorized) {
+      // Redirect to sign-in rather than just showing an error
+      show("Sign in to hire agents — redirecting…", "info", 2000);
+      setTimeout(() => navigate("/"), 1500);
       return;
     }
     setBusy(true);
@@ -162,42 +164,47 @@ function AgentServiceCard({
     }
 
     try {
-      // ── Step 1: TRID on-chain transfer (verifiable on ArcScan) ──
+      // ── Step 1: TRID on-chain transfer — Web3 users only (verifiable on ArcScan) ──
       const sellerAddr = (svc.seller_address || "0x3315ebaab06d6266e92f6063b9360ae10d24F0a0") as `0x${string}`;
-      const tridAmount = BigInt(svc.price_per_call); // already in micro-units (6 decimals)
+      const tridAmount = BigInt(svc.price_per_call);
 
       let txHash: `0x${string}` | undefined;
-      try {
-        dismiss(tid);
-        const tid2 = show(`Sign TRID payment in your wallet…`, "loading");
-        txHash = await writeContractAsync({
-          address:      TRID_ADDRESS,
-          abi:          TRID_ABI,
-          functionName: "transfer",
-          args:         [sellerAddr, tridAmount],
-        });
-        setPendingTxHash(txHash);
-        dismiss(tid2);
-        show(`⛓ TRID tx submitted — fetching data…`, "info", 4000);
-      } catch (txErr: any) {
-        // User rejected or insufficient TRID — still fetch data but note it
-        const rejected = txErr?.message?.includes("rejected") || txErr?.code === 4001;
-        if (rejected) {
+      if (canTransferTrid) {
+        try {
           dismiss(tid);
-          show("Transaction rejected — hire cancelled", "error", 4000);
-          setBusy(false);
-          return;
+          const tid2 = show(`Sign TRID payment in your wallet…`, "loading");
+          txHash = await writeContractAsync({
+            address:      TRID_ADDRESS,
+            abi:          TRID_ABI,
+            functionName: "transfer",
+            args:         [sellerAddr, tridAmount],
+          });
+          setPendingTxHash(txHash);
+          dismiss(tid2);
+          show(`⛓ TRID tx submitted — fetching data…`, "info", 4000);
+        } catch (txErr: any) {
+          const rejected = txErr?.message?.includes("rejected") || txErr?.code === 4001;
+          if (rejected) {
+            dismiss(tid);
+            show("Transaction rejected — hire cancelled", "error", 4000);
+            setBusy(false);
+            return;
+          }
+          show(`TRID tx failed (${txErr?.shortMessage || "insufficient balance?"}) — fetching data anyway`, "info", 4000);
         }
-        show(`TRID tx failed (${txErr?.shortMessage || "insufficient balance?"}) — fetching data anyway`, "info", 4000);
       }
+      // Web2-only users skip on-chain TRID; budget deducted by backend via JWT
 
       // ── Step 2: Fetch data via x402 (Circle Gateway nanopayment) ──
+      const buyerAddr = address || user?.agent_address;
       const r = await axios.post(
         `${NODE_API}/hire`,
         {
-          service_type: svc.service_type,
-          params: buildHireParams(),
-          buyer_address: address,
+          service_type:       svc.service_type,
+          params:             buildHireParams(),
+          buyer_address:      buyerAddr,
+          // Pass decrypted key so the hire uses user's own Gateway balance
+          ...(unlockedKey ? { agent_private_key: unlockedKey } : {}),
         },
         { timeout: 20000 }
       );
@@ -382,9 +389,94 @@ function AgentChip({ ag }: { ag: Agent }) {
   );
 }
 
+// ── Hero Agent Card ───────────────────────────────────────────────
+// Shows identity + balance for Web3 users; agent info for Web2 users
+function HeroAgentCard({
+  address, isConnected, balance, onOfferService,
+}: {
+  address: `0x${string}` | undefined;
+  isConnected: boolean;
+  balance: ReturnType<typeof useWalletBalance>;
+  onOfferService: () => void;
+}) {
+  const { user, unlockedKey } = useAuth();
+  const navigate = useNavigate();
+
+  return (
+    <div
+      className="rounded-2xl p-4 shrink-0 min-w-52"
+      style={{ background: "rgba(0,180,216,0.09)", border: "1px solid rgba(0,180,216,0.2)" }}
+    >
+      {/* Identity row */}
+      <div className="flex items-center gap-2 mb-3">
+        {user?.avatar_url
+          ? <img src={user.avatar_url} className="w-6 h-6 rounded-full" alt="" />
+          : <span className="text-base">🤖</span>
+        }
+        <div className="text-xs font-semibold truncate max-w-36" style={{ color: "var(--text-primary)" }}>
+          {user?.name || user?.email?.split("@")[0] || "Agent"}
+        </div>
+        {unlockedKey && (
+          <span className="text-xs ml-auto" title="Agent unlocked for payments">🔓</span>
+        )}
+      </div>
+
+      {/* Balances */}
+      <div className="space-y-1.5">
+        {isConnected && (
+          <>
+            <div className="flex justify-between text-xs">
+              <span style={{ color: "var(--text-muted)" }}>$TRID</span>
+              <span className="mono font-bold" style={{ color: "var(--accent)" }}>
+                {balance.loading ? "…" : parseFloat(balance.trid).toFixed(4)}
+              </span>
+            </div>
+            <div className="flex justify-between text-xs">
+              <span style={{ color: "var(--text-muted)" }}>Arc Gas</span>
+              <span className="mono font-bold" style={{ color: "var(--text-secondary)" }}>
+                {balance.loading ? "…" : balance.native}
+              </span>
+            </div>
+          </>
+        )}
+        {!isConnected && (
+          <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+            {unlockedKey ? "Agent ready — USDC payments via Gateway" : "Unlock agent for x402 payments"}
+          </div>
+        )}
+      </div>
+
+      {/* Address */}
+      {(address || user?.agent_address) && (
+        <div
+          className="mt-3 pt-3 text-xs mono truncate"
+          style={{ borderTop: "1px solid rgba(0,180,216,0.15)", color: "var(--text-muted)" }}
+        >
+          {(address || user?.agent_address)?.slice(0, 8)}…{(address || user?.agent_address)?.slice(-6)}
+        </div>
+      )}
+
+      {/* Actions */}
+      <div className="flex gap-2 mt-3">
+        <button
+          onClick={() => navigate("/profile")}
+          className="btn-secondary flex-1 text-xs py-1.5"
+        >
+          Dashboard
+        </button>
+        <button
+          onClick={onOfferService}
+          className="btn-secondary flex-1 text-xs py-1.5"
+        >
+          + Offer
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────
 const ONBOARDING_KEY = "trident_onboarded";
-const FAUCET_KEY     = "trident_faucet_offered";
 
 export default function AgentsPage() {
   const { address, isConnected } = useAccount();
@@ -396,7 +488,6 @@ export default function AgentsPage() {
   const [backendLive, setBackendLive] = useState(true);
 
   // Modals
-  const [showFaucet,    setShowFaucet]    = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showUpload,    setShowUpload]    = useState(false);
   const [serviceResult, setServiceResult] = useState<{
@@ -411,13 +502,8 @@ export default function AgentsPage() {
     if (prevAddr.current === address) return;
     prevAddr.current = address;
 
-    const faucetOffered    = localStorage.getItem(`${FAUCET_KEY}_${address}`);
-    const onboardingShown  = localStorage.getItem(`${ONBOARDING_KEY}_${address}`);
-
-    if (!faucetOffered) {
-      localStorage.setItem(`${FAUCET_KEY}_${address}`, "1");
-      setShowFaucet(true);
-    } else if (!onboardingShown) {
+    const onboardingShown = localStorage.getItem(`${ONBOARDING_KEY}_${address}`);
+    if (!onboardingShown) {
       localStorage.setItem(`${ONBOARDING_KEY}_${address}`, "1");
       setShowOnboarding(true);
     }
@@ -480,27 +566,6 @@ export default function AgentsPage() {
   return (
     <div className="space-y-8">
       {/* ── Modals ── */}
-      {showFaucet && (
-        <FaucetModal
-          onAccept={() => {
-            setShowFaucet(false);
-            const shown = localStorage.getItem(`${ONBOARDING_KEY}_${address}`);
-            if (!shown) {
-              localStorage.setItem(`${ONBOARDING_KEY}_${address}`, "1");
-              setShowOnboarding(true);
-            }
-          }}
-          onSkip={() => {
-            setShowFaucet(false);
-            const shown = localStorage.getItem(`${ONBOARDING_KEY}_${address}`);
-            if (!shown) {
-              localStorage.setItem(`${ONBOARDING_KEY}_${address}`, "1");
-              setShowOnboarding(true);
-            }
-          }}
-        />
-      )}
-
       {showOnboarding && (
         <OnboardingModal
           onHire={() => { setShowOnboarding(false); }}
@@ -586,55 +651,13 @@ export default function AgentsPage() {
             </p>
           </div>
 
-          {/* Wallet + balance */}
-          {isConnected ? (
-            <div
-              className="rounded-2xl p-4 shrink-0 min-w-52"
-              style={{
-                background: "rgba(0,180,216,0.09)",
-                border:     "1px solid rgba(0,180,216,0.2)",
-              }}
-            >
-              <div className="text-xs font-semibold mb-3" style={{ color: "var(--text-muted)" }}>
-                Your Wallet
-              </div>
-              <div className="space-y-1.5">
-                <div className="flex justify-between text-xs">
-                  <span style={{ color: "var(--text-muted)" }}>$TRID</span>
-                  <span className="mono font-bold" style={{ color: "var(--accent)" }}>
-                    {balance.loading ? "…" : parseFloat(balance.trid).toFixed(4)}
-                  </span>
-                </div>
-                <div className="flex justify-between text-xs">
-                  <span style={{ color: "var(--text-muted)" }}>Arc Gas</span>
-                  <span className="mono font-bold" style={{ color: "var(--text-secondary)" }}>
-                    {balance.loading ? "…" : balance.native}
-                  </span>
-                </div>
-              </div>
-              <div
-                className="mt-3 pt-3 text-xs mono truncate"
-                style={{ borderTop: "1px solid rgba(0,180,216,0.15)", color: "var(--text-muted)" }}
-              >
-                {address?.slice(0, 8)}…{address?.slice(-6)}
-              </div>
-              <button
-                onClick={() => {
-                  setShowUpload(true);
-                }}
-                className="btn-secondary w-full mt-3 text-xs py-1.5"
-              >
-                + Offer a Service
-              </button>
-            </div>
-          ) : (
-            <div className="shrink-0">
-              <div className="text-sm mb-3" style={{ color: "var(--text-muted)" }}>
-                Connect to hire agents & earn $TRID
-              </div>
-              <ConnectButton />
-            </div>
-          )}
+          {/* Agent / Wallet card */}
+          <HeroAgentCard
+            address={address}
+            isConnected={isConnected}
+            balance={balance}
+            onOfferService={() => setShowUpload(true)}
+          />
         </div>
       </div>
 
