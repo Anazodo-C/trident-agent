@@ -67,16 +67,29 @@ const TRID_CLAIM_THRESHOLD  = 5_000_000n;   // 5 TRID (6 decimals) → auto-clai
 const GATEWAY_TOPUP_MIN     = 0.10;          // USDC → trigger auto-deposit
 const GATEWAY_TOPUP_AMOUNT  = "1.0";         // USDC to deposit each time
 
+const RPC_URL = "https://rpc.testnet.arc.network";
+
 // ── Viem clients (created once from BUYER_AGENT_PRIVATE_KEY) ──────────────────
 const RAW_KEY = process.env.BUYER_AGENT_PRIVATE_KEY;
 const buyerAccount = RAW_KEY
   ? privateKeyToAccount((RAW_KEY.startsWith("0x") ? RAW_KEY : `0x${RAW_KEY}`) as `0x${string}`)
   : null;
 
-const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
+// Explicit RPC URL — viem doesn't always resolve chain defaults server-side
+const publicClient = createPublicClient({ chain: arcTestnet, transport: http(RPC_URL) });
 const walletClient = buyerAccount
-  ? createWalletClient({ account: buyerAccount, chain: arcTestnet, transport: http() })
+  ? createWalletClient({ account: buyerAccount, chain: arcTestnet, transport: http(RPC_URL) })
   : null;
+
+// ── Native ARC balance check ───────────────────────────────────────────────────
+async function getArcBalance(): Promise<bigint> {
+  if (!buyerAccount) return 0n;
+  try {
+    return await publicClient.getBalance({ address: buyerAccount.address });
+  } catch { return 0n; }
+}
+
+const MIN_ARC_WEI = 10_000_000_000_000_000n; // 0.01 ARC — enough for ~50 txns
 
 // ── Named buyer personas ───────────────────────────────────────────────────────
 const BUYERS = [
@@ -185,17 +198,35 @@ async function autoTopUpGateway(): Promise<boolean> {
 // visible on ArcScan and verifiable by hackathon judges.
 async function sendTridMirror(tridAmount: bigint, serviceName: string): Promise<void> {
   if (!walletClient || !buyerAccount) return;
+
+  // Gate on native ARC balance — ERC-20 transfers still cost gas
+  const arcBal = await getArcBalance();
+  if (arcBal < MIN_ARC_WEI) {
+    console.warn(
+      `[BuyerAgent] TRID mirror skipped — insufficient ARC for gas.\n` +
+      `   Buyer wallet: ${buyerAccount.address}\n` +
+      `   ARC balance:  ${Number(arcBal) / 1e18} ARC\n` +
+      `   Get ARC at:   https://faucet.testnet.arc.network`
+    );
+    return;
+  }
+
   try {
     const txHash = await walletClient.writeContract({
-      address: TRID_ADDRESS,
-      abi: ERC20_ABI,
+      address:      TRID_ADDRESS,
+      abi:          ERC20_ABI,
       functionName: "transfer",
-      args: [SELLER_ADDRESS, tridAmount],
+      args:         [SELLER_ADDRESS, tridAmount],
+      chain:        arcTestnet,
+      account:      buyerAccount,
     });
     console.log(`[BuyerAgent] ⛓ TRID mirror (${serviceName}): ${(Number(tridAmount) / 1_000_000).toFixed(4)} TRID → seller`);
     console.log(`[BuyerAgent]    https://testnet.arcscan.app/tx/${txHash}`);
   } catch (err: any) {
-    console.warn(`[BuyerAgent] TRID mirror failed (non-fatal): ${err?.shortMessage ?? err?.message}`);
+    // Log full error so we can diagnose RPC vs contract vs balance issues
+    const detail = err?.cause?.message ?? err?.shortMessage ?? err?.message ?? String(err);
+    console.warn(`[BuyerAgent] TRID mirror failed (non-fatal): ${detail}`);
+    console.warn(`[BuyerAgent]   contract: ${TRID_ADDRESS} | to: ${SELLER_ADDRESS} | amount: ${tridAmount}`);
   }
 }
 
@@ -293,6 +324,22 @@ export function startBuyerAgents() {
   console.log(`🤖 Starting ${BUYERS.length} Circle Gateway buyer agents...`);
   console.log(`   TRID mirror → ${SELLER_ADDRESS}`);
   console.log(`   Auto-claim threshold: 5 TRID | Auto top-up threshold: ${GATEWAY_TOPUP_MIN} USDC`);
+  console.log(`   TRID contract: ${TRID_ADDRESS}`);
+  if (buyerAccount) {
+    // Log ARC balance at startup so gas issues are immediately visible in logs
+    getArcBalance().then(arc => {
+      const arcEth = Number(arc) / 1e18;
+      if (arc < MIN_ARC_WEI) {
+        console.warn(
+          `⚠️  Buyer agent wallet has ${arcEth} ARC — too low for gas.\n` +
+          `   Get ARC at: https://faucet.testnet.arc.network\n` +
+          `   Wallet:     ${buyerAccount!.address}`
+        );
+      } else {
+        console.log(`   ARC gas balance: ${arcEth} ARC ✓`);
+      }
+    }).catch(() => {});
+  }
 
   BUYERS.forEach((buyer, i) => {
     const delay = jitter(10_000, 30_000) * (i + 1);
