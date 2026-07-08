@@ -20,8 +20,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { gatewayClient, buyerEnabled } from "./gatewayClient.js";
 import { isTurbo } from "./turboMode.js";
 
-// 3 agents × 1 tx / ~6 s ≈ 30 tx/min — fast enough to demo without flooding Arc testnet txpool
-const TURBO_SLEEP_MS  = () => jitter(5_500, 6_500);
+// 3 agents × 1 tx / ~18 s = 10 tx/min — Arc testnet txpool limit
+const TURBO_SLEEP_MS  = () => jitter(17_000, 19_000);
 const NORMAL_SLEEP_MS = () => jitter(50 * 60_000, 70 * 60_000);
 
 const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:8000";

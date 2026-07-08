@@ -509,7 +509,7 @@ export default function AgentsPage() {
     try {
       const r = await axios.post(`${NODE_API}/admin/turbo`, { enabled: !turbo });
       setTurboState(r.data.turbo);
-      show(r.data.turbo ? "🔥 Turbo ON — ~30 tx/min" : "Turbo OFF", r.data.turbo ? "success" : "info", 3000);
+      show(r.data.turbo ? "🔥 Turbo ON — 10 tx/min" : "Turbo OFF", r.data.turbo ? "success" : "info", 3000);
     } catch {
       show("Turbo toggle failed — backend offline?", "error", 3000);
     } finally {
@@ -715,7 +715,7 @@ export default function AgentsPage() {
             <button
               onClick={toggleTurbo}
               disabled={turboLoading || !backendLive}
-              title={turbo ? "Turbo ON — click to disable" : "Turbo OFF — click to fire ~30 tx/min"}
+              title={turbo ? "Turbo ON — click to disable" : "Turbo OFF — click to fire 10 tx/min"}
               className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all select-none"
               style={{
                 background: turbo
@@ -736,7 +736,7 @@ export default function AgentsPage() {
                   className="rounded-full px-1.5 py-0.5 text-xs font-semibold"
                   style={{ background: "rgba(255,255,255,0.2)", fontSize: "10px" }}
                 >
-                  ~30/min
+                  10/min
                 </span>
               )}
             </button>
