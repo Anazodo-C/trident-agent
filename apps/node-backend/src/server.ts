@@ -23,7 +23,8 @@ import { retrobotServiceRouter } from "./routes/retrobotService.js";
 import { hireRouter } from "./routes/hire.js";
 import { startBuyerAgents } from "./buyerAgents.js";
 import { gatewayClient } from "./gatewayClient.js";
-// tridFaucet: disabled — buyer agents get a one-time 100k TRID drop via DB seed
+import { isTurbo, setTurbo } from "./turboMode.js";
+// tridFaucet: auto-claim now handled inside buyerAgents.ts loop (balance-triggered)
 // import { startTridFaucetLoop } from "./tridFaucet.js";
 
 const app = express();
@@ -112,6 +113,17 @@ app.get("/openapi.json", (req, res) => {
       "/data/risk-score": { get: { summary: "Wallet risk score", parameters: [{ name: "address", in: "query", schema: { type: "string" } }], responses: { "200": { description: "Risk score" }, "402": { description: "Payment required" } }, "x-price-usdc": "0.005" } },
     },
   });
+});
+
+// ── Turbo mode toggle ─────────────────────────────────────────────────────────
+app.post("/admin/turbo", (req, res) => {
+  const enabled = Boolean(req.body?.enabled ?? !isTurbo());
+  setTurbo(enabled);
+  res.json({ turbo: enabled, message: enabled ? "🔥 Turbo ON — ~60 tx/min" : "Turbo OFF — normal cadence" });
+});
+
+app.get("/admin/turbo", (req, res) => {
+  res.json({ turbo: isTurbo() });
 });
 
 app.use("/data", priceFeedRouter);

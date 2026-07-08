@@ -481,11 +481,14 @@ const ONBOARDING_KEY = "trident_onboarded";
 export default function AgentsPage() {
   const { address, isConnected } = useAccount();
   const balance                  = useWalletBalance();
+  const { show }                 = useToastHook();
   const [agents,      setAgents]      = useState<Agent[]>([]);
   const [services,    setServices]    = useState<Service[]>([]);
   const [filter,      setFilter]      = useState("");
   const [loading,     setLoading]     = useState(true);
   const [backendLive, setBackendLive] = useState(true);
+  const [turbo,       setTurboState]  = useState(false);
+  const [turboLoading, setTurboLoading] = useState(false);
 
   // Modals
   const [showOnboarding, setShowOnboarding] = useState(false);
@@ -493,6 +496,26 @@ export default function AgentsPage() {
   const [serviceResult, setServiceResult] = useState<{
     name: string; result: unknown; price: string;
   } | null>(null);
+
+  // Sync turbo state from backend on mount
+  useEffect(() => {
+    axios.get(`${NODE_API}/admin/turbo`)
+      .then(r => setTurboState(r.data.turbo ?? false))
+      .catch(() => {});
+  }, []);
+
+  const toggleTurbo = async () => {
+    setTurboLoading(true);
+    try {
+      const r = await axios.post(`${NODE_API}/admin/turbo`, { enabled: !turbo });
+      setTurboState(r.data.turbo);
+      show(r.data.turbo ? "🔥 Turbo ON — 60 tx/min" : "Turbo OFF", r.data.turbo ? "success" : "info", 3000);
+    } catch {
+      show("Turbo toggle failed — backend offline?", "error", 3000);
+    } finally {
+      setTurboLoading(false);
+    }
+  };
 
   const prevAddr = useRef<string | undefined>(undefined);
 
@@ -678,7 +701,7 @@ export default function AgentsPage() {
       {/* ── Service Marketplace ── */}
       <div>
         {/* Toolbar */}
-        <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center justify-between mb-5 gap-3 flex-wrap">
           <div>
             <h2 className="font-bold text-lg" style={{ color: "var(--text-primary)" }}>
               🔥 Trending Services
@@ -687,12 +710,43 @@ export default function AgentsPage() {
               Most-called agents first — click Hire to call the agent and see live data
             </p>
           </div>
-          <input
-            className="input w-44 text-sm"
-            placeholder="Search…"
-            value={filter}
-            onChange={e => setFilter(e.target.value)}
-          />
+          <div className="flex items-center gap-2">
+            {/* Turbo Mode toggle */}
+            <button
+              onClick={toggleTurbo}
+              disabled={turboLoading || !backendLive}
+              title={turbo ? "Turbo ON — click to disable" : "Turbo OFF — click to fire 60 tx/min"}
+              className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all select-none"
+              style={{
+                background: turbo
+                  ? "linear-gradient(135deg, #ff6b00, #ff0080)"
+                  : "rgba(255,107,0,0.10)",
+                border: turbo
+                  ? "1px solid rgba(255,107,0,0.6)"
+                  : "1px solid rgba(255,107,0,0.3)",
+                color: turbo ? "#fff" : "#ff6b00",
+                boxShadow: turbo ? "0 0 16px rgba(255,107,0,0.4)" : "none",
+                opacity: turboLoading ? 0.6 : 1,
+              }}
+            >
+              <span className={turbo ? "animate-spin" : ""} style={{ display: "inline-block" }}>⚡</span>
+              {turboLoading ? "…" : turbo ? "TURBO ON" : "Turbo Mode"}
+              {turbo && (
+                <span
+                  className="rounded-full px-1.5 py-0.5 text-xs font-semibold"
+                  style={{ background: "rgba(255,255,255,0.2)", fontSize: "10px" }}
+                >
+                  60/min
+                </span>
+              )}
+            </button>
+            <input
+              className="input w-44 text-sm"
+              placeholder="Search…"
+              value={filter}
+              onChange={e => setFilter(e.target.value)}
+            />
+          </div>
         </div>
 
         {loading ? (

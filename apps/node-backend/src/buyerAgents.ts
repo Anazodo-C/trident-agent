@@ -18,6 +18,11 @@ import {
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { gatewayClient, buyerEnabled } from "./gatewayClient.js";
+import { isTurbo } from "./turboMode.js";
+
+// 3 agents × 1 tx / ~3 s ≈ 60 tx/min in turbo mode
+const TURBO_SLEEP_MS  = () => jitter(2_800,  3_200);
+const NORMAL_SLEEP_MS = () => jitter(50 * 60_000, 70 * 60_000);
 
 const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:8000";
 const SELF_URL   = `http://localhost:${process.env.PORT || 3001}`;
@@ -260,8 +265,8 @@ async function buyerLoop(buyer: (typeof BUYERS)[0], initialDelay: number) {
     // 3. Make the x402 purchase (+ fires TRID mirror on-chain)
     await buyOnce(buyer);
 
-    // 4. Wait ~1 hour before next purchase
-    await sleep(jitter(50 * 60_000, 70 * 60_000));
+    // 4. Wait — turbo: ~3 s (→ 60 tx/min across 3 agents) | normal: ~1 hr
+    await sleep(isTurbo() ? TURBO_SLEEP_MS() : NORMAL_SLEEP_MS());
   }
 }
 
