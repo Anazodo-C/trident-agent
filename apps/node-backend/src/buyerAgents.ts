@@ -1,53 +1,187 @@
 /**
  * Autonomous buyer agent loops using real Circle Gateway x402 payments.
  *
- * Each "buyer" is a named persona that periodically purchases financial
- * data services via gateway.pay(). The actual payment is:
- *   1. GET /data/price-feed  → Node backend returns 402
- *   2. GatewayClient signs EIP-3009 (GatewayWalletBatched, zero gas)
- *   3. Retries with PAYMENT-SIGNATURE header
- *   4. Node backend verifies via Circle Gateway facilitator → returns data
- *   5. We POST /api/internal/record-payment to Python backend for dashboard
+ * Each cycle:
+ *   1. Auto-claim TRID from faucet if balance < 5 TRID
+ *   2. Auto-deposit USDC into Gateway if balance < 0.10 USDC
+ *   3. Make x402 Gateway payment for a random financial data service
+ *   4. Mirror the payment on-chain as an ERC-20 TRID transfer (ArcScan visible)
+ *   5. Record payment in Python backend for dashboard
  */
 import "dotenv/config";
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  parseAbi,
+  defineChain,
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 import { gatewayClient, buyerEnabled } from "./gatewayClient.js";
 
 const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:8000";
 const SELF_URL   = `http://localhost:${process.env.PORT || 3001}`;
 
-// Named buyer personas — share one GatewayClient (one wallet) but have
-// distinct display names / addresses for the marketplace dashboard.
+// ── Chain + contract addresses ─────────────────────────────────────────────────
+const arcTestnet = defineChain({
+  id: 5042002,
+  name: "Arc Testnet",
+  nativeCurrency: { name: "ARC", symbol: "ARC", decimals: 18 },
+  rpcUrls: { default: { http: ["https://rpc.testnet.arc.network"] } },
+  blockExplorers: { default: { name: "ArcScan", url: "https://testnet.arcscan.app" } },
+});
+
+const TRID_ADDRESS = (
+  process.env.TRIDENT_TOKEN_ADDRESS ||
+  process.env.VITE_TRIDENT_TOKEN_ADDRESS ||
+  "0x5fc8e8b3DC37Bcbb7bC7F013F6a8C56375B40dF7"
+) as `0x${string}`;
+
+const FAUCET_ADDRESS = (
+  process.env.TRIDENT_FAUCET_ADDRESS ||
+  process.env.VITE_TRIDENT_FAUCET_ADDRESS
+) as `0x${string}` | undefined;
+
+const SELLER_ADDRESS = (
+  process.env.SELLER_ADDRESS || "0x3315ebaab06d6266e92f6063b9360ae10d24F0a0"
+) as `0x${string}`;
+
+// ── ABI fragments ──────────────────────────────────────────────────────────────
+const ERC20_ABI = parseAbi([
+  "function balanceOf(address) view returns (uint256)",
+  "function transfer(address to, uint256 amount) returns (bool)",
+]);
+
+const FAUCET_ABI = parseAbi([
+  "function claim() external",
+  "function canClaim(address) view returns (bool)",
+]);
+
+// ── Auto-management thresholds ─────────────────────────────────────────────────
+const TRID_CLAIM_THRESHOLD  = 5_000_000n;   // 5 TRID (6 decimals) → auto-claim
+const GATEWAY_TOPUP_MIN     = 0.10;          // USDC → trigger auto-deposit
+const GATEWAY_TOPUP_AMOUNT  = "1.0";         // USDC to deposit each time
+
+// ── Viem clients (created once from BUYER_AGENT_PRIVATE_KEY) ──────────────────
+const RAW_KEY = process.env.BUYER_AGENT_PRIVATE_KEY;
+const buyerAccount = RAW_KEY
+  ? privateKeyToAccount((RAW_KEY.startsWith("0x") ? RAW_KEY : `0x${RAW_KEY}`) as `0x${string}`)
+  : null;
+
+const publicClient = createPublicClient({ chain: arcTestnet, transport: http() });
+const walletClient = buyerAccount
+  ? createWalletClient({ account: buyerAccount, chain: arcTestnet, transport: http() })
+  : null;
+
+// ── Named buyer personas ───────────────────────────────────────────────────────
 const BUYERS = [
-  {
-    name: "Alpha Buyer",
-    address: "0xabc4000000000000000000000000000000000004",
-  },
-  {
-    name: "Beta Buyer",
-    address: "0xabc5000000000000000000000000000000000005",
-  },
-  {
-    name: "Gamma Buyer",
-    address: "0xabc6000000000000000000000000000000000006",
-  },
+  { name: "Alpha Buyer", address: "0xabc4000000000000000000000000000000000004" },
+  { name: "Beta Buyer",  address: "0xabc5000000000000000000000000000000000005" },
+  { name: "Gamma Buyer", address: "0xabc6000000000000000000000000000000000006" },
 ];
 
-// Services to buy — vary by buyer so calls look organic
+// Services to buy — each entry includes the matching TRID price for the on-chain mirror
 const SERVICE_POOL = [
-  { endpoint: "/data/price-feed?symbols=BTC,ETH,USDC,SOL", service_type: "price_feed",    price: "0.001" },
-  { endpoint: "/data/fx-rates?base=USD&targets=EUR,GBP,NGN,JPY", service_type: "fx_rates",     price: "0.001" },
-  { endpoint: "/data/risk-score?address=0x3315ebaab06d6266e92f6063b9360ae10d24F0a0", service_type: "risk_score",   price: "0.005" },
-  { endpoint: "/data/compute-score?portfolio=BTC:0.4,ETH:0.3,SOL:0.2,USDC:0.1", service_type: "compute_score", price: "0.020" },
+  { endpoint: "/data/price-feed?symbols=BTC,ETH,USDC,SOL",                          service_type: "price_feed",    price_usdc: "0.001", trid_micro: 1_000n   },
+  { endpoint: "/data/fx-rates?base=USD&targets=EUR,GBP,NGN,JPY",                    service_type: "fx_rates",      price_usdc: "0.001", trid_micro: 1_000n   },
+  { endpoint: "/data/risk-score?address=0x3315ebaab06d6266e92f6063b9360ae10d24F0a0", service_type: "risk_score",    price_usdc: "0.005", trid_micro: 5_000n   },
+  { endpoint: "/data/compute-score?portfolio=BTC:0.4,ETH:0.3,SOL:0.2,USDC:0.1",    service_type: "compute_score", price_usdc: "0.020", trid_micro: 20_000n  },
 ];
 
-function sleep(ms: number) {
-  return new Promise<void>((r) => setTimeout(r, ms));
+function sleep(ms: number) { return new Promise<void>(r => setTimeout(r, ms)); }
+function jitter(min: number, max: number) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+// ── TRID balance check ─────────────────────────────────────────────────────────
+async function getTridBalance(): Promise<bigint> {
+  if (!buyerAccount) return 0n;
+  try {
+    return await publicClient.readContract({
+      address: TRID_ADDRESS,
+      abi: ERC20_ABI,
+      functionName: "balanceOf",
+      args: [buyerAccount.address],
+    });
+  } catch { return 0n; }
 }
 
-function jitter(min: number, max: number) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
+// ── Auto-claim TRID from faucet ────────────────────────────────────────────────
+async function autoClaimTrid(): Promise<void> {
+  if (!walletClient || !buyerAccount || !FAUCET_ADDRESS) {
+    if (!FAUCET_ADDRESS) console.warn("[BuyerAgent] TRIDENT_FAUCET_ADDRESS not set — skipping auto-claim");
+    return;
+  }
+  try {
+    const canClaim = await publicClient.readContract({
+      address: FAUCET_ADDRESS,
+      abi: FAUCET_ABI,
+      functionName: "canClaim",
+      args: [buyerAccount.address],
+    });
+    if (!canClaim) {
+      console.log("[BuyerAgent] Auto-claim: faucet cooldown active — will retry next cycle");
+      return;
+    }
+    const txHash = await walletClient.writeContract({
+      address: FAUCET_ADDRESS,
+      abi: FAUCET_ABI,
+      functionName: "claim",
+    });
+    console.log(`[BuyerAgent] ✅ Auto-claimed TRID from faucet`);
+    console.log(`[BuyerAgent]    https://testnet.arcscan.app/tx/${txHash}`);
+  } catch (err: any) {
+    console.warn(`[BuyerAgent] Auto-claim failed (non-fatal): ${err?.message}`);
+  }
 }
 
+// ── Auto top-up Circle Gateway USDC ───────────────────────────────────────────
+async function autoTopUpGateway(): Promise<boolean> {
+  if (!gatewayClient) return false;
+  try {
+    const bal    = await gatewayClient.getBalances();
+    const gwBal  = Number(bal?.gateway?.formattedTotal ?? "0");
+    const walBal = Number(bal?.wallet?.formatted ?? "0");
+
+    if (gwBal >= GATEWAY_TOPUP_MIN) return true; // healthy, nothing to do
+
+    if (walBal < Number(GATEWAY_TOPUP_AMOUNT)) {
+      console.warn(
+        `[BuyerAgent] Gateway low (${gwBal} USDC) but wallet also low (${walBal} USDC).\n` +
+        `   Fund ${gatewayClient.address} at https://faucet.circle.com`
+      );
+      return false;
+    }
+
+    console.log(`[BuyerAgent] Gateway low (${gwBal} USDC) — auto-depositing ${GATEWAY_TOPUP_AMOUNT} USDC`);
+    await gatewayClient.deposit(GATEWAY_TOPUP_AMOUNT as any);
+    console.log(`[BuyerAgent] ✅ Auto-deposited ${GATEWAY_TOPUP_AMOUNT} USDC into Circle Gateway`);
+    await sleep(5_000); // brief settle
+    return true;
+  } catch (err: any) {
+    console.warn(`[BuyerAgent] Auto top-up failed (non-fatal): ${err?.message}`);
+    return false;
+  }
+}
+
+// ── On-chain TRID mirror ───────────────────────────────────────────────────────
+// Every x402 Gateway payment is mirrored as an ERC-20 TRID transfer so it's
+// visible on ArcScan and verifiable by hackathon judges.
+async function sendTridMirror(tridAmount: bigint, serviceName: string): Promise<void> {
+  if (!walletClient || !buyerAccount) return;
+  try {
+    const txHash = await walletClient.writeContract({
+      address: TRID_ADDRESS,
+      abi: ERC20_ABI,
+      functionName: "transfer",
+      args: [SELLER_ADDRESS, tridAmount],
+    });
+    console.log(`[BuyerAgent] ⛓ TRID mirror (${serviceName}): ${(Number(tridAmount) / 1_000_000).toFixed(4)} TRID → seller`);
+    console.log(`[BuyerAgent]    https://testnet.arcscan.app/tx/${txHash}`);
+  } catch (err: any) {
+    console.warn(`[BuyerAgent] TRID mirror failed (non-fatal): ${err?.shortMessage ?? err?.message}`);
+  }
+}
+
+// ── Record payment in Python dashboard ────────────────────────────────────────
 async function recordPayment(
   buyer: { name: string; address: string },
   service_type: string,
@@ -55,32 +189,26 @@ async function recordPayment(
   tx_ref: string
 ) {
   try {
-    const body = JSON.stringify({
-      buyer_address:   buyer.address,
-      buyer_name:      buyer.name,
-      seller_address:  process.env.SELLER_ADDRESS || "0x3315ebaab06d6266e92f6063b9360ae10d24F0a0",
-      service_type,
-      amount_usdc,
-      tx_ref,
-      source:          "circle_gateway_x402",
-    });
-
-    const r = await fetch(`${PYTHON_API}/api/internal/record-payment`, {
+    await fetch(`${PYTHON_API}/api/internal/record-payment`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body,
+      body: JSON.stringify({
+        buyer_address:  buyer.address,
+        buyer_name:     buyer.name,
+        seller_address: SELLER_ADDRESS,
+        service_type,
+        amount_usdc,
+        tx_ref,
+        source: "circle_gateway_x402",
+      }),
       signal: AbortSignal.timeout(5000),
     });
-
-    if (!r.ok) {
-      console.warn(`[BuyerAgent] record-payment HTTP ${r.status}`);
-    }
   } catch (e: any) {
-    // Non-fatal — dashboard just won't show this payment immediately
     console.warn(`[BuyerAgent] record-payment failed (non-fatal): ${e.message}`);
   }
 }
 
+// ── Single purchase ────────────────────────────────────────────────────────────
 async function buyOnce(buyer: (typeof BUYERS)[0]) {
   if (!gatewayClient || !buyerEnabled) return;
 
@@ -88,51 +216,52 @@ async function buyOnce(buyer: (typeof BUYERS)[0]) {
   const url  = `${SELF_URL}${svc.endpoint}`;
 
   try {
-    const { data, formattedAmount, transaction } = await gatewayClient.pay(url);
-    console.log(
-      `[BuyerAgent] ${buyer.name} paid ${formattedAmount} USDC → ${svc.service_type} ✓`
-    );
+    const { formattedAmount, transaction } = await gatewayClient.pay(url);
+    console.log(`[BuyerAgent] ${buyer.name} paid ${formattedAmount} USDC → ${svc.service_type} ✓`);
+
+    // Fire TRID mirror on-chain (non-blocking)
+    sendTridMirror(svc.trid_micro, svc.service_type).catch(() => {});
+
+    // Record in dashboard
     await recordPayment(buyer, svc.service_type, formattedAmount, transaction);
-    return data;
   } catch (err: any) {
     const msg = err?.message || String(err);
-    // Insufficient Gateway balance → print helpful hint, back off
     if (msg.includes("insufficient") || msg.includes("balance")) {
-      console.warn(
-        `[BuyerAgent] ${buyer.name}: insufficient Gateway balance.\n` +
-        `   Run: circle gateway deposit --amount 2 --address ${gatewayClient.address} --chain ARC-TESTNET --method direct\n` +
-        `   Or visit: https://faucet.circle.com`
-      );
+      console.warn(`[BuyerAgent] ${buyer.name}: insufficient Gateway balance — triggering top-up`);
+      await autoTopUpGateway();
     } else {
       console.warn(`[BuyerAgent] ${buyer.name} payment failed: ${msg}`);
     }
   }
 }
 
-async function checkGatewayBalance(): Promise<number> {
-  try {
-    const balances = await gatewayClient!.getBalances();
-    return Number(balances.gateway.formattedTotal ?? "0");
-  } catch {
-    return 0;
-  }
-}
-
+// ── Main loop ──────────────────────────────────────────────────────────────────
 async function buyerLoop(buyer: (typeof BUYERS)[0], initialDelay: number) {
   await sleep(initialDelay);
+
   while (true) {
-    // Skip buy if Gateway balance is critically low — preserve for manual /hire calls
-    const gwBalance = await checkGatewayBalance();
-    if (gwBalance < 0.05) {
-      console.warn(
-        `[BuyerAgent] Gateway balance low (${gwBalance} USDC) — pausing auto-buys.\n` +
-        `   Refill: re-run scripts/deposit-gateway.mjs after funding ${gatewayClient!.address} at faucet.circle.com`
+    // 1. Check TRID balance → auto-claim if < 5 TRID
+    const tridBal = await getTridBalance();
+    if (tridBal < TRID_CLAIM_THRESHOLD) {
+      console.log(
+        `[BuyerAgent] ${buyer.name}: TRID balance ${(Number(tridBal) / 1_000_000).toFixed(4)} < 5 — auto-claiming`
       );
-      await sleep(10 * 60_000); // check again in 10 min
+      await autoClaimTrid();
+    }
+
+    // 2. Auto top-up Gateway USDC if low
+    const gwHealthy = await autoTopUpGateway();
+    if (!gwHealthy) {
+      console.warn("[BuyerAgent] Gateway balance critically low — pausing 10 min");
+      await sleep(10 * 60_000);
       continue;
     }
+
+    // 3. Make the x402 purchase (+ fires TRID mirror on-chain)
     await buyOnce(buyer);
-    await sleep(jitter(50 * 60_000, 70 * 60_000)); // ~1 call per hour per buyer
+
+    // 4. Wait ~1 hour before next purchase
+    await sleep(jitter(50 * 60_000, 70 * 60_000));
   }
 }
 
@@ -144,10 +273,12 @@ export function startBuyerAgents() {
   }
 
   console.log(`🤖 Starting ${BUYERS.length} Circle Gateway buyer agents...`);
+  console.log(`   TRID mirror → ${SELLER_ADDRESS}`);
+  console.log(`   Auto-claim threshold: 5 TRID | Auto top-up threshold: ${GATEWAY_TOPUP_MIN} USDC`);
+
   BUYERS.forEach((buyer, i) => {
-    // Stagger startup by 10–30s so they don't all fire at once
     const delay = jitter(10_000, 30_000) * (i + 1);
-    buyerLoop(buyer, delay).catch((e) =>
+    buyerLoop(buyer, delay).catch(e =>
       console.error(`[BuyerAgent] ${buyer.name} loop crashed:`, e)
     );
   });
