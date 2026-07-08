@@ -20,8 +20,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import { gatewayClient, buyerEnabled } from "./gatewayClient.js";
 import { isTurbo } from "./turboMode.js";
 
-// 3 agents × 1 tx / ~3 s ≈ 60 tx/min in turbo mode
-const TURBO_SLEEP_MS  = () => jitter(2_800,  3_200);
+// 3 agents × 1 tx / ~6 s ≈ 30 tx/min — fast enough to demo without flooding Arc testnet txpool
+const TURBO_SLEEP_MS  = () => jitter(5_500, 6_500);
 const NORMAL_SLEEP_MS = () => jitter(50 * 60_000, 70 * 60_000);
 
 const PYTHON_API = process.env.PYTHON_API_URL || "http://localhost:8000";
@@ -211,22 +211,37 @@ async function sendTridMirror(tridAmount: bigint, serviceName: string): Promise<
     return;
   }
 
-  try {
-    const txHash = await walletClient.writeContract({
-      address:      TRID_ADDRESS,
-      abi:          ERC20_ABI,
-      functionName: "transfer",
-      args:         [SELLER_ADDRESS, tridAmount],
-      chain:        arcTestnet,
-      account:      buyerAccount,
-    });
-    console.log(`[BuyerAgent] ⛓ TRID mirror (${serviceName}): ${(Number(tridAmount) / 1_000_000).toFixed(4)} TRID → seller`);
-    console.log(`[BuyerAgent]    https://testnet.arcscan.app/tx/${txHash}`);
-  } catch (err: any) {
-    // Log full error so we can diagnose RPC vs contract vs balance issues
-    const detail = err?.cause?.message ?? err?.shortMessage ?? err?.message ?? String(err);
-    console.warn(`[BuyerAgent] TRID mirror failed (non-fatal): ${detail}`);
-    console.warn(`[BuyerAgent]   contract: ${TRID_ADDRESS} | to: ${SELLER_ADDRESS} | amount: ${tridAmount}`);
+  // Retry up to 4× with exponential backoff — Arc testnet txpool fills under turbo load
+  const MAX_ATTEMPTS = 4;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const txHash = await walletClient.writeContract({
+        address:      TRID_ADDRESS,
+        abi:          ERC20_ABI,
+        functionName: "transfer",
+        args:         [SELLER_ADDRESS, tridAmount],
+        chain:        arcTestnet,
+        account:      buyerAccount,
+      });
+      console.log(`[BuyerAgent] ⛓ TRID mirror (${serviceName}): ${(Number(tridAmount) / 1_000_000).toFixed(4)} TRID`);
+      console.log(`[BuyerAgent]    https://testnet.arcscan.app/tx/${txHash}`);
+      return; // success
+    } catch (err: any) {
+      const detail = err?.cause?.message ?? err?.shortMessage ?? err?.message ?? String(err);
+      const isPoolFull = detail.toLowerCase().includes("txpool is full") ||
+                         detail.toLowerCase().includes("pool is full");
+
+      if (isPoolFull && attempt < MAX_ATTEMPTS) {
+        const backoff = attempt * 8_000; // 8s → 16s → 24s
+        console.warn(`[BuyerAgent] txpool full — retry ${attempt}/${MAX_ATTEMPTS - 1} in ${backoff / 1000}s`);
+        await sleep(backoff);
+        continue;
+      }
+
+      // Non-retryable or max retries hit
+      console.warn(`[BuyerAgent] TRID mirror failed after ${attempt} attempt(s): ${detail}`);
+      return;
+    }
   }
 }
 
