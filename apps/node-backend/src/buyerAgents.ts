@@ -96,6 +96,19 @@ const SERVICE_POOL = [
 function sleep(ms: number) { return new Promise<void>(r => setTimeout(r, ms)); }
 function jitter(min: number, max: number) { return Math.floor(Math.random() * (max - min + 1)) + min; }
 
+/**
+ * Interruptible wait — polls every second so toggling turbo mode takes effect
+ * within 1 s instead of waiting for the full sleep to expire.
+ */
+async function waitForNextCycle(): Promise<void> {
+  const snapshot = isTurbo();
+  const deadline = Date.now() + (snapshot ? TURBO_SLEEP_MS() : NORMAL_SLEEP_MS());
+  while (Date.now() < deadline) {
+    await sleep(1_000);
+    if (isTurbo() !== snapshot) return; // turbo toggled — fire next cycle immediately
+  }
+}
+
 // ── TRID balance check ─────────────────────────────────────────────────────────
 async function getTridBalance(): Promise<bigint> {
   if (!buyerAccount) return 0n;
@@ -265,8 +278,8 @@ async function buyerLoop(buyer: (typeof BUYERS)[0], initialDelay: number) {
     // 3. Make the x402 purchase (+ fires TRID mirror on-chain)
     await buyOnce(buyer);
 
-    // 4. Wait — turbo: ~3 s (→ 60 tx/min across 3 agents) | normal: ~1 hr
-    await sleep(isTurbo() ? TURBO_SLEEP_MS() : NORMAL_SLEEP_MS());
+    // 4. Interruptible wait — wakes within 1 s if turbo is toggled
+    await waitForNextCycle();
   }
 }
 
