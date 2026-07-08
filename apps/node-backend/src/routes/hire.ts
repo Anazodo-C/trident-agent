@@ -92,6 +92,8 @@ hireRouter.post("/", async (req, res) => {
     paymentSource = "shared_agent";
   }
 
+  console.log(`[Hire] ${service_type} | source=${paymentSource} | buyer=${buyer_address?.slice(0,10) ?? "anon"}`);
+
   // ── Retrobot audit: POST to /retrobot/audit with x402 ──
   if (service_type === "retrobot_audit") {
     if (!client) {
@@ -101,6 +103,7 @@ hireRouter.post("/", async (req, res) => {
       });
     }
     try {
+      console.log(`[Hire] → x402 POST /retrobot/audit | payer=${client.address}`);
       const { data, formattedAmount, transaction } = await client.pay(
         `${SELF_URL()}/retrobot/audit`,
         {
@@ -108,6 +111,7 @@ hireRouter.post("/", async (req, res) => {
           body: { wallet_address: buyer_address || "0x0000000000000000000000000000000000000001" },
         }
       );
+      console.log(`[Hire] ✅ retrobot_audit paid ${formattedAmount} USDC | tx=${transaction}`);
       return res.json({
         data,
         service_type,
@@ -155,7 +159,9 @@ hireRouter.post("/", async (req, res) => {
   // Real x402 payment
   try {
     const url = `${SELF_URL()}${endpoint}`;
+    console.log(`[Hire] → x402 GET ${url} | payer=${client.address}`);
     const { data, formattedAmount, transaction } = await client.pay(url);
+    console.log(`[Hire] ✅ paid ${formattedAmount} USDC | tx=${transaction} | source=${paymentSource}`);
 
     return res.json({
       data,
@@ -168,6 +174,7 @@ hireRouter.post("/", async (req, res) => {
     });
   } catch (err: any) {
     const msg = err?.message || String(err);
+    console.warn(`[Hire] ❌ ${service_type} failed (${paymentSource}): ${msg}`);
 
     if (msg.includes("insufficient") || msg.includes("balance") || msg.includes("not enough")) {
       const hint = paymentSource === "user_agent"
