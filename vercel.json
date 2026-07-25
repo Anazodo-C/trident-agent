@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "installCommand": "npm install --workspace @trident/frontend --include-workspace-root",
+  "buildCommand": "npm run build -w @trident/frontend",
+  "outputDirectory": "apps/frontend/dist",
+  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
+}
