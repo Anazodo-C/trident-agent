@@ -1,0 +1,132 @@
+import { useMemo, useState } from 'react'
+import { ArrowRight, Ban, Play } from 'lucide-react'
+import type { ExecutionPlan, PlanStep } from '../../lib/types.ts'
+import { usdc } from '../../lib/format.ts'
+
+interface Props {
+  plan: ExecutionPlan
+  onApprove: (steps: PlanStep[], budgetUsdc: number | null) => void
+  onCancel: () => void
+}
+
+export function ApprovalCard({ plan, onApprove, onCancel }: Props) {
+  const [excluded, setExcluded] = useState<Set<number>>(new Set())
+  const [budgetInput, setBudgetInput] = useState('')
+
+  const approvedSteps = useMemo(
+    () =>
+      plan.steps
+        .filter((s) => !excluded.has(s.stepIndex))
+        .map((s, i) => ({ ...s, stepIndex: i })),
+    [plan.steps, excluded],
+  )
+
+  const estimatedTotal = approvedSteps.reduce((sum, s) => sum + s.estimatedCostUsdc, 0)
+  const budget = budgetInput.trim() === '' ? null : Number.parseFloat(budgetInput)
+  const budgetInvalid = budget !== null && (!Number.isFinite(budget) || budget <= 0)
+  const budgetTooLow = budget !== null && !budgetInvalid && budget < estimatedTotal
+
+  if (plan.steps.length === 0) {
+    return (
+      <div className="panel p-5">
+        <h3 className="heading-mono mb-3">No Viable Plan</h3>
+        <p className="text-sm leading-relaxed text-slate-300">{plan.reasoning}</p>
+        {plan.minCostUsdc !== undefined && (
+          <p className="mt-3 text-sm text-slate-400">
+            Minimum workable budget:{' '}
+            <span className="price">${usdc(plan.minCostUsdc)}</span>
+          </p>
+        )}
+        <button className="btn-ghost mt-5" onClick={onCancel}>
+          Start over
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="panel overflow-hidden">
+      <div className="border-b border-[#1A7FFF]/20 px-5 py-4">
+        <h3 className="heading-mono">Execution Plan</h3>
+        <p className="mt-2 text-sm leading-relaxed text-slate-400">{plan.reasoning}</p>
+      </div>
+
+      <ol className="divide-y divide-[#1A7FFF]/10">
+        {plan.steps.map((step) => {
+          const isExcluded = excluded.has(step.stepIndex)
+          return (
+            <li
+              key={step.stepIndex}
+              className={`flex gap-3 px-5 py-4 transition-opacity ${isExcluded ? 'opacity-35' : ''}`}
+            >
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4 shrink-0 accent-[#00D4FF]"
+                checked={!isExcluded}
+                aria-label={`Include step ${step.stepIndex + 1}`}
+                onChange={(e) => {
+                  const next = new Set(excluded)
+                  if (e.target.checked) next.delete(step.stepIndex)
+                  else next.add(step.stepIndex)
+                  setExcluded(next)
+                }}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <span className="font-mono text-sm text-slate-100">{step.serviceName}</span>
+                  <span className="price text-sm">~${usdc(step.estimatedCostUsdc, 3)}</span>
+                </div>
+                <p className="mt-1 text-sm text-slate-400">{step.purpose}</p>
+                <p className="mt-1.5 truncate font-mono text-[11px] text-slate-600">
+                  {step.httpMethod} {step.endpointUrl}
+                </p>
+              </div>
+            </li>
+          )
+        })}
+      </ol>
+
+      <div className="border-t border-[#1A7FFF]/20 px-5 py-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <span className="heading-mono">Estimated total</span>
+          <span className="price text-lg">${usdc(estimatedTotal, 3)}</span>
+        </div>
+
+        <label className="mt-4 flex flex-col gap-1.5">
+          <span className="heading-mono">Budget cap (optional)</span>
+          <input
+            className="field font-mono"
+            inputMode="decimal"
+            placeholder="No cap for this run"
+            value={budgetInput}
+            onChange={(e) => setBudgetInput(e.target.value)}
+          />
+          {budgetInvalid && (
+            <span className="text-xs text-[#FF4466]">Enter a positive number.</span>
+          )}
+          {budgetTooLow && (
+            <span className="text-xs text-[#FFA040]">
+              Below the estimate — the run will stop partway through.
+            </span>
+          )}
+        </label>
+
+        <div className="mt-5 flex flex-col gap-2 sm:flex-row">
+          <button
+            className="btn-primary flex-1"
+            disabled={approvedSteps.length === 0 || budgetInvalid}
+            onClick={() => onApprove(approvedSteps, budget)}
+          >
+            <Play className="h-4 w-4" />
+            Approve &amp; run
+            <ArrowRight className="h-4 w-4" />
+          </button>
+          <button className="btn-ghost" onClick={onCancel}>
+            <Ban className="h-4 w-4" />
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}

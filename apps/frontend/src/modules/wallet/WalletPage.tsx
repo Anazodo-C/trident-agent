@@ -1,0 +1,345 @@
+import { useEffect, useState } from 'react'
+import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
+  Check,
+  Clipboard,
+  ExternalLink,
+  Loader2,
+  RefreshCw,
+  ShieldCheck,
+} from 'lucide-react'
+import { api } from '../../lib/api.ts'
+import { useAgentStore } from '../../store/agentStore.ts'
+import { useAuthStore } from '../../store/authStore.ts'
+import { useWalletStore } from '../../store/walletStore.ts'
+import { copyToClipboard, shortAddress, usdc } from '../../lib/format.ts'
+import { DepositPanel } from './DepositPanel.tsx'
+
+export function WalletPage() {
+  const user = useAuthStore((s) => s.user)
+  const refreshUser = useAuthStore((s) => s.refreshUser)
+  const unlockedKey = useAgentStore((s) => s.unlockedKey)
+  const requestUnlock = useAgentStore((s) => s.requestUnlock)
+  const { balance, depositInfo, loading, error, refresh, loadDepositInfo } = useWalletStore()
+
+  useEffect(() => {
+    void refresh(unlockedKey ?? undefined)
+    void loadDepositInfo()
+  }, [refresh, loadDepositInfo, unlockedKey])
+
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+      <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="font-mono text-lg uppercase tracking-widest text-slate-100">Wallet</h1>
+          <p className="mt-2 text-sm text-slate-400">
+            Your self-custody agent wallet on {balance?.chain ?? user?.defaultChain ?? 'ARC-TESTNET'}.
+          </p>
+        </div>
+        <button
+          className="btn-ghost"
+          onClick={() => refresh(unlockedKey ?? undefined)}
+          disabled={loading}
+        >
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+      </header>
+
+      {error && (
+        <div className="mb-5 rounded-xl border border-[#FF4466]/40 bg-[#FF4466]/10 p-4 text-sm text-[#FF4466]">
+          {error}
+        </div>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <BalancePanel onUnlock={() => requestUnlock(() => void refresh(useAgentStore.getState().unlockedKey ?? undefined))} />
+        <DepositPanel />
+        <GatewayPanel />
+        <SpendingCapPanel onSaved={refreshUser} />
+      </div>
+
+      <p className="mt-6 text-xs leading-relaxed text-slate-600">
+        {depositInfo?.fiatOnramp.note}
+      </p>
+    </div>
+  )
+}
+
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="panel p-5">
+      <h2 className="heading-mono mb-4">{title}</h2>
+      {children}
+    </section>
+  )
+}
+
+function BalancePanel({ onUnlock }: { onUnlock: () => void }) {
+  const balance = useWalletStore((s) => s.balance)
+  const unlockedKey = useAgentStore((s) => s.unlockedKey)
+  const [copied, setCopied] = useState(false)
+
+  const explorerUrl =
+    balance?.explorerBase && balance.eoaAddress
+      ? `${balance.explorerBase}/address/${balance.eoaAddress}`
+      : null
+
+  return (
+    <Panel title="Balance">
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <code className="font-mono text-sm text-slate-200">
+          {shortAddress(balance?.eoaAddress, 6)}
+        </code>
+        <button
+          onClick={async () => setCopied(await copyToClipboard(balance?.eoaAddress ?? ''))}
+          className="text-slate-500 transition-colors hover:text-[#00D4FF]"
+          aria-label="Copy address"
+        >
+          {copied ? (
+            <Check className="h-3.5 w-3.5 text-[#00FF88]" />
+          ) : (
+            <Clipboard className="h-3.5 w-3.5" />
+          )}
+        </button>
+        {explorerUrl && (
+          <a
+            href={explorerUrl}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="text-slate-500 transition-colors hover:text-[#00D4FF]"
+            aria-label="View on explorer"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </a>
+        )}
+      </div>
+
+      <dl className="flex flex-col gap-3">
+        <Row label="USDC (wallet)" value={usdc(balance?.walletUsdc)} />
+        <Row
+          label="USDC (gateway)"
+          value={balance?.gatewayUsdc !== null && balance?.gatewayUsdc !== undefined ? usdc(balance.gatewayUsdc) : 'locked'}
+          dim={balance?.gatewayUsdc == null}
+        />
+        {/*
+          On Arc the native gas token is also called USDC but is a separate,
+          18-decimal balance from the ERC-20 above — label it so they don't read
+          as the same number.
+        */}
+        <Row
+          label={`${balance?.nativeSymbol ?? 'Native'} (native, for gas)`}
+          value={Number.parseFloat(balance?.native ?? '0').toFixed(5)}
+        />
+      </dl>
+
+      {!unlockedKey && (
+        <button className="btn-ghost mt-5 w-full" onClick={onUnlock}>
+          <ShieldCheck className="h-4 w-4" />
+          Unlock to see Gateway balance
+        </button>
+      )}
+
+      {balance?.gatewayWarning && (
+        <p className="mt-4 break-words rounded-lg border border-[#FFA040]/30 bg-[#FFA040]/5 p-2.5 text-[11px] leading-relaxed text-[#FFA040]">
+          Gateway balance unavailable: {balance.gatewayWarning}
+        </p>
+      )}
+    </Panel>
+  )
+}
+
+function Row({ label, value, dim }: { label: string; value: string; dim?: boolean }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="text-sm text-slate-400">{label}</dt>
+      <dd className={`font-mono text-sm ${dim ? 'text-slate-600' : 'text-[#00D4FF]'}`}>{value}</dd>
+    </div>
+  )
+}
+
+function GatewayPanel() {
+  const unlockedKey = useAgentStore((s) => s.unlockedKey)
+  const requestUnlock = useAgentStore((s) => s.requestUnlock)
+  const refresh = useWalletStore((s) => s.refresh)
+
+  const [depositAmount, setDepositAmount] = useState('')
+  const [withdrawAmount, setWithdrawAmount] = useState('')
+  const [busy, setBusy] = useState<'deposit' | 'withdraw' | null>(null)
+  const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
+
+  async function run(kind: 'deposit' | 'withdraw') {
+    const key = useAgentStore.getState().unlockedKey
+    if (!key) {
+      requestUnlock(() => void run(kind))
+      return
+    }
+    const amount = kind === 'deposit' ? depositAmount : withdrawAmount
+    if (!amount.trim()) return
+
+    setBusy(kind)
+    setMessage(null)
+    try {
+      const res =
+        kind === 'deposit'
+          ? await api.gatewayDeposit(amount, key)
+          : await api.gatewayWithdraw(amount, key)
+      setMessage({
+        tone: 'ok',
+        text: `${kind === 'deposit' ? 'Deposited' : 'Withdrew'} ${amount} USDC. Gateway balance: ${res.newGatewayBalance}`,
+      })
+      if (kind === 'deposit') setDepositAmount('')
+      else setWithdrawAmount('')
+      void refresh(key)
+    } catch (err) {
+      setMessage({ tone: 'err', text: err instanceof Error ? err.message : 'Transaction failed' })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <Panel title="Gateway">
+      <p className="mb-5 text-sm leading-relaxed text-slate-400">
+        Your agent pays x402 services from its Gateway balance. Move USDC in before a run.
+      </p>
+
+      <div className="flex flex-col gap-4">
+        <AmountRow
+          label="Wallet → Gateway"
+          value={depositAmount}
+          onChange={setDepositAmount}
+          busy={busy === 'deposit'}
+          disabled={busy !== null}
+          onSubmit={() => run('deposit')}
+          Icon={ArrowDownToLine}
+          action="Deposit"
+        />
+        <AmountRow
+          label="Gateway → Wallet"
+          value={withdrawAmount}
+          onChange={setWithdrawAmount}
+          busy={busy === 'withdraw'}
+          disabled={busy !== null}
+          onSubmit={() => run('withdraw')}
+          Icon={ArrowUpFromLine}
+          action="Withdraw"
+        />
+      </div>
+
+      {!unlockedKey && (
+        <p className="mt-4 text-xs text-slate-500">
+          You will be asked to unlock your wallet before the transaction is signed.
+        </p>
+      )}
+
+      {message && (
+        <p
+          className={`mt-4 break-words text-xs ${message.tone === 'ok' ? 'text-[#00FF88]' : 'text-[#FF4466]'}`}
+        >
+          {message.text}
+        </p>
+      )}
+    </Panel>
+  )
+}
+
+function AmountRow({
+  label,
+  value,
+  onChange,
+  busy,
+  disabled,
+  onSubmit,
+  Icon,
+  action,
+}: {
+  label: string
+  value: string
+  onChange: (v: string) => void
+  busy: boolean
+  disabled: boolean
+  onSubmit: () => void
+  Icon: typeof ArrowDownToLine
+  action: string
+}) {
+  return (
+    <div>
+      <span className="heading-mono">{label}</span>
+      <div className="mt-1.5 flex gap-2">
+        <input
+          className="field flex-1 font-mono"
+          inputMode="decimal"
+          placeholder="0.00"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <button
+          className="btn-ghost shrink-0"
+          onClick={onSubmit}
+          disabled={disabled || !value.trim()}
+        >
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Icon className="h-4 w-4" />}
+          <span className="hidden sm:inline">{action}</span>
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function SpendingCapPanel({ onSaved }: { onSaved: () => void }) {
+  const user = useAuthStore((s) => s.user)
+  const [cap, setCap] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
+
+  useEffect(() => {
+    if (user?.spendingCapUsdc !== undefined) setCap(String(user.spendingCapUsdc))
+  }, [user?.spendingCapUsdc])
+
+  async function save() {
+    const parsed = Number.parseFloat(cap)
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setMessage({ tone: 'err', text: 'Enter a positive number.' })
+      return
+    }
+    setBusy(true)
+    setMessage(null)
+    try {
+      await api.setSpendingCap(parsed)
+      onSaved()
+      setMessage({ tone: 'ok', text: `Cap set to $${parsed.toFixed(2)} USDC per run.` })
+    } catch (err) {
+      setMessage({ tone: 'err', text: err instanceof Error ? err.message : 'Could not save' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Panel title="Spending Cap">
+      <p className="mb-4 text-sm leading-relaxed text-slate-400">
+        Hard ceiling on what a single run may spend. Trident checks this before every step,
+        independently of any per-run budget.
+      </p>
+      <div className="flex gap-2">
+        <input
+          className="field flex-1 font-mono"
+          inputMode="decimal"
+          value={cap}
+          onChange={(e) => setCap(e.target.value)}
+        />
+        <button className="btn-primary shrink-0" onClick={save} disabled={busy}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Save
+        </button>
+      </div>
+      {message && (
+        <p className={`mt-3 text-xs ${message.tone === 'ok' ? 'text-[#00FF88]' : 'text-[#FF4466]'}`}>
+          {message.text}
+        </p>
+      )}
+    </Panel>
+  )
+}

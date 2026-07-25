@@ -1,220 +1,135 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+@import '@rainbow-me/rainbowkit/styles.css';
+
+/*
+ * Tailwind v4 takes its design tokens from CSS rather than tailwind.config.ts.
+ * These are the sci-fi palette values from the build spec.
+ */
+@theme {
+  --color-navy: #0a0e1a;
+  --color-navy-800: #0d1526;
+  --color-navy-700: #111d35;
+
+  --color-cyan: #00d4ff;
+  --color-cyan-dim: #0099bb;
+
+  --color-signal-blue: #1a7fff;
+  --color-signal-green: #00ff88;
+  --color-signal-red: #ff4466;
+  --color-signal-orange: #ffa040;
+
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
 
 @layer base {
-  :root {
-    /* Ocean light mode */
-    --bg-primary:    #e0f7ff;
-    --bg-secondary:  #caf0f8;
-    --bg-card:       #ffffffee;
-    --border:        #ade8f4;
-    --text-primary:  #03045e;
-    --text-secondary:#023e8a;
-    --text-muted:    #0077b6;
-    --accent:        #0096c7;
-    --accent-bright: #00b4d8;
+  html {
+    color-scheme: dark;
   }
-
-  .dark {
-    /* Deep ocean night mode */
-    --bg-primary:    #03045e;
-    --bg-secondary:  #020038;
-    --bg-card:       rgba(2,62,138,0.22);
-    --border:        rgba(0,119,182,0.28);
-    --text-primary:  #caf0f8;
-    --text-secondary:#ade8f4;
-    --text-muted:    #48cae4;
-    --accent:        #00b4d8;
-    --accent-bright: #48cae4;
-  }
-
-  * { box-sizing: border-box; }
-
-  html { scroll-behavior: smooth; }
 
   body {
-    color: var(--text-primary);
-    font-family: system-ui, -apple-system, sans-serif;
-    -webkit-font-smoothing: antialiased;
+    margin: 0;
     min-height: 100vh;
-    transition: background-color 0.4s, color 0.3s;
-    background: linear-gradient(
-      160deg,
-      #caf0f8 0%,
-      #ade8f4 25%,
-      #90e0ef 50%,
-      #caf0f8 75%,
-      #e0f7ff 100%
-    );
-    background-size: 300% 300%;
-    animation: ocean-wave 14s ease-in-out infinite;
+    background-color: var(--color-navy);
+    color: rgb(226 232 240);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
   }
 
-  body.dark {
-    background: linear-gradient(
-      160deg,
-      #03045e 0%,
-      #023e8a 40%,
-      #03045e 70%,
-      #020038 100%
-    );
-    background-size: 300% 300%;
-    animation: ocean-wave 14s ease-in-out infinite;
+  /* Faint hex grid, 20% opacity, drawn once as a tiling data URI. */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0.2;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='96' viewBox='0 0 56 96'%3E%3Cpath d='M28 0L56 16v32L28 64L0 48V16z' fill='none' stroke='%231A2A4A' stroke-width='1'/%3E%3Cpath d='M28 64l28 16v32L28 128L0 112V80z' fill='none' stroke='%231A2A4A' stroke-width='1'/%3E%3C/svg%3E");
+    background-size: 56px 96px;
   }
 
-  @keyframes ocean-wave {
-    0%, 100% { background-position: 0% 50%; }
-    50%       { background-position: 100% 50%; }
+  #root {
+    position: relative;
+    z-index: 1;
   }
 
-  ::-webkit-scrollbar { width: 5px; height: 5px; }
-  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-navy);
+  }
   ::-webkit-scrollbar-thumb {
-    background: var(--accent);
-    border-radius: 9999px;
-    opacity: 0.5;
+    background: #1a2a4a;
+    border-radius: 6px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #24406b;
   }
 }
 
 @layer components {
-  /* ── Cards ── */
-  .card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    @apply rounded-2xl p-5 shadow-sm;
-    backdrop-filter: blur(14px);
+  .panel {
+    @apply rounded-xl border border-[#1A7FFF]/20 bg-[#0D1526]/80 backdrop-blur-sm;
   }
 
-  /* ── Buttons ── */
+  /* Tailwind v4 cannot @apply another component class, so the panel base is repeated. */
+  .panel-interactive {
+    @apply rounded-xl border border-[#1A7FFF]/20 bg-[#0D1526]/80 backdrop-blur-sm
+           transition-all duration-200;
+  }
+  .panel-interactive:hover {
+    @apply border-[#00D4FF]/60;
+    box-shadow: 0 0 24px rgba(0, 212, 255, 0.12);
+  }
+
+  .heading-mono {
+    @apply font-mono text-xs uppercase tracking-widest text-slate-400;
+  }
+
+  .price {
+    @apply font-mono text-[#00D4FF];
+  }
+
   .btn-primary {
-    background: var(--accent);
-    color: #ffffff;
-    @apply px-5 py-2.5 rounded-xl font-semibold transition-all duration-150
-           disabled:opacity-50 disabled:cursor-not-allowed;
-  }
-  .btn-primary:hover:not(:disabled) {
-    background: var(--accent-bright);
-    box-shadow: 0 0 22px rgba(0, 180, 216, 0.45);
-    transform: translateY(-1px);
-  }
-
-  .btn-secondary {
-    border: 1.5px solid var(--accent);
-    color: var(--accent);
-    background: transparent;
-    @apply px-5 py-2.5 rounded-xl font-semibold transition-all duration-150;
-  }
-  .btn-secondary:hover {
-    background: var(--accent);
-    color: white;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-[#00D4FF] px-4 py-2.5
+           font-mono text-sm uppercase tracking-widest text-[#0A0E1A] transition-colors
+           hover:bg-[#33DDFF] disabled:cursor-not-allowed disabled:opacity-40;
   }
 
   .btn-ghost {
-    color: var(--text-muted);
-    @apply px-4 py-2 rounded-xl font-medium transition-colors duration-150;
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-[#1A7FFF]/30
+           bg-transparent px-4 py-2.5 font-mono text-sm uppercase tracking-widest text-slate-300
+           transition-colors hover:border-[#00D4FF]/60 hover:text-[#00D4FF]
+           disabled:cursor-not-allowed disabled:opacity-40;
   }
-  .btn-ghost:hover { color: var(--accent-bright); background: rgba(0,180,216,0.09); }
 
-  /* ── Badges ── */
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-[#FF4466]/40
+           bg-[#FF4466]/20 px-4 py-2.5 font-mono text-sm uppercase tracking-widest text-[#FF4466]
+           transition-colors hover:bg-[#FF4466]/30 disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .field {
+    @apply w-full rounded-lg border border-[#1A7FFF]/25 bg-[#0A0E1A]/80 px-3.5 py-2.5 text-sm
+           text-slate-100 placeholder:text-slate-600 outline-none transition-colors
+           focus:border-[#00D4FF]/70;
+  }
+
   .badge {
-    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold;
+    @apply inline-flex items-center rounded-md px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider;
   }
-  .badge-green  { @apply bg-emerald-100 text-emerald-700; }
-  .badge-red    { @apply bg-red-100 text-red-700; }
-  .badge-yellow { @apply bg-amber-100 text-amber-700; }
-  .badge-blue   { @apply bg-sky-100 text-sky-700; }
-  .badge-purple { @apply bg-violet-100 text-violet-700; }
-  .badge-ocean  {
-    background: rgba(0, 180, 216, 0.18);
-    color: var(--accent);
-    border: 1px solid rgba(0, 180, 216, 0.35);
-  }
+}
 
-  .dark .badge-green  { @apply bg-emerald-900/40 text-emerald-300; }
-  .dark .badge-red    { @apply bg-red-900/40 text-red-300; }
-  .dark .badge-yellow { @apply bg-amber-900/40 text-amber-300; }
-  .dark .badge-blue   { @apply bg-sky-900/40 text-sky-300; }
-  .dark .badge-purple { @apply bg-violet-900/40 text-violet-300; }
-
-  /* ── Inputs ── */
-  .input {
-    background: var(--bg-secondary);
-    border: 1.5px solid var(--border);
-    color: var(--text-primary);
-    @apply w-full rounded-xl px-4 py-2.5 text-sm outline-none transition-all;
+@keyframes scanline {
+  0% {
+    transform: translateY(-100%);
   }
-  .input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(0, 180, 216, 0.18);
+  100% {
+    transform: translateY(400%);
   }
-  .input::placeholder { color: var(--text-muted); opacity: 0.6; }
-
-  /* ── Modal ── */
-  .modal-overlay {
-    @apply fixed inset-0 z-50 flex items-center justify-center p-4;
-    background: rgba(3, 4, 94, 0.55);
-    backdrop-filter: blur(10px);
-    animation: fadeIn 0.18s ease-out;
-  }
-
-  .modal-box {
-    background: var(--bg-card);
-    border: 1.5px solid var(--border);
-    @apply rounded-2xl shadow-2xl w-full max-w-md;
-    animation: slideUp 0.22s ease-out;
-    backdrop-filter: blur(20px);
-  }
-
-  /* ── Toast (centered at top) ── */
-  .toast {
-    @apply fixed top-6 left-1/2 -translate-x-1/2 z-[100]
-           flex items-center gap-3 px-5 py-3 rounded-2xl shadow-2xl
-           text-sm font-medium min-w-64 max-w-sm;
-    border: 1.5px solid var(--border);
-    background: var(--bg-card);
-    color: var(--text-primary);
-    backdrop-filter: blur(18px);
-    animation: slideUp 0.22s ease-out;
-  }
-
-  /* ── Agent card ── */
-  .agent-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    @apply rounded-2xl p-5 shadow-sm cursor-pointer transition-all duration-200;
-    backdrop-filter: blur(14px);
-  }
-  .agent-card:hover {
-    border-color: var(--accent);
-    transform: translateY(-3px);
-    box-shadow: 0 10px 36px rgba(0, 180, 216, 0.18);
-  }
-
-  /* ── Nav link ── */
-  .nav-link {
-    color: var(--text-muted);
-    @apply px-4 py-2 rounded-xl text-sm font-medium transition-all duration-150;
-  }
-  .nav-link:hover {
-    color: var(--accent-bright);
-    background: rgba(0, 180, 216, 0.1);
-  }
-  .nav-link.active {
-    background: var(--accent);
-    color: white;
-    box-shadow: 0 0 18px rgba(0, 180, 216, 0.38);
-  }
-
-  .mono { font-family: "JetBrains Mono", "Fira Code", monospace; }
-
-  /* ── Animations ── */
-  @keyframes slideUp {
-    from { transform: translateY(14px); opacity: 0; }
-    to   { transform: translateY(0);    opacity: 1; }
-  }
-  @keyframes fadeIn {
-    from { opacity: 0; }
-    to   { opacity: 1; }
-  }
+}
+.animate-scanline {
+  animation: scanline 2.4s linear infinite;
 }

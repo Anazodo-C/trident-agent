@@ -1,0 +1,21 @@
+{
+  "name": "trident",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "workspaces": [
+    "apps/frontend",
+    "apps/node-backend"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspaces --if-present",
+    "dev:backend": "npm run dev -w @trident/node-backend",
+    "dev:frontend": "npm run dev -w @trident/frontend",
+    "build": "npm run build -w @trident/node-backend && npm run build -w @trident/frontend",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test:e2e": "npm run test:e2e -w @trident/node-backend"
+  }
+}

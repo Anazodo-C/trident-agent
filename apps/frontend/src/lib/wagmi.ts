@@ -1,49 +1,36 @@
-import { createConfig, http } from "wagmi";
-import { defineChain } from "viem";
-import { connectorsForWallets } from "@rainbow-me/rainbowkit";
+import { getDefaultConfig } from '@rainbow-me/rainbowkit'
 import {
-  metaMaskWallet,
-  coinbaseWallet,
-  walletConnectWallet,
-  rainbowWallet,
-} from "@rainbow-me/rainbowkit/wallets";
+  arcTestnet,
+  arbitrumSepolia,
+  avalancheFuji,
+  baseSepolia,
+  optimismSepolia,
+  polygonAmoy,
+  sepolia,
+} from 'viem/chains'
 
-const arcTestnet = defineChain({
-  id: 5042002,
-  name: "Arc Testnet",
-  nativeCurrency: { name: "ARC", symbol: "ARC", decimals: 18 },
-  rpcUrls: {
-    default: { http: [import.meta.env.VITE_ARC_RPC_URL || "https://rpc.testnet.arc.network"] },
-  },
-  blockExplorers: {
-    default: { name: "ArcScan", url: "https://explorer.testnet.arc.network" },
-  },
-  testnet: true,
-});
+/**
+ * WalletConnect needs a project id for QR / mobile wallets. Without one the
+ * config still works for injected wallets (MetaMask, Rabby, Coinbase extension),
+ * which covers the only place Trident uses a Web3 wallet: funding the agent EOA.
+ */
+const projectId = import.meta.env['VITE_WALLETCONNECT_PROJECT_ID'] ?? 'trident-local-dev'
 
-const projectId = import.meta.env.VITE_WC_PROJECT_ID || "";
+export const WALLETCONNECT_CONFIGURED = Boolean(
+  import.meta.env['VITE_WALLETCONNECT_PROJECT_ID'],
+)
 
-const walletGroups = projectId
-  ? [
-      { groupName: "Recommended", wallets: [metaMaskWallet, coinbaseWallet] },
-      { groupName: "More", wallets: [walletConnectWallet, rainbowWallet] },
-    ]
-  : [{ groupName: "Recommended", wallets: [metaMaskWallet, coinbaseWallet] }];
-
-const connectors = connectorsForWallets(walletGroups, {
-  appName: "Trident Agent",
-  appDescription: "Agentic financial intelligence marketplace on Arc Testnet",
-  appUrl: "https://trident-agent.vercel.app",
-  appIcon: "https://trident-agent.vercel.app/logo.png",
-  projectId: projectId || "00000000000000000000000000000000",
-});
-
-export const wagmiConfig = createConfig({
-  chains: [arcTestnet],
-  connectors,
-  transports: {
-    [arcTestnet.id]: http(import.meta.env.VITE_ARC_RPC_URL),
-  },
-});
-
-export { arcTestnet };
+export const wagmiConfig = getDefaultConfig({
+  appName: 'Trident',
+  projectId,
+  chains: [
+    arcTestnet,
+    baseSepolia,
+    sepolia,
+    arbitrumSepolia,
+    optimismSepolia,
+    avalancheFuji,
+    polygonAmoy,
+  ],
+  ssr: false,
+})

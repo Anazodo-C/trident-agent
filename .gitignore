@@ -41,3 +41,10 @@ htmlcov/
 .railway/
 test_trident.db*
 vite.config.ts.timestamp-*
+
+# v1 build artifacts
+apps/*/dist/
+trident.db*
+*.db-wal
+*.db-shm
+.stale-v0-root-owned-node_modules/

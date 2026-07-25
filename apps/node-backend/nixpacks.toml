@@ -1,3 +1,8 @@
+[phases.setup]
+aptPkgs = ["python3", "make", "g++", "libsqlite3-dev"]
+# Required for better-sqlite3 native compilation.
+# Without these, the Railway build fails with: gyp ERR! build error
+
 [phases.install]
 cmds = ["npm ci"]
 

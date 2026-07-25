@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The E2E test imports the frontend's WebCrypto module to verify that the
+    // server and browser encryption agree, so it needs the DOM lib types.
+    // Kept out of the main config so backend source cannot reach for DOM globals.
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["test/**/*.ts", "../frontend/src/lib/crypto.ts"]
+}

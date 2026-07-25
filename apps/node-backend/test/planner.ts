@@ -1,0 +1,202 @@
+/**
+ * Planner parsing / validation tests. No Anthropic calls — these cover the
+ * pure logic that guards what the model is allowed to make us pay for.
+ *
+ * Run with:  npm run test:planner -w @trident/node-backend
+ */
+import {
+  PlanSchema,
+  assertStepsAreCatalogued,
+  extractJson,
+  normalise,
+  type ExecutionPlan,
+} from '../src/llm/planner.ts'
+import { SERVICE_CATALOG, isCataloguedEndpoint } from '../src/circle/marketplaceService.ts'
+
+let passed = 0
+let failed = 0
+const failures: string[] = []
+
+function check(label: string, condition: boolean, detail = ''): void {
+  if (condition) {
+    passed++
+    console.log(`  \x1b[32m✓\x1b[0m ${label}`)
+  } else {
+    failed++
+    failures.push(label)
+    console.log(`  \x1b[31m✗\x1b[0m ${label}${detail ? ` — ${detail}` : ''}`)
+  }
+}
+
+function section(name: string): void {
+  console.log(`\n\x1b[36m${name}\x1b[0m`)
+}
+
+function threw(fn: () => unknown): boolean {
+  try {
+    fn()
+    return false
+  } catch {
+    return true
+  }
+}
+
+function plan(overrides: Partial<ExecutionPlan> = {}): ExecutionPlan {
+  return {
+    goal: 'test',
+    steps: [],
+    totalEstimatedCostUsdc: 0,
+    reasoning: 'because',
+    alternativeSteps: [],
+    ...overrides,
+  }
+}
+
+function step(endpointUrl: string, cost = 0.01, stepIndex = 0) {
+  return {
+    stepIndex,
+    serviceName: 'x402 Reference Endpoint',
+    endpointUrl,
+    httpMethod: 'GET' as const,
+    params: {},
+    purpose: 'test',
+    estimatedCostUsdc: cost,
+  }
+}
+
+console.log('\x1b[1mTrident planner tests\x1b[0m\n')
+
+// ------------------------------------------------------------- JSON extraction
+section('extractJson')
+check('parses a bare object', extractJson('{"a":1}') === '{"a":1}')
+check(
+  'strips a ```json fence',
+  extractJson('here you go\n```json\n{"a":1}\n```\nthanks') === '{"a":1}',
+)
+check('strips a bare ``` fence', extractJson('```\n{"a":2}\n```') === '{"a":2}')
+check(
+  'recovers an object surrounded by prose',
+  extractJson('Sure! {"a":3} Hope that helps.') === '{"a":3}',
+)
+check('throws when there is no JSON', threw(() => extractJson('no json here')))
+
+// ------------------------------------------------------------ schema coercion
+section('PlanSchema')
+{
+  const parsed = PlanSchema.safeParse({
+    goal: 'g',
+    steps: [
+      {
+        stepIndex: 0,
+        serviceName: 'x402 Reference Endpoint',
+        endpointUrl: 'https://x402.org/protected',
+        httpMethod: 'GET',
+        // Models routinely emit non-string param values; these must be accepted.
+        params: { limit: 10, verbose: true, q: 'text' },
+        purpose: 'p',
+        estimatedCostUsdc: 0.01,
+      },
+    ],
+    totalEstimatedCostUsdc: 0.01,
+    reasoning: 'r',
+  })
+  check('accepts numeric and boolean params', parsed.success, JSON.stringify(parsed.error?.issues))
+  check('defaults alternativeSteps to []', parsed.success && parsed.data.alternativeSteps.length === 0)
+}
+
+check(
+  'rejects a non-URL endpoint',
+  !PlanSchema.safeParse(
+    plan({ steps: [step('not-a-url')], totalEstimatedCostUsdc: 0.01 }),
+  ).success,
+)
+check(
+  'rejects a negative cost',
+  !PlanSchema.safeParse(
+    plan({ steps: [step('https://x402.org/protected', -1)], totalEstimatedCostUsdc: -1 }),
+  ).success,
+)
+
+// -------------------------------------------------------------- normalisation
+section('normalise')
+{
+  const messy = plan({
+    steps: [
+      step('https://x402.org/protected', 0.01, 7),
+      step('https://x402.org/protected', 0.02, 3),
+    ],
+    // Deliberately wrong: the model's own arithmetic must not be trusted.
+    totalEstimatedCostUsdc: 99,
+  })
+  const clean = normalise(messy)
+  check('renumbers stepIndex from 0', clean.steps.map((s) => s.stepIndex).join(',') === '0,1')
+  check('recomputes the total from the steps', clean.totalEstimatedCostUsdc === 0.03)
+}
+
+// ---------------------------------------------------------- catalog allowlist
+section('assertStepsAreCatalogued')
+check(
+  'accepts a real catalog endpoint',
+  !threw(() =>
+    assertStepsAreCatalogued(
+      plan({ steps: [step('https://x402.org/protected')] }),
+      SERVICE_CATALOG,
+    ),
+  ),
+)
+check(
+  'rejects a hallucinated host',
+  threw(() =>
+    assertStepsAreCatalogued(
+      plan({ steps: [step('https://attacker.example.com/drain')] }),
+      SERVICE_CATALOG,
+    ),
+  ),
+)
+check(
+  'rejects an invented path on a real host',
+  threw(() =>
+    assertStepsAreCatalogued(
+      plan({ steps: [step('https://x402.org/admin')] }),
+      SERVICE_CATALOG,
+    ),
+  ),
+)
+check(
+  'rejects a prefix-matching lookalike host',
+  threw(() =>
+    assertStepsAreCatalogued(
+      plan({ steps: [step('https://x402.org.evil.com/protected')] }),
+      SERVICE_CATALOG,
+    ),
+  ),
+)
+check(
+  'accepts an empty plan',
+  !threw(() => assertStepsAreCatalogued(plan(), SERVICE_CATALOG)),
+)
+
+// The runner applies its own allowlist to client-supplied approvedSteps, so it
+// must reject exactly the same URLs — including prefix-matching lookalikes.
+section('isCataloguedEndpoint (runner allowlist)')
+check('accepts an exact catalog URL', isCataloguedEndpoint('https://x402.org/protected'))
+check('rejects an unknown host', !isCataloguedEndpoint('https://attacker.example.com/drain'))
+check(
+  'rejects a lookalike host that shares the baseUrl prefix',
+  !isCataloguedEndpoint('https://x402.org.evil.com/protected'),
+)
+check('rejects an uncatalogued path on a real host', !isCataloguedEndpoint('https://x402.org/admin'))
+check(
+  'rejects a query-string appended to a real endpoint',
+  !isCataloguedEndpoint('https://x402.org/protected?redirect=https://evil.com'),
+)
+
+console.log(`\n${'─'.repeat(52)}`)
+if (failed === 0) {
+  console.log(`\x1b[32m\x1b[1mAll ${passed} checks passed.\x1b[0m\n`)
+  process.exit(0)
+}
+console.log(`\x1b[31m\x1b[1m${failed} failed\x1b[0m, ${passed} passed`)
+for (const f of failures) console.log(`  \x1b[31m•\x1b[0m ${f}`)
+console.log()
+process.exit(1)

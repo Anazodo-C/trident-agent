@@ -1,132 +1,141 @@
-/**
- * AuthPage — Sign in with Google (Web2) or connect wallet (Web3).
- * After first sign-in, if no agent exists → show AgentKeyModal.
- */
-import { useState, useCallback } from "react";
-import { ConnectButton } from "@rainbow-me/rainbowkit";
-import { useAccount } from "wagmi";
-import { GoogleLogin, type CredentialResponse } from "@react-oauth/google";
-import { useAuth } from "./AuthContext";
-import AgentKeyModal from "./AgentKeyModal";
+import { useEffect, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import { ConnectButton } from '@rainbow-me/rainbowkit'
+import { useAccount, useSignMessage } from 'wagmi'
+import { SiweMessage } from 'siwe'
+import { AlertTriangle, Loader2 } from 'lucide-react'
+import { api, apiUrl } from '../../lib/api.ts'
+import { useAuthStore } from '../../store/authStore.ts'
+import { TridentMark } from '../layout/TridentMark.tsx'
 
-export default function AuthPage() {
-  const { user, loading, signInWithGoogle, signInWithWallet } = useAuth();
-  const { isConnected } = useAccount();
-  const [showKeyModal, setShowKeyModal] = useState(false);
-  const [error, setError]               = useState("");
-  const [busy, setBusy]                 = useState(false);
+export function AuthPage() {
+  const navigate = useNavigate()
+  const [params] = useSearchParams()
+  const setSession = useAuthStore((s) => s.setSession)
 
-  const handleGoogle = useCallback(async (cred: CredentialResponse) => {
-    if (!cred.credential) return;
-    setBusy(true);
-    setError("");
+  const { address, isConnected } = useAccount()
+  const { signMessageAsync } = useSignMessage()
+
+  const [providers, setProviders] = useState<{ google: boolean; siwe: boolean }>({
+    google: false,
+    siwe: true,
+  })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(params.get('authError'))
+
+  useEffect(() => {
+    api.authProviders().then(setProviders).catch(() => undefined)
+  }, [])
+
+  async function signInWithEthereum() {
+    if (!address) return
+    setBusy(true)
+    setError(null)
     try {
-      await signInWithGoogle(cred.credential);
-      // If newly created agent → show key modal (checked in MyAgentPanel)
-    } catch (e: any) {
-      setError(e?.response?.data?.detail || e.message || "Google sign-in failed");
-    } finally {
-      setBusy(false);
-    }
-  }, [signInWithGoogle]);
+      const { nonce } = await api.siweNonce()
+      const message = new SiweMessage({
+        domain: window.location.host,
+        address,
+        statement: 'Sign in to Trident.',
+        uri: window.location.origin,
+        version: '1',
+        chainId: 1,
+        nonce,
+      }).prepareMessage()
 
-  const handleWallet = useCallback(async () => {
-    if (!isConnected) { setError("Connect your wallet first"); return; }
-    setBusy(true);
-    setError("");
-    try {
-      await signInWithWallet();
-    } catch (e: any) {
-      setError(e?.response?.data?.detail || e.message || "Wallet sign-in failed");
-    } finally {
-      setBusy(false);
-    }
-  }, [isConnected, signInWithWallet]);
+      const signature = await signMessageAsync({ message })
+      const result = await api.siweVerify(message, signature)
 
-  if (loading) return null;
-  if (user && !showKeyModal) return null; // already signed in — render nothing (App handles routing)
+      if (result.needsSetup) {
+        navigate(`/setup-passphrase?token=${encodeURIComponent(result.setupToken)}`)
+        return
+      }
+      setSession(result.token, result.user)
+      navigate('/app')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sign-in failed')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   return (
-    <>
-      {showKeyModal && <AgentKeyModal onClose={() => setShowKeyModal(false)} />}
+    <div className="flex min-h-screen items-center justify-center px-4 py-12">
+      <div className="w-full max-w-md">
+        <div className="mb-10 text-center">
+          <TridentMark className="mx-auto mb-5 h-12 w-12 text-[#00D4FF]" />
+          <h1 className="font-mono text-3xl uppercase tracking-[0.35em] text-slate-100">
+            Trident
+          </h1>
+          <p className="mt-3 text-sm text-slate-400">
+            One agent. One wallet. Autonomous execution.
+          </p>
+        </div>
 
-      <div
-        className="min-h-screen flex flex-col items-center justify-center p-6"
-        style={{ background: "var(--bg)" }}
-      >
-        <div
-          className="w-full max-w-sm rounded-2xl p-8 flex flex-col gap-6"
-          style={{
-            background: "var(--surface)",
-            border: "1px solid rgba(0,180,216,0.2)",
-            boxShadow: "0 0 40px rgba(0,180,216,0.06)",
-          }}
-        >
-          {/* Logo */}
-          <div className="text-center">
-            <div className="text-4xl mb-2">🔱</div>
-            <h1 className="text-xl font-bold" style={{ color: "var(--text-primary)" }}>
-              Trident Agent
-            </h1>
-            <p className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
-              Financial intelligence marketplace on Arc Testnet
-            </p>
-          </div>
+        <div className="panel p-6">
+          <h2 className="heading-mono mb-5">Access Terminal</h2>
 
-          {/* Divider */}
-          <div className="flex items-center gap-3">
-            <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} />
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>Sign in to get your agent</span>
-            <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} />
-          </div>
-
-          {/* Google Sign-In */}
-          <div className="flex flex-col gap-3">
-            <p className="text-xs text-center" style={{ color: "var(--text-muted)" }}>Web2</p>
-            <div className="flex justify-center">
-              <GoogleLogin
-                onSuccess={handleGoogle}
-                onError={() => setError("Google sign-in failed")}
-                theme="filled_black"
-                shape="pill"
-                text="signin_with"
-                useOneTap
-              />
+          {error && (
+            <div className="mb-5 flex items-start gap-2 rounded-lg border border-[#FF4466]/40 bg-[#FF4466]/10 p-3 text-sm text-[#FF4466]">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{error}</span>
             </div>
+          )}
+
+          <a
+            // Full page navigation to the backend origin, not a SPA route.
+            href={providers.google ? apiUrl('/auth/google') : undefined}
+            aria-disabled={!providers.google}
+            onClick={(e) => {
+              if (!providers.google) {
+                e.preventDefault()
+                setError('Google sign-in is not configured on this server.')
+              }
+            }}
+            className={`btn-ghost w-full ${providers.google ? '' : 'cursor-not-allowed opacity-40'}`}
+          >
+            <GoogleGlyph />
+            Continue with Google
+          </a>
+
+          <div className="my-6 flex items-center gap-3">
+            <div className="h-px flex-1 bg-[#1A7FFF]/20" />
+            <span className="font-mono text-[10px] uppercase tracking-widest text-slate-600">
+              or
+            </span>
+            <div className="h-px flex-1 bg-[#1A7FFF]/20" />
           </div>
 
-          {/* Divider */}
-          <div className="flex items-center gap-3">
-            <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} />
-            <span className="text-xs" style={{ color: "var(--text-muted)" }}>or</span>
-            <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.07)" }} />
-          </div>
-
-          {/* Wallet Sign-In */}
           <div className="flex flex-col gap-3">
-            <p className="text-xs text-center" style={{ color: "var(--text-muted)" }}>Web3</p>
-            <ConnectButton />
+            <div className="[&_button]:!w-full [&_button]:!font-mono">
+              <ConnectButton showBalance={false} chainStatus="none" />
+            </div>
+
             {isConnected && (
-              <button
-                onClick={handleWallet}
-                disabled={busy}
-                className="w-full py-2.5 rounded-xl text-sm font-semibold transition-opacity"
-                style={{ background: "var(--accent)", color: "#000", opacity: busy ? 0.6 : 1 }}
-              >
-                {busy ? "Signing…" : "Sign in with Wallet"}
+              <button className="btn-primary w-full" onClick={signInWithEthereum} disabled={busy}>
+                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {busy ? 'Verifying' : 'Sign in with Ethereum'}
               </button>
             )}
           </div>
 
-          {error && (
-            <p className="text-xs text-center text-red-400">{error}</p>
-          )}
-
-          <p className="text-xs text-center" style={{ color: "var(--text-muted)", opacity: 0.6 }}>
-            First sign-in creates your agent wallet. Your private key is yours — we never store it.
+          <p className="mt-6 text-center text-xs leading-relaxed text-slate-500">
+            Trident generates a self-custody agent wallet for you. Your private key is
+            encrypted with a passphrase only you know.
           </p>
         </div>
       </div>
-    </>
-  );
+    </div>
+  )
+}
+
+function GoogleGlyph() {
+  return (
+    <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden="true">
+      <path
+        fill="currentColor"
+        d="M21.35 11.1H12v3.2h5.35c-.23 1.4-1.7 4.1-5.35 4.1a6.4 6.4 0 1 1 0-12.8c1.83 0 3.06.78 3.76 1.45l2.56-2.47A9.6 9.6 0 1 0 12 21.6c5.55 0 9.22-3.9 9.22-9.4 0-.63-.06-1.1-.14-1.5"
+      />
+    </svg>
+  )
 }

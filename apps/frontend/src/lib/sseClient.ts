@@ -1,0 +1,90 @@
+import { apiUrl } from './api.ts'
+import type { PlanStep } from './types.ts'
+
+export interface RunPayload {
+  taskId: string
+  approvedSteps: PlanStep[]
+  /** EOA key — sent in the POST body only. Never place this in a URL. */
+  agentPrivateKey: string
+  budgetUsdc: number | null
+}
+
+export type AgentEventName =
+  | 'start'
+  | 'step_start'
+  | 'step_done'
+  | 'step_failed'
+  | 'budget_exceeded'
+  | 'cap_exceeded'
+  | 'stopped'
+  | 'complete'
+  | 'fatal'
+  | 'error'
+
+/**
+ * SSE over POST.
+ *
+ * `EventSource` is deliberately not used: it only issues GET requests, which
+ * would force the private key into a query string.
+ */
+export async function streamAgentRun(
+  payload: RunPayload,
+  jwt: string,
+  onEvent: (event: AgentEventName, data: Record<string, unknown>) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  const res = await fetch(apiUrl('/api/agent/run'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${jwt}` },
+    body: JSON.stringify(payload),
+    signal,
+  })
+
+  if (!res.ok) {
+    let message = `Run failed (${res.status})`
+    try {
+      const body = (await res.json()) as { error?: string }
+      if (body.error) message = body.error
+    } catch {
+      /* non-JSON error body; keep the status-based message */
+    }
+    throw new Error(message)
+  }
+  if (!res.body) throw new Error('Streaming is not supported by this browser')
+
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      // Frames are separated by a blank line; a partial frame stays buffered.
+      const frames = buffer.split('\n\n')
+      buffer = frames.pop() ?? ''
+
+      for (const frame of frames) {
+        let eventName: AgentEventName | null = null
+        const dataLines: string[] = []
+
+        for (const line of frame.split('\n')) {
+          if (line.startsWith(':')) continue // heartbeat comment
+          if (line.startsWith('event:')) eventName = line.slice(6).trim() as AgentEventName
+          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
+        }
+
+        if (!eventName || dataLines.length === 0) continue
+        try {
+          onEvent(eventName, JSON.parse(dataLines.join('\n')) as Record<string, unknown>)
+        } catch {
+          /* ignore a malformed frame rather than killing the stream */
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
