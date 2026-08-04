@@ -1,0 +1,21 @@
+# Railway build for the v1 backend.
+#
+# Lives at the repo root, not in apps/node-backend, so Railway works with its
+# default root directory. Everything below uses explicit paths.
+
+[phases.setup]
+# Required for better-sqlite3's native compilation when no prebuilt binary
+# matches the platform. Without these the build fails with: gyp ERR! build error
+aptPkgs = ["python3", "make", "g++", "libsqlite3-dev"]
+
+[phases.install]
+# Scoped to the backend workspace so the frontend's ~700 packages are skipped.
+cmds = ["npm ci --workspace @trident/node-backend --include-workspace-root"]
+
+[phases.build]
+cmds = [
+  "npx esbuild apps/node-backend/src/server.ts --bundle --platform=node --format=esm --packages=external --outfile=apps/node-backend/dist/server.js",
+]
+
+[start]
+cmd = "node apps/node-backend/dist/server.js"

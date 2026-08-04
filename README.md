@@ -94,9 +94,13 @@ is what proves the server and browser key derivations actually agree.
 
 ## Deploy
 
-- Backend → Railway via `apps/node-backend/nixpacks.toml` (the apt packages are
-  required for `better-sqlite3` to compile).
-- Frontend → Vercel via `apps/frontend/vercel.json`.
+- Backend → Railway via the root `nixpacks.toml`.
+- Frontend → Vercel via the root `vercel.json`.
+
+Both configs live at the repo root and use explicit paths, so neither platform
+needs a Root Directory set in its dashboard. Each scopes its install to one
+workspace: Vercel never compiles `better-sqlite3`, and Railway never installs
+the frontend's ~700 packages.
 
 The two deployments must know about each other, or the app will not work:
 
