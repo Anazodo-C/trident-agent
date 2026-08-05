@@ -1,5 +1,52 @@
 import Database from 'better-sqlite3'
-import { DB_PATH } from './env.ts'
+import { mkdirSync, statSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { DB_PATH, IS_PROD } from './env.ts'
+
+/**
+ * better-sqlite3 refuses to create the database's parent directory, so a
+ * DB_PATH pointing at a not-yet-mounted volume crashes on boot.
+ *
+ * Creating it is the right call — but doing so silently would be worse than
+ * crashing. This database holds the users' encrypted agent-wallet keys, and
+ * they are unrecoverable by design: if it lands on a container's ephemeral
+ * layer, the next redeploy destroys every wallet with no way back. So we
+ * create the directory and then say plainly whether it will actually survive.
+ */
+function prepareDatabaseDirectory(path: string): void {
+  const dir = dirname(resolve(path))
+  mkdirSync(dir, { recursive: true })
+
+  if (!IS_PROD) return
+
+  // A mounted volume is a different device from the container root filesystem.
+  // Same device means the data lives on the ephemeral layer.
+  let ephemeral: boolean
+  try {
+    ephemeral = statSync(dir).dev === statSync('/').dev
+  } catch {
+    return
+  }
+
+  if (ephemeral) {
+    console.warn(
+      [
+        '',
+        '  ┌─────────────────────────────────────────────────────────────────┐',
+        '  │  WARNING: the database is NOT on a persistent volume.           │',
+        '  └─────────────────────────────────────────────────────────────────┘',
+        `  DB_PATH resolves to ${dir}, which is on the container filesystem.`,
+        '  Every redeploy will erase all users and their encrypted agent-wallet',
+        '  keys. Those keys cannot be recovered, so any USDC held by a wallet',
+        '  would be permanently lost.',
+        '  Attach a volume whose mount path matches DB_PATH before real use.',
+        '',
+      ].join('\n'),
+    )
+  }
+}
+
+prepareDatabaseDirectory(DB_PATH)
 
 const db = new Database(DB_PATH)
 
