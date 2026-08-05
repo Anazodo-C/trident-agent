@@ -3,6 +3,7 @@ import cors from 'cors'
 import { FRONTEND_URL, IS_PROD, PORT } from './env.ts'
 import { messageOf, statusOf } from './http.ts'
 import { scrubSecrets } from './circle/gatewayService.ts'
+import { STORAGE_PERSISTENT } from './db.ts'
 import authRoutes from './routes/auth.ts'
 import serviceRoutes from './routes/services.ts'
 import agentRoutes from './routes/agent.ts'
@@ -21,7 +22,15 @@ app.use(
 app.use(express.json({ limit: '1mb' }))
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, service: 'trident-backend', version: '1.0.0' })
+  // storagePersistent reports whether the SQLite file is on a mounted volume.
+  // A boolean only — no paths — so the mount can be confirmed without shell
+  // access, and a misconfigured deploy is visible before anyone signs up.
+  res.json({
+    ok: true,
+    service: 'trident-backend',
+    version: '1.0.0',
+    storagePersistent: STORAGE_PERSISTENT,
+  })
 })
 
 app.use('/auth', authRoutes)

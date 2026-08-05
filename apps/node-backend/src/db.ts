@@ -13,11 +13,16 @@ import { DB_PATH, IS_PROD } from './env.ts'
  * layer, the next redeploy destroys every wallet with no way back. So we
  * create the directory and then say plainly whether it will actually survive.
  */
+/**
+ * Whether the database sits on a mounted volume. Surfaced on /health so the
+ * mount can be confirmed from outside the platform, rather than by reading a
+ * startup log that scrolls away.
+ */
+export let STORAGE_PERSISTENT: boolean | null = null
+
 function prepareDatabaseDirectory(path: string): void {
   const dir = dirname(resolve(path))
   mkdirSync(dir, { recursive: true })
-
-  if (!IS_PROD) return
 
   // A mounted volume is a different device from the container root filesystem.
   // Same device means the data lives on the ephemeral layer.
@@ -27,6 +32,9 @@ function prepareDatabaseDirectory(path: string): void {
   } catch {
     return
   }
+  STORAGE_PERSISTENT = !ephemeral
+
+  if (!IS_PROD) return
 
   if (ephemeral) {
     console.warn(
