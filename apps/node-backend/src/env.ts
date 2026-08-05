@@ -102,11 +102,28 @@ export const JWT_SECRET = required('JWT_SECRET', 'dev-only-insecure-secret-do-no
 
 export const GOOGLE_CLIENT_ID = optional('GOOGLE_CLIENT_ID')
 export const GOOGLE_CLIENT_SECRET = optional('GOOGLE_CLIENT_SECRET')
-export const GOOGLE_REDIRECT_URI = optional(
-  'GOOGLE_REDIRECT_URI',
-  `http://localhost:${PORT}/auth/google/callback`,
-)
+
+/**
+ * Must exactly match an Authorized redirect URI on the Google OAuth client.
+ *
+ * The localhost fallback is for local development only. Using it in production
+ * silently sends users to a redirect_uri that can never match a registered one,
+ * and Google's redirect_uri_mismatch error does not say why — so a deployment
+ * with Google enabled and this unset is a hard failure, not a default.
+ */
+const googleRedirectUriRaw = optional('GOOGLE_REDIRECT_URI')
 export const GOOGLE_ENABLED = Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET)
+
+if (GOOGLE_ENABLED && IS_PROD && !googleRedirectUriRaw) {
+  throw new Error(
+    'GOOGLE_REDIRECT_URI must be set when Google sign-in is enabled in production.\n' +
+      '  It must exactly match an Authorized redirect URI on the OAuth client,\n' +
+      '  and points at this backend, e.g. https://<backend-host>/auth/google/callback',
+  )
+}
+
+export const GOOGLE_REDIRECT_URI =
+  googleRedirectUriRaw || `http://localhost:${PORT}/auth/google/callback`
 
 export const ANTHROPIC_API_KEY = optional('ANTHROPIC_API_KEY')
 export const ANTHROPIC_ENABLED = Boolean(ANTHROPIC_API_KEY)
