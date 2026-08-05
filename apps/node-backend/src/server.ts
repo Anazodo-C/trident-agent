@@ -1,6 +1,6 @@
 import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'
-import { FRONTEND_URL, IS_PROD, PORT } from './env.ts'
+import { ALLOWED_ORIGINS, IS_PROD, PORT, isOriginAllowed } from './env.ts'
 import { messageOf, statusOf } from './http.ts'
 import { scrubSecrets } from './circle/gatewayService.ts'
 import { STORAGE_PERSISTENT } from './db.ts'
@@ -15,7 +15,12 @@ const app = express()
 app.set('trust proxy', 1)
 app.use(
   cors({
-    origin: IS_PROD ? [FRONTEND_URL] : true,
+    // Production is restricted to the configured origins; dev reflects any.
+    // A request with no Origin header (curl, health checks, server-to-server)
+    // is not subject to CORS and must not be rejected here.
+    origin: IS_PROD
+      ? (origin, callback) => callback(null, !origin || isOriginAllowed(origin))
+      : true,
     credentials: true,
   }),
 )
@@ -64,6 +69,12 @@ app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
 
 const server = app.listen(PORT, () => {
   console.log(`[trident] backend listening on :${PORT} (${IS_PROD ? 'production' : 'development'})`)
+  if (IS_PROD) {
+    // A browser on an unlisted origin is blocked outright, and the failure
+    // surfaces in the frontend as "cannot reach backend" — so state the
+    // allowlist at boot rather than leaving it to be inferred.
+    console.log(`[trident] CORS allows: ${ALLOWED_ORIGINS.join(', ')}`)
+  }
 })
 
 // SSE runs can outlive a default timeout; disable it and manage lifetime in the runner.

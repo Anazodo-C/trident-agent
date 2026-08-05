@@ -62,7 +62,40 @@ function required(name: string, devFallback?: string): string {
 export const NODE_ENV = optional('NODE_ENV', 'development')
 export const IS_PROD = NODE_ENV === 'production'
 export const PORT = Number(optional('PORT', '3001'))
+/**
+ * Canonical frontend origin. OAuth callbacks redirect here, so it must be the
+ * one address users should end up on — a custom domain in production, not a
+ * per-deployment preview URL.
+ */
 export const FRONTEND_URL = optional('FRONTEND_URL', 'http://localhost:5173')
+
+/**
+ * Extra origins allowed through CORS, comma-separated. FRONTEND_URL is always
+ * allowed and need not be repeated.
+ *
+ * One origin is not enough in practice: the app is reachable at its custom
+ * domain and at Vercel deployment URLs, and Vercel mints a fresh preview URL
+ * for every deployment. Pinning a single origin means CORS breaks on each
+ * deploy.
+ *
+ * An entry may start with `*` to match by suffix, e.g. `*-trident8.vercel.app`
+ * covers every preview for that team. Keep such patterns narrow — a bare
+ * `*.vercel.app` would let any site hosted on Vercel call this API.
+ */
+export const ALLOWED_ORIGINS: string[] = Array.from(
+  new Set(
+    [FRONTEND_URL, ...optional('ALLOWED_ORIGINS').split(',')]
+      .map((o) => o.trim().replace(/\/$/, ''))
+      .filter((o) => o.length > 0),
+  ),
+)
+
+export function isOriginAllowed(origin: string): boolean {
+  const candidate = origin.replace(/\/$/, '')
+  return ALLOWED_ORIGINS.some((allowed) =>
+    allowed.startsWith('*') ? candidate.endsWith(allowed.slice(1)) : allowed === candidate,
+  )
+}
 
 /** Dev fallback keeps local runs frictionless; production must set a real secret. */
 export const JWT_SECRET = required('JWT_SECRET', 'dev-only-insecure-secret-do-not-use-in-prod')
