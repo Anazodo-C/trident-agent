@@ -1,0 +1,18 @@
+# Keep the build context small and force a clean install inside the image —
+# a host node_modules would carry macOS-native better-sqlite3 binaries into a
+# linux image.
+node_modules
+**/node_modules
+dist
+**/dist
+.git
+.github
+.claude
+.qodo
+contracts
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+.stale-v0-root-owned-node_modules
