@@ -48,3 +48,5 @@ trident.db*
 *.db-wal
 *.db-shm
 .stale-v0-root-owned-node_modules/
+# Vercel CLI project link
+.vercel
