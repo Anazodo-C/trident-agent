@@ -17,13 +17,46 @@ function optional(name: string, fallback = ''): string {
   return process.env[name] ?? fallback
 }
 
+/** Every variable this service reads. Used only to report presence, never values. */
+const KNOWN_VARS = [
+  'JWT_SECRET',
+  'ANTHROPIC_API_KEY',
+  'FRONTEND_URL',
+  'DB_PATH',
+  'PORT',
+  'NODE_ENV',
+  'GOOGLE_CLIENT_ID',
+  'GOOGLE_CLIENT_SECRET',
+  'GOOGLE_REDIRECT_URI',
+] as const
+
+/**
+ * "Missing X" alone can't distinguish a typo from variables attached to the
+ * wrong service or environment, which is a slow thing to debug on a platform.
+ * So report which of the known names the process actually received.
+ *
+ * Names only — a value is never printed, and this says nothing about any
+ * variable outside KNOWN_VARS.
+ */
+function diagnostics(): string {
+  const set = KNOWN_VARS.filter((n) => (process.env[n] ?? '') !== '')
+  const missing = KNOWN_VARS.filter((n) => (process.env[n] ?? '') === '')
+  return [
+    `  received (names only): ${set.length > 0 ? set.join(', ') : '(none)'}`,
+    `  not set:               ${missing.length > 0 ? missing.join(', ') : '(none)'}`,
+    `  total env vars visible to the process: ${Object.keys(process.env).length}`,
+    '  If the name you set is absent above, it is attached to a different',
+    '  service or environment, or spelled differently.',
+  ].join('\n')
+}
+
 function required(name: string, devFallback?: string): string {
   const v = process.env[name]
   if (v && v.length > 0) return v
   if (devFallback !== undefined && process.env['NODE_ENV'] !== 'production') {
     return devFallback
   }
-  throw new Error(`Missing required environment variable: ${name}`)
+  throw new Error(`Missing required environment variable: ${name}\n${diagnostics()}`)
 }
 
 export const NODE_ENV = optional('NODE_ENV', 'development')
