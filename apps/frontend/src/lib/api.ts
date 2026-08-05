@@ -63,6 +63,23 @@ async function request<T>(
         : null) ?? `Request failed (${res.status})`
     throw new ApiError(message, res.status)
   }
+
+  // A 2xx that isn't JSON is not a valid response, and must not be handed back
+  // as `null` — callers dereference these objects, so a silent null becomes a
+  // render crash far from the cause.
+  //
+  // The common case: API_BASE is empty in a deployed build, so the request goes
+  // to the frontend's own origin and the SPA rewrite answers 200 text/html.
+  if (text && body === null) {
+    const contentType = res.headers.get('content-type') ?? 'unknown'
+    throw new ApiError(
+      API_BASE
+        ? `Expected JSON from ${path} but received ${contentType}.`
+        : `Expected JSON from ${path} but received ${contentType}. ` +
+          'The frontend has no backend URL configured — set VITE_API_BASE_URL and rebuild.',
+      res.status,
+    )
+  }
   return body as T
 }
 

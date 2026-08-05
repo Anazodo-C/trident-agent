@@ -24,7 +24,22 @@ export function AuthPage() {
   const [error, setError] = useState<string | null>(params.get('authError'))
 
   useEffect(() => {
-    api.authProviders().then(setProviders).catch(() => undefined)
+    api
+      .authProviders()
+      .then((p) => {
+        // Never let a malformed payload replace the defaults — the render path
+        // dereferences this object.
+        if (p && typeof p === 'object') setProviders(p)
+      })
+      .catch((err: unknown) => {
+        // A failure here means the backend is unreachable, so sign-in cannot
+        // work at all. Say so rather than showing a silently disabled button.
+        setError(
+          err instanceof Error
+            ? `Cannot reach the Trident backend. ${err.message}`
+            : 'Cannot reach the Trident backend.',
+        )
+      })
   }, [])
 
   async function signInWithEthereum() {
