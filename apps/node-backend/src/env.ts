@@ -128,4 +128,19 @@ export const GOOGLE_REDIRECT_URI =
 export const ANTHROPIC_API_KEY = optional('ANTHROPIC_API_KEY')
 export const ANTHROPIC_ENABLED = Boolean(ANTHROPIC_API_KEY)
 
+/**
+ * Where to send Messages API calls.
+ *
+ * Empty means Anthropic directly. Set it to use an Anthropic-compatible
+ * gateway (AgentRouter, OpenRouter, a self-hosted proxy) — those issue their
+ * own keys, which api.anthropic.com rejects, so the key and the base URL have
+ * to travel together.
+ *
+ * The SDK appends /v1/messages, so this is the origin: https://agentrouter.org
+ */
+export const ANTHROPIC_BASE_URL = optional('ANTHROPIC_BASE_URL').replace(/\/+$/, '')
+
+/** Overridable because gateways do not always expose Anthropic's model ids. */
+export const ANTHROPIC_MODEL = optional('ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')
+
 export const DB_PATH = optional('DB_PATH', './trident.db')

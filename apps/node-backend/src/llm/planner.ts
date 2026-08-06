@@ -1,9 +1,13 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { z } from 'zod'
-import { ANTHROPIC_API_KEY, ANTHROPIC_ENABLED } from '../env.ts'
+import {
+  ANTHROPIC_API_KEY,
+  ANTHROPIC_BASE_URL,
+  ANTHROPIC_ENABLED,
+  ANTHROPIC_MODEL,
+} from '../env.ts'
 import type { Service } from '../circle/registryService.ts'
 
-const MODEL = 'claude-haiku-4-5-20251001'
 const MAX_RETRIES = 3
 
 let client: Anthropic | null = null
@@ -13,7 +17,11 @@ function anthropic(): Anthropic {
       status: 503,
     })
   }
-  client ??= new Anthropic({ apiKey: ANTHROPIC_API_KEY })
+  // baseURL only when configured, so the default stays Anthropic's own.
+  client ??= new Anthropic({
+    apiKey: ANTHROPIC_API_KEY,
+    ...(ANTHROPIC_BASE_URL ? { baseURL: ANTHROPIC_BASE_URL } : {}),
+  })
   return client
 }
 
@@ -156,7 +164,7 @@ export async function buildPlan(
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       const msg = await anthropic().messages.create({
-        model: MODEL,
+        model: ANTHROPIC_MODEL,
         max_tokens: 2048,
         system,
         messages: [
@@ -190,7 +198,21 @@ function plannerError(err: Error | null): Error {
   if (err instanceof Anthropic.APIError) {
     if (err.status === 401 || err.status === 403) {
       return Object.assign(
-        new Error('Planner unavailable: the Anthropic API key was rejected.'),
+        new Error(
+          ANTHROPIC_BASE_URL
+            ? `Planner unavailable: ${ANTHROPIC_BASE_URL} rejected the API key.`
+            : 'Planner unavailable: the Anthropic API key was rejected. ' +
+              'If this key is from a gateway rather than Anthropic, set ANTHROPIC_BASE_URL.',
+        ),
+        { status: 503, expose: true },
+      )
+    }
+    if (err.status === 404 && ANTHROPIC_BASE_URL) {
+      return Object.assign(
+        new Error(
+          `Planner unavailable: ${ANTHROPIC_BASE_URL} has no Messages endpoint. ` +
+            'ANTHROPIC_BASE_URL should be the origin only — the SDK appends /v1/messages.',
+        ),
         { status: 503, expose: true },
       )
     }
