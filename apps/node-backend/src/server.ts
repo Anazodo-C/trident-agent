@@ -10,6 +10,7 @@ import serviceRoutes from './routes/services.ts'
 import agentRoutes from './routes/agent.ts'
 import walletRoutes, { userRoutes } from './routes/wallet.ts'
 import taskRoutes from './routes/tasks.ts'
+import statsRoutes from './routes/stats.ts'
 
 const app = express()
 
@@ -45,6 +46,7 @@ app.use('/api/agent', agentRoutes)
 app.use('/api/wallet', walletRoutes)
 app.use('/api/user', userRoutes)
 app.use('/api/tasks', taskRoutes)
+app.use('/api/stats', statsRoutes)
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' })

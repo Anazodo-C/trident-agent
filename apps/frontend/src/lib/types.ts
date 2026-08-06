@@ -173,3 +173,41 @@ export interface KeyMaterial {
   iv: string
   eoaAddress: string
 }
+
+export interface StatBreakdown {
+  label: string
+  count: number
+  amountUsdc: number
+}
+
+export interface StatTimePoint {
+  day: string
+  runs: number
+  spentUsdc: number
+  activeUsers: number
+}
+
+export interface Stats {
+  scope: 'me' | 'global'
+  totals: {
+    uniqueUsers: number
+    walletsCreated: number
+    runs: number
+    stepsExecuted: number
+    transactions: number
+    totalSpentUsdc: number
+    endpointsCalled: number
+    servicesUsed: number
+    freeCalls: number
+    paidCalls: number
+  }
+  successRate: number
+  avgCostPerRun: number
+  avgStepsPerRun: number
+  runsByStatus: StatBreakdown[]
+  topServices: StatBreakdown[]
+  spendByChain: StatBreakdown[]
+  failureReasons: StatBreakdown[]
+  daily: StatTimePoint[]
+  registry: { total: number; free: number; x402: number; curated: number }
+}

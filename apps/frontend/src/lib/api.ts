@@ -4,6 +4,7 @@ import type {
   KeyMaterial,
   RegistrySync,
   Service,
+  Stats,
   StepAnnotation,
   StepUpgrade,
   TaskStepDetail,
@@ -145,6 +146,9 @@ export const api = {
       sync: RegistrySync
     }>(`/api/services${qs ? `?${qs}` : ''}`)
   },
+
+  stats: (scope: 'me' | 'global' = 'global', days = 30) =>
+    request<Stats>(`/api/stats?scope=${scope}&days=${days}`),
 
   syncRegistry: () => request<RegistrySync>('/api/services/sync', { method: 'POST' }),
 

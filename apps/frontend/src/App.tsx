@@ -10,6 +10,7 @@ import { AgentTab } from './modules/agent/AgentTab.tsx'
 import { EndpointsPage } from './modules/endpoints/EndpointsPage.tsx'
 import { HistoryPage } from './modules/history/HistoryPage.tsx'
 import { WalletPage } from './modules/wallet/WalletPage.tsx'
+import { DashboardPage } from './modules/dashboard/DashboardPage.tsx'
 import { ErrorBoundary } from './modules/layout/ErrorBoundary.tsx'
 
 export default function App() {
@@ -39,6 +40,7 @@ export default function App() {
           <Route path="endpoints" element={<EndpointsPage />} />
           <Route path="history" element={<HistoryPage />} />
           <Route path="wallet" element={<WalletPage />} />
+          <Route path="dashboard" element={<DashboardPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
