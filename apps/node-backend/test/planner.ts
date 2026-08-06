@@ -11,7 +11,32 @@ import {
   normalise,
   type ExecutionPlan,
 } from '../src/llm/planner.ts'
-import { SERVICE_CATALOG, isCataloguedEndpoint } from '../src/circle/marketplaceService.ts'
+import { chooseChain, policyFor, unpayableReason } from '../src/circle/chainPolicy.ts'
+import db from '../src/db.ts'
+import { isKnownResource, type Service } from '../src/circle/registryService.ts'
+
+/**
+ * A tiny stand-in registry. The real one is synced from the x402 discovery API;
+ * these tests only care that the allowlist matches exactly and nothing else.
+ */
+const DEMO = 'https://x402.org/protected'
+function svc(resource: string, name = 'Demo'): Service {
+  return {
+    id: resource, resource, serviceName: name, description: '', tags: [],
+    host: new URL(resource).host, network: 'eip155:8453', chainKey: 'base',
+    isTestnet: false, networks: [], priceUsdc: 0.01, httpMethod: 'GET',
+    curated: true, calls30d: 10, payers30d: 1, lastCalledAt: null, iconUrl: null,
+    trust: 'curated',
+  }
+}
+const SERVICE_CATALOG: Service[] = [svc(DEMO)]
+
+// isKnownResource reads the services table, so seed the one row it should find.
+db.prepare(
+  `INSERT OR REPLACE INTO services (id, resource, service_name, host, network, chain_key,
+     is_testnet, networks_json, price_usdc, http_method, curated, calls_30d, payers_30d, synced_at)
+   VALUES (?, ?, 'Demo', 'x402.org', 'eip155:8453', 'base', 0, '[]', 0.01, 'GET', 1, 10, 1, 0)`,
+).run('demo-1', DEMO)
 
 let passed = 0
 let failed = 0
@@ -139,7 +164,7 @@ check(
   'accepts a real catalog endpoint',
   !threw(() =>
     assertStepsAreCatalogued(
-      plan({ steps: [step('https://x402.org/protected')] }),
+      plan({ steps: [step(DEMO)] }),
       SERVICE_CATALOG,
     ),
   ),
@@ -179,17 +204,46 @@ check(
 // The runner applies its own allowlist to client-supplied approvedSteps, so it
 // must reject exactly the same URLs — including prefix-matching lookalikes.
 section('isCataloguedEndpoint (runner allowlist)')
-check('accepts an exact catalog URL', isCataloguedEndpoint('https://x402.org/protected'))
-check('rejects an unknown host', !isCataloguedEndpoint('https://attacker.example.com/drain'))
+check('accepts an exact catalog URL', isKnownResource(DEMO))
+check('rejects an unknown host', !isKnownResource('https://attacker.example.com/drain'))
 check(
   'rejects a lookalike host that shares the baseUrl prefix',
-  !isCataloguedEndpoint('https://x402.org.evil.com/protected'),
+  !isKnownResource('https://x402.org.evil.com/protected'),
 )
-check('rejects an uncatalogued path on a real host', !isCataloguedEndpoint('https://x402.org/admin'))
+check('rejects an uncatalogued path on a real host', !isKnownResource('https://x402.org/admin'))
 check(
   'rejects a query-string appended to a real endpoint',
-  !isCataloguedEndpoint('https://x402.org/protected?redirect=https://evil.com'),
+  !isKnownResource('https://x402.org/protected?redirect=https://evil.com'),
 )
+
+// ------------------------------------------------------ mainnet opt-in gate
+section('chain policy (mainnet is opt-in)')
+{
+  const mainnetOnly = [
+    { network: 'eip155:8453', chainKey: 'base' as const, isTestnet: false, priceUsdc: 0.01 },
+  ]
+  const bothChains = [
+    ...mainnetOnly,
+    { network: 'eip155:5042002', chainKey: 'arcTestnet' as const, isTestnet: true, priceUsdc: 0.01 },
+  ]
+
+  const locked = policyFor({ default_chain: 'ARC-TESTNET', mainnet_enabled: 0, mainnet_chain: 'BASE' })
+  const opted = policyFor({ default_chain: 'ARC-TESTNET', mainnet_enabled: 1, mainnet_chain: 'BASE' })
+
+  check('mainnet is off by default', locked.mainnetEnabled === false)
+  check('a locked wallet cannot pay a mainnet-only service', chooseChain(mainnetOnly, locked) === null)
+  check(
+    'and the refusal explains why',
+    (unpayableReason(mainnetOnly, locked) ?? '').includes('mainnet'),
+    String(unpayableReason(mainnetOnly, locked)),
+  )
+  check('opting in unlocks it', chooseChain(mainnetOnly, opted)?.chain === 'base')
+  check(
+    'testnet is preferred when a service supports both',
+    chooseChain(bothChains, opted)?.isTestnet === true,
+  )
+  check('a locked wallet still pays the testnet option', chooseChain(bothChains, locked)?.chain === 'arcTestnet')
+}
 
 console.log(`\n${'─'.repeat(52)}`)
 if (failed === 0) {

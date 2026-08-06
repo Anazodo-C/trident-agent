@@ -317,6 +317,40 @@ router.get('/deposit-address', requireAuth, (req, res) => {
   })
 })
 
+const MainnetBody = z.object({
+  enabled: z.boolean(),
+  chain: z.enum(['BASE', 'ARC']).optional(),
+})
+
+/**
+ * Mainnet spending is opt-in and off by default.
+ *
+ * Until this is on, the agent can only settle with testnet funds, so an
+ * approved plan can never cost real money. Turning it on is the moment
+ * autonomous execution starts spending actual USDC, so it is a deliberate,
+ * separate action rather than a side effect of funding a wallet.
+ */
+router.patch('/user/mainnet', requireAuth, (req, res) => {
+  const user = currentUser(req)
+  const parsed = MainnetBody.safeParse(req.body)
+  if (!parsed.success) {
+    res.status(400).json({ error: 'enabled must be a boolean' })
+    return
+  }
+  db.prepare('UPDATE users SET mainnet_enabled = ?, mainnet_chain = ? WHERE id = ?').run(
+    parsed.data.enabled ? 1 : 0,
+    parsed.data.chain ?? 'BASE',
+    user.id,
+  )
+  const row = findUserById(user.id)!
+  res.json({
+    ok: true,
+    mainnetEnabled: row.mainnet_enabled === 1,
+    mainnetChain: row.mainnet_chain,
+    user: publicUser(row),
+  })
+})
+
 const CapBody = z.object({ cap: z.number().positive().max(100_000) })
 
 const setSpendingCap: RequestHandler = (req, res) => {

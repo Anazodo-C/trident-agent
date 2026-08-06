@@ -1,8 +1,11 @@
 import type { Response } from 'express'
 import db from '../db.ts'
 import type { PlanStep } from '../llm/planner.ts'
-import { gatewayClientFor, safeErrorMessage, resolveChain } from '../circle/gatewayService.ts'
-import { isCataloguedEndpoint } from '../circle/marketplaceService.ts'
+import { gatewayClientFor, safeErrorMessage } from '../circle/gatewayService.ts'
+import { findServiceByResource } from '../circle/registryService.ts'
+import { chooseChain, unpayableReason, type ChainPolicy } from '../circle/chainPolicy.ts'
+import type { GatewayClient } from '@circle-fin/x402-batching/client'
+import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 
 export type SseEvent =
   | 'start'
@@ -46,12 +49,13 @@ export interface RunTaskOptions {
   agentPrivateKey: string
   budgetUsdc: number | null
   spendingCapUsdc: number
-  chainLabel: string | null
+  /** Which chains this user may settle on; mainnet only when opted in. */
+  policy: ChainPolicy
   res: Response
 }
 
 export async function runTask(options: RunTaskOptions): Promise<void> {
-  const { taskId, userId, steps, agentPrivateKey, budgetUsdc, spendingCapUsdc, chainLabel, res } =
+  const { taskId, userId, steps, agentPrivateKey, budgetUsdc, spendingCapUsdc, policy, res } =
     options
 
   res.setHeader('Content-Type', 'text/event-stream')
@@ -81,8 +85,20 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
 
   let totalSpent = 0
 
+  // One client per chain, built lazily: a plan may span chains, and building a
+  // client is cheap but not free.
+  const clients = new Map<SupportedChainName, GatewayClient>()
+  const clientFor = (chain: SupportedChainName): GatewayClient => {
+    let existing = clients.get(chain)
+    if (!existing) {
+      existing = gatewayClientFor(agentPrivateKey, chain)
+      clients.set(chain, existing)
+    }
+    return existing
+  }
+
   try {
-    const client = gatewayClientFor(agentPrivateKey, resolveChain(chainLabel))
+    const client = clientFor(policy.testnet)
 
     db.prepare(
       `INSERT INTO agent_sessions (user_id, abort_flag, updated_at)
@@ -152,9 +168,21 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
       ).run(taskId, step.stepIndex)
 
       try {
-        // Defence in depth: approvedSteps arrive from the client and could be edited.
-        if (!isCataloguedEndpoint(step.endpointUrl)) {
-          throw new Error(`Endpoint is not in the service catalog: ${step.endpointUrl}`)
+        // Defence in depth: approvedSteps arrive from the client and could be
+        // edited, so the endpoint is re-checked against the registry here and
+        // matched exactly — never by prefix.
+        const service = findServiceByResource(step.endpointUrl)
+        if (!service) {
+          throw new Error(`Endpoint is not in the service registry: ${step.endpointUrl}`)
+        }
+
+        // Chain is decided here, not by the client: a tampered request must not
+        // be able to move spending onto mainnet when the user has not opted in.
+        const choice = chooseChain(service.networks, policy)
+        if (!choice) {
+          throw new Error(
+            unpayableReason(service.networks, policy) ?? 'No permitted settlement network',
+          )
         }
 
         const payOptions =
@@ -162,7 +190,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
             ? ({ method: 'POST', body: step.params } as const)
             : undefined
 
-        const result = await client.pay(step.endpointUrl, payOptions)
+        const result = await clientFor(choice.chain).pay(step.endpointUrl, payOptions)
 
         const cost = Number.parseFloat(result.formattedAmount)
         totalSpent = usdc(totalSpent + (Number.isFinite(cost) ? cost : 0))
@@ -180,6 +208,8 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           serviceName: step.serviceName,
           cost,
           totalSpent,
+          chain: choice.chain,
+          isTestnet: choice.isTestnet,
           txRef: result.transaction,
           result: result.data,
         })

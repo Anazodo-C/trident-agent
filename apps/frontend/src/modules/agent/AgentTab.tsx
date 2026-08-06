@@ -65,11 +65,8 @@ export function AgentTab() {
       setInput('')
       useTaskStore.getState().startPlanning(trimmed)
       try {
-        const { taskId: id, plan: built } = await api.plan(
-          trimmed,
-          useTaskStore.getState().budgetUsdc ?? undefined,
-        )
-        useTaskStore.getState().planReady(id, built)
+        const res = await api.plan(trimmed, useTaskStore.getState().budgetUsdc ?? undefined)
+        useTaskStore.getState().planReady(res.taskId, res.plan, res.annotations)
       } catch (err) {
         useTaskStore
           .getState()
@@ -243,7 +240,12 @@ export function AgentTab() {
             )}
 
             {phase === 'awaiting-approval' && plan && (
-              <ApprovalCard plan={plan} onApprove={runApproved} onCancel={store.reset} />
+              <ApprovalCard
+                plan={plan}
+                annotations={store.annotations}
+                onApprove={runApproved}
+                onCancel={store.reset}
+              />
             )}
 
             {(phase === 'running' || phase === 'finished') && (

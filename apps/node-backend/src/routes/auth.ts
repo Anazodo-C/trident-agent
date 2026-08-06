@@ -159,6 +159,8 @@ export function publicUser(row: UserRow) {
     eoaAddress: row.eoa_address,
     spendingCapUsdc: row.spending_cap_usdc,
     defaultChain: row.default_chain,
+    mainnetEnabled: row.mainnet_enabled === 1,
+    mainnetChain: row.mainnet_chain,
   }
 }
 

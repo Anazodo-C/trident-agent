@@ -4,6 +4,7 @@ import { ALLOWED_ORIGINS, IS_PROD, PORT, isOriginAllowed } from './env.ts'
 import { messageOf, statusOf } from './http.ts'
 import { scrubSecrets } from './circle/gatewayService.ts'
 import { STORAGE_PERSISTENT } from './db.ts'
+import { syncRegistry, syncStatus } from './circle/registryService.ts'
 import authRoutes from './routes/auth.ts'
 import serviceRoutes from './routes/services.ts'
 import agentRoutes from './routes/agent.ts'
@@ -80,5 +81,24 @@ const server = app.listen(PORT, () => {
 // SSE runs can outlive a default timeout; disable it and manage lifetime in the runner.
 server.requestTimeout = 0
 server.headersTimeout = 0
+
+/**
+ * Keep the service registry fresh so newly published x402 services appear
+ * without a redeploy. Synced on boot when empty or stale, then on a timer.
+ * Failures are logged and retried on the next tick — a stale catalog is far
+ * better than a backend that will not start.
+ */
+const REGISTRY_REFRESH_MS = 6 * 60 * 60 * 1000
+const REGISTRY_STALE_SECONDS = 12 * 60 * 60
+
+function refreshRegistry(force = false): void {
+  const status = syncStatus()
+  const age = status.completedAt ? Math.floor(Date.now() / 1000) - status.completedAt : Infinity
+  if (!force && status.serviceCount > 0 && age < REGISTRY_STALE_SECONDS) return
+  syncRegistry().catch(() => undefined)
+}
+
+setTimeout(() => refreshRegistry(), 2_000).unref()
+setInterval(() => refreshRegistry(true), REGISTRY_REFRESH_MS).unref()
 
 export default app

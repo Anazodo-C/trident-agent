@@ -1,15 +1,16 @@
 import { useMemo, useState } from 'react'
-import { ArrowRight, Ban, Play } from 'lucide-react'
-import type { ExecutionPlan, PlanStep } from '../../lib/types.ts'
+import { AlertTriangle, ArrowRight, Ban, Play, ShieldCheck, TrendingUp } from 'lucide-react'
+import type { ExecutionPlan, PlanStep, StepAnnotation } from '../../lib/types.ts'
 import { usdc } from '../../lib/format.ts'
 
 interface Props {
   plan: ExecutionPlan
+  annotations: Record<number, StepAnnotation>
   onApprove: (steps: PlanStep[], budgetUsdc: number | null) => void
   onCancel: () => void
 }
 
-export function ApprovalCard({ plan, onApprove, onCancel }: Props) {
+export function ApprovalCard({ plan, annotations, onApprove, onCancel }: Props) {
   const [excluded, setExcluded] = useState<Set<number>>(new Set())
   const [budgetInput, setBudgetInput] = useState('')
 
@@ -22,6 +23,11 @@ export function ApprovalCard({ plan, onApprove, onCancel }: Props) {
   )
 
   const estimatedTotal = approvedSteps.reduce((sum, s) => sum + s.estimatedCostUsdc, 0)
+
+  // Counted over the plan's original indices, since annotations are keyed by them.
+  const mainnetSteps = plan.steps.filter(
+    (s) => !excluded.has(s.stepIndex) && annotations[s.stepIndex]?.isTestnet === false,
+  ).length
   const budget = budgetInput.trim() === '' ? null : Number.parseFloat(budgetInput)
   const budgetInvalid = budget !== null && (!Number.isFinite(budget) || budget <= 0)
   const budgetTooLow = budget !== null && !budgetInvalid && budget < estimatedTotal
@@ -80,11 +86,24 @@ export function ApprovalCard({ plan, onApprove, onCancel }: Props) {
                 <p className="mt-1.5 truncate font-mono text-[11px] text-slate-600">
                   {step.httpMethod} {step.endpointUrl}
                 </p>
+                <StepProvenance annotation={annotations[step.stepIndex]} />
               </div>
             </li>
           )
         })}
       </ol>
+
+      {mainnetSteps > 0 && (
+        <div className="border-t border-[#1A7FFF]/20 bg-[#FFA040]/5 px-5 py-3">
+          <p className="flex items-start gap-2 text-[11px] leading-relaxed text-[#FFA040]">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <span>
+              {mainnetSteps} step{mainnetSteps === 1 ? '' : 's'} will settle on mainnet with{' '}
+              <strong className="font-semibold">real USDC</strong>. This is not a test transaction.
+            </span>
+          </p>
+        </div>
+      )}
 
       <div className="border-t border-[#1A7FFF]/20 px-5 py-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -128,5 +147,51 @@ export function ApprovalCard({ plan, onApprove, onCancel }: Props) {
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * Registry-sourced facts about the step, shown beside its cost. The model can
+ * assert anything about a service; these come from the sync, so an endpoint
+ * with no recorded traffic is visibly flagged before the user approves spending.
+ */
+function StepProvenance({ annotation }: { annotation: StepAnnotation | undefined }) {
+  if (!annotation) return null
+
+  return (
+    <>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {annotation.trust === 'curated' && (
+          <span className="badge gap-1 bg-[#00FF88]/10 text-[#00FF88]">
+            <ShieldCheck className="h-3 w-3" />
+            curated
+          </span>
+        )}
+        {annotation.trust === 'active' && (
+          <span className="badge gap-1 bg-[#1A7FFF]/10 text-[#1A7FFF]">
+            <TrendingUp className="h-3 w-3" />
+            {annotation.calls30d.toLocaleString()} calls/30d
+          </span>
+        )}
+        {annotation.chain && (
+          <span className="badge bg-slate-500/10 text-slate-400">
+            {annotation.isTestnet ? 'testnet' : annotation.chain}
+          </span>
+        )}
+      </div>
+
+      {annotation.warning && (
+        <p className="mt-2 flex items-start gap-1.5 rounded-lg border border-[#FFA040]/30 bg-[#FFA040]/5 p-2 text-[11px] leading-relaxed text-[#FFA040]">
+          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+          {annotation.warning}
+        </p>
+      )}
+
+      {annotation.blockedReason && (
+        <p className="mt-2 rounded-lg border border-[#FF4466]/30 bg-[#FF4466]/5 p-2 text-[11px] leading-relaxed text-[#FF4466]">
+          {annotation.blockedReason}
+        </p>
+      )}
+    </>
   )
 }

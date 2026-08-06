@@ -5,22 +5,57 @@ export interface User {
   eoaAddress: string | null
   spendingCapUsdc: number
   defaultChain: string
+  mainnetEnabled: boolean
+  mainnetChain: string
 }
 
-export type Verification = 'verified-x402' | 'unverified' | 'unreachable'
+/** curated = in Circle's marketplace; active = used recently; untested = no recorded traffic. */
+export type TrustTier = 'curated' | 'active' | 'untested'
 
 export interface Service {
   id: string
-  name: string
+  resource: string
+  serviceName: string
   description: string
-  category: string
-  baseUrl: string
-  endpoints: string[]
-  priceRangeUsdc: string
-  provider: '1P' | '3P'
   tags: string[]
-  verification: Verification
-  note?: string
+  host: string
+  network: string | null
+  chainKey: string | null
+  isTestnet: boolean
+  priceUsdc: number
+  httpMethod: 'GET' | 'POST'
+  curated: boolean
+  calls30d: number
+  payers30d: number
+  lastCalledAt: string | null
+  iconUrl: string | null
+  trust: TrustTier
+  /** Whether this wallet can settle it under the current chain policy. */
+  payable: boolean
+  payChain: string | null
+  payPriceUsdc: number
+  payIsTestnet: boolean
+  blockedReason: string | null
+}
+
+export interface RegistrySync {
+  startedAt: number | null
+  completedAt: number | null
+  totalKept: number
+  status: string | null
+  error: string | null
+  serviceCount: number
+}
+
+/** Registry-sourced facts about a planned step — not the model's claims. */
+export interface StepAnnotation {
+  trust: TrustTier
+  calls30d: number
+  host: string
+  chain: string | null
+  isTestnet: boolean
+  blockedReason?: string
+  warning?: string
 }
 
 export interface PlanStep {

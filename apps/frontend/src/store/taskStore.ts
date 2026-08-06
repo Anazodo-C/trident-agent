@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { api } from '../lib/api.ts'
-import type { ExecutionPlan, LiveStep, TaskSummary } from '../lib/types.ts'
+import type { ExecutionPlan, LiveStep, StepAnnotation, TaskSummary } from '../lib/types.ts'
 
 export type RunPhase = 'idle' | 'planning' | 'awaiting-approval' | 'running' | 'finished'
 
@@ -15,6 +15,8 @@ interface TaskState {
   goal: string
   taskId: string | null
   plan: ExecutionPlan | null
+  /** Registry facts per step index — drives the approval-card warnings. */
+  annotations: Record<number, StepAnnotation>
   budgetUsdc: number | null
   liveSteps: LiveStep[]
   totalSpent: number
@@ -30,7 +32,7 @@ interface TaskState {
   setGoal: (goal: string) => void
   setBudget: (budget: number | null) => void
   startPlanning: (goal: string) => void
-  planReady: (taskId: string, plan: ExecutionPlan) => void
+  planReady: (taskId: string, plan: ExecutionPlan, annotations: Record<number, StepAnnotation>) => void
   planFailed: (message: string) => void
   beginRun: (steps: LiveStep[], controller: AbortController) => void
   patchStep: (stepIndex: number, patch: Partial<LiveStep>) => void
@@ -46,6 +48,7 @@ const initial = {
   goal: '',
   taskId: null,
   plan: null,
+  annotations: {} as Record<number, StepAnnotation>,
   budgetUsdc: null,
   liveSteps: [] as LiveStep[],
   totalSpent: 0,
@@ -66,7 +69,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   startPlanning: (goal) =>
     set({ ...initial, goal, phase: 'planning', history: get().history }),
 
-  planReady: (taskId, plan) => set({ taskId, plan, phase: 'awaiting-approval', error: null }),
+  planReady: (taskId, plan, annotations) =>
+    set({ taskId, plan, annotations, phase: 'awaiting-approval', error: null }),
 
   planFailed: (message) => set({ phase: 'idle', error: message }),
 

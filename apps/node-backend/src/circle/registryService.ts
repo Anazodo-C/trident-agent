@@ -1,0 +1,435 @@
+import { createHash } from 'node:crypto'
+import { CHAIN_CONFIGS } from '@circle-fin/x402-batching/client'
+import type { SupportedChainName } from '@circle-fin/x402-batching/client'
+import db, { type ServiceRow } from '../db.ts'
+
+/**
+ * Mirror of the x402 discovery registry (the "Bazaar").
+ *
+ * agents.circle.com has no public API — its catalogue is server-rendered and
+ * its JS bundle contains no fetch URLs. The x402 ecosystem does publish a
+ * discovery API, which is a superset of Circle's marketplace and carries the
+ * `curated` flag identifying it.
+ */
+const DISCOVERY_URL = 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources'
+const PAGE_SIZE = 1000
+const MAX_PAGES = 40
+const REQUEST_TIMEOUT_MS = 45_000
+
+/** Resources with no recorded traffic are shown, but flagged. */
+export type TrustTier = 'curated' | 'active' | 'untested'
+
+export interface ServiceNetworkOption {
+  network: string
+  chainKey: SupportedChainName
+  isTestnet: boolean
+  priceUsdc: number
+  asset: string | null
+  scheme: string
+}
+
+export interface Service {
+  id: string
+  resource: string
+  serviceName: string
+  description: string
+  tags: string[]
+  host: string
+  network: string | null
+  chainKey: SupportedChainName | null
+  isTestnet: boolean
+  networks: ServiceNetworkOption[]
+  priceUsdc: number
+  httpMethod: 'GET' | 'POST'
+  curated: boolean
+  calls30d: number
+  payers30d: number
+  lastCalledAt: string | null
+  iconUrl: string | null
+  trust: TrustTier
+}
+
+/* ------------------------------------------------------------------ chains */
+
+const TESTNET_KEYS = new Set<SupportedChainName>([
+  'arcTestnet',
+  'baseSepolia',
+  'sepolia',
+  'arbitrumSepolia',
+  'avalancheFuji',
+  'optimismSepolia',
+  'polygonAmoy',
+  'unichainSepolia',
+  'seiAtlantic',
+  'sonicTestnet',
+  'worldChainSepolia',
+  'hyperEvmTestnet',
+])
+
+/**
+ * CAIP-2 network -> Gateway chain key, derived from the SDK's own chain table
+ * rather than hardcoded, so it stays correct as the SDK adds chains.
+ */
+const NETWORK_TO_CHAIN: Record<string, SupportedChainName> = (() => {
+  const map: Record<string, SupportedChainName> = {}
+  for (const [key, config] of Object.entries(CHAIN_CONFIGS)) {
+    map[`eip155:${config.chain.id}`] = key as SupportedChainName
+  }
+  // Registry entries are not consistently CAIP-2; some publish bare names.
+  Object.assign(map, {
+    base: 'base',
+    'base-sepolia': 'baseSepolia',
+    polygon: 'polygon',
+    arbitrum: 'arbitrum',
+    ethereum: 'ethereum',
+    optimism: 'optimism',
+    avalanche: 'avalanche',
+  } satisfies Record<string, SupportedChainName>)
+  return map
+})()
+
+export function chainForNetwork(network: string): SupportedChainName | null {
+  return NETWORK_TO_CHAIN[network.trim()] ?? null
+}
+
+export function isTestnetChain(chain: SupportedChainName): boolean {
+  return TESTNET_KEYS.has(chain)
+}
+
+/* ------------------------------------------------------------------- sync */
+
+interface DiscoveryAccept {
+  scheme?: string
+  network?: string
+  amount?: string
+  asset?: string
+  extra?: Record<string, unknown>
+}
+
+interface DiscoveryItem {
+  resource?: string
+  serviceName?: string
+  description?: string
+  tags?: unknown
+  type?: string
+  curated?: boolean
+  iconUrl?: string
+  accepts?: DiscoveryAccept[]
+  quality?: {
+    l30DaysTotalCalls?: number
+    l30DaysUniquePayers?: number
+    lastCalledAt?: string
+  }
+}
+
+function toUsdc(amount: string | undefined): number {
+  const n = Number(amount ?? 0)
+  // x402 amounts are atomic units of the asset; USDC is 6dp.
+  return Number.isFinite(n) ? Number((n / 1e6).toFixed(6)) : 0
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * Reduce a discovery item to the shape we store. Returns null when nothing
+ * about it is settleable through Gateway, which is the only way we can pay.
+ */
+function normalise(item: DiscoveryItem): Omit<ServiceRow, 'synced_at'> | null {
+  const resource = item.resource?.trim()
+  if (!resource || !/^https?:\/\//i.test(resource)) return null
+  if (item.type && item.type !== 'http') return null
+
+  const options: ServiceNetworkOption[] = []
+  for (const accept of item.accepts ?? []) {
+    const network = accept.network?.trim()
+    if (!network) continue
+    const chainKey = chainForNetwork(network)
+    if (!chainKey) continue
+    options.push({
+      network,
+      chainKey,
+      isTestnet: isTestnetChain(chainKey),
+      priceUsdc: toUsdc(accept.amount),
+      asset: accept.asset ?? null,
+      scheme: accept.scheme ?? 'exact',
+    })
+  }
+  if (options.length === 0) return null
+
+  // Prefer mainnet Base — the deepest inventory and our mainnet default —
+  // then any other mainnet, then testnet.
+  const preferred =
+    options.find((o) => o.chainKey === 'base') ??
+    options.find((o) => !o.isTestnet) ??
+    options[0]!
+
+  const tags = Array.isArray(item.tags) ? item.tags.map(String).filter(Boolean) : []
+  const quality = item.quality ?? {}
+  const host = hostOf(resource)
+
+  return {
+    id: createHash('sha1').update(resource).digest('hex').slice(0, 24),
+    resource,
+    service_name: item.serviceName?.trim() || host || 'Unnamed service',
+    description: item.description?.trim() || '',
+    tags: JSON.stringify(tags),
+    host,
+    network: preferred.network,
+    chain_key: preferred.chainKey,
+    is_testnet: preferred.isTestnet ? 1 : 0,
+    networks_json: JSON.stringify(options),
+    asset: preferred.asset,
+    price_usdc: preferred.priceUsdc,
+    scheme: preferred.scheme,
+    // Discovery does not publish the verb; the payment flow retries as needed.
+    http_method: 'GET',
+    curated: item.curated ? 1 : 0,
+    calls_30d: quality.l30DaysTotalCalls ?? 0,
+    payers_30d: quality.l30DaysUniquePayers ?? 0,
+    last_called_at: quality.lastCalledAt ?? null,
+    icon_url: item.iconUrl ?? null,
+  }
+}
+
+async function fetchPage(offset: number): Promise<DiscoveryItem[]> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
+  try {
+    const res = await fetch(`${DISCOVERY_URL}?limit=${PAGE_SIZE}&offset=${offset}`, {
+      signal: controller.signal,
+      headers: { accept: 'application/json' },
+    })
+    if (!res.ok) throw new Error(`discovery returned ${res.status}`)
+    const body = (await res.json()) as { items?: DiscoveryItem[] }
+    return body.items ?? []
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export interface SyncResult {
+  seen: number
+  kept: number
+  durationMs: number
+}
+
+let syncInFlight: Promise<SyncResult> | null = null
+
+/** Full refresh. Concurrent callers share one run rather than stampeding. */
+export function syncRegistry(): Promise<SyncResult> {
+  syncInFlight ??= runSync().finally(() => {
+    syncInFlight = null
+  })
+  return syncInFlight
+}
+
+async function runSync(): Promise<SyncResult> {
+  const startedAt = Date.now()
+  db.prepare(
+    `INSERT INTO registry_sync (id, started_at, status) VALUES (1, ?, 'running')
+     ON CONFLICT(id) DO UPDATE SET started_at = excluded.started_at, status = 'running', error = NULL`,
+  ).run(Math.floor(startedAt / 1000))
+
+  const upsert = db.prepare(`
+    INSERT INTO services (
+      id, resource, service_name, description, tags, host, network, chain_key,
+      is_testnet, networks_json, asset, price_usdc, scheme, http_method, curated,
+      calls_30d, payers_30d, last_called_at, icon_url, synced_at
+    ) VALUES (
+      @id, @resource, @service_name, @description, @tags, @host, @network, @chain_key,
+      @is_testnet, @networks_json, @asset, @price_usdc, @scheme, @http_method, @curated,
+      @calls_30d, @payers_30d, @last_called_at, @icon_url, @synced_at
+    )
+    ON CONFLICT(resource) DO UPDATE SET
+      service_name = excluded.service_name, description = excluded.description,
+      tags = excluded.tags, host = excluded.host, network = excluded.network,
+      chain_key = excluded.chain_key, is_testnet = excluded.is_testnet,
+      networks_json = excluded.networks_json, asset = excluded.asset,
+      price_usdc = excluded.price_usdc, scheme = excluded.scheme,
+      curated = excluded.curated, calls_30d = excluded.calls_30d,
+      payers_30d = excluded.payers_30d, last_called_at = excluded.last_called_at,
+      icon_url = excluded.icon_url, synced_at = excluded.synced_at
+  `)
+
+  let seen = 0
+  let kept = 0
+  const syncedAt = Math.floor(Date.now() / 1000)
+
+  try {
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const items = await fetchPage(page * PAGE_SIZE)
+      if (items.length === 0) break
+      seen += items.length
+
+      const rows = items
+        .map(normalise)
+        .filter((r): r is Omit<ServiceRow, 'synced_at'> => r !== null)
+        .map((r) => ({ ...r, synced_at: syncedAt }))
+
+      db.transaction(() => {
+        for (const row of rows) upsert.run(row)
+      })()
+      kept += rows.length
+
+      if (items.length < PAGE_SIZE) break
+    }
+
+    // Anything not seen this run has left the registry.
+    db.prepare('DELETE FROM services WHERE synced_at IS NULL OR synced_at < ?').run(syncedAt)
+
+    const durationMs = Date.now() - startedAt
+    db.prepare(
+      `UPDATE registry_sync SET completed_at = ?, total_seen = ?, total_kept = ?, status = 'ok', error = NULL WHERE id = 1`,
+    ).run(Math.floor(Date.now() / 1000), seen, kept)
+    console.log(`[trident] registry sync: ${kept} services from ${seen} records in ${durationMs}ms`)
+    return { seen, kept, durationMs }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    db.prepare(
+      `UPDATE registry_sync SET completed_at = ?, status = 'failed', error = ? WHERE id = 1`,
+    ).run(Math.floor(Date.now() / 1000), message.slice(0, 300))
+    console.error('[trident] registry sync failed:', message)
+    throw err
+  }
+}
+
+export function syncStatus(): {
+  startedAt: number | null
+  completedAt: number | null
+  totalKept: number
+  status: string | null
+  error: string | null
+  serviceCount: number
+} {
+  const row = db.prepare('SELECT * FROM registry_sync WHERE id = 1').get() as
+    | { started_at: number; completed_at: number; total_kept: number; status: string; error: string }
+    | undefined
+  const { count } = db.prepare('SELECT COUNT(*) AS count FROM services').get() as { count: number }
+  return {
+    startedAt: row?.started_at ?? null,
+    completedAt: row?.completed_at ?? null,
+    totalKept: row?.total_kept ?? 0,
+    status: row?.status ?? null,
+    error: row?.error ?? null,
+    serviceCount: count,
+  }
+}
+
+/* ---------------------------------------------------------------- reading */
+
+export function rowToService(row: ServiceRow): Service {
+  const networks = safeParse<ServiceNetworkOption[]>(row.networks_json, [])
+  return {
+    id: row.id,
+    resource: row.resource,
+    serviceName: row.service_name ?? row.host ?? 'Unnamed service',
+    description: row.description ?? '',
+    tags: safeParse<string[]>(row.tags, []),
+    host: row.host ?? '',
+    network: row.network,
+    chainKey: (row.chain_key as SupportedChainName | null) ?? null,
+    isTestnet: row.is_testnet === 1,
+    networks,
+    priceUsdc: row.price_usdc ?? 0,
+    httpMethod: (row.http_method as 'GET' | 'POST') ?? 'GET',
+    curated: row.curated === 1,
+    calls30d: row.calls_30d,
+    payers30d: row.payers_30d,
+    lastCalledAt: row.last_called_at,
+    iconUrl: row.icon_url,
+    trust: row.curated === 1 ? 'curated' : row.calls_30d > 0 ? 'active' : 'untested',
+  }
+}
+
+function safeParse<T>(json: string | null, fallback: T): T {
+  if (!json) return fallback
+  try {
+    return JSON.parse(json) as T
+  } catch {
+    return fallback
+  }
+}
+
+export interface SearchOptions {
+  query?: string
+  curatedOnly?: boolean
+  /** Restrict to services settleable on these chains. */
+  chains?: SupportedChainName[]
+  limit?: number
+  offset?: number
+}
+
+export function searchServices(options: SearchOptions = {}): {
+  services: Service[]
+  total: number
+} {
+  const { query = '', curatedOnly = false, chains, limit = 30, offset = 0 } = options
+  const where: string[] = []
+  const params: Record<string, unknown> = {}
+
+  if (query.trim()) {
+    where.push('(service_name LIKE @q OR description LIKE @q OR tags LIKE @q OR host LIKE @q)')
+    params['q'] = `%${query.trim()}%`
+  }
+  if (curatedOnly) where.push('curated = 1')
+  if (chains?.length) {
+    // networks_json holds every settleable option, so match against it rather
+    // than the single preferred chain.
+    const clauses = chains.map((c, i) => {
+      params[`c${i}`] = `%"chainKey":"${c}"%`
+      return `networks_json LIKE @c${i}`
+    })
+    where.push(`(${clauses.join(' OR ')})`)
+  }
+
+  const clause = where.length ? `WHERE ${where.join(' AND ')}` : ''
+  const { total } = db
+    .prepare(`SELECT COUNT(*) AS total FROM services ${clause}`)
+    .get(params) as { total: number }
+
+  const rows = db
+    .prepare(
+      `SELECT * FROM services ${clause}
+       ORDER BY curated DESC, calls_30d DESC, service_name ASC
+       LIMIT @limit OFFSET @offset`,
+    )
+    .all({ ...params, limit, offset }) as ServiceRow[]
+
+  return { services: rows.map(rowToService), total }
+}
+
+export function findServiceByResource(resource: string): Service | null {
+  const row = db.prepare('SELECT * FROM services WHERE resource = ?').get(resource) as
+    | ServiceRow
+    | undefined
+  return row ? rowToService(row) : null
+}
+
+/** The runner's allowlist: an endpoint must be a known registry resource. */
+export function isKnownResource(resource: string): boolean {
+  const row = db.prepare('SELECT 1 FROM services WHERE resource = ?').get(resource)
+  return row !== undefined
+}
+
+export function categories(): string[] {
+  const rows = db
+    .prepare(`SELECT tags FROM services WHERE tags IS NOT NULL AND tags != '[]' LIMIT 4000`)
+    .all() as { tags: string }[]
+  const counts = new Map<string, number>()
+  for (const r of rows) {
+    for (const tag of safeParse<string[]>(r.tags, [])) {
+      const t = tag.trim().toLowerCase()
+      if (t.length > 1 && t.length < 24) counts.set(t, (counts.get(t) ?? 0) + 1)
+    }
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 24)
+    .map(([tag]) => tag)
+}

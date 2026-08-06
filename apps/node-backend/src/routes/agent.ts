@@ -4,8 +4,10 @@ import { z } from 'zod'
 import db, { type TaskRow } from '../db.ts'
 import { asyncRoute, httpError } from '../http.ts'
 import { currentUser, requireAuth } from '../auth/jwt.ts'
-import { buildPlan, StepSchema, type PlanStep } from '../llm/planner.ts'
-import { SERVICE_CATALOG, isCataloguedEndpoint } from '../circle/marketplaceService.ts'
+import { buildPlan, StepSchema, type PlanStep, type StepAnnotation } from '../llm/planner.ts'
+import { findServiceByResource } from '../circle/registryService.ts'
+import { selectCandidates } from '../circle/candidateService.ts'
+import { chooseChain, policyFor, unpayableReason } from '../circle/chainPolicy.ts'
 import { runTask } from '../agent/runner.ts'
 import { findUserById } from '../auth/users.ts'
 
@@ -58,7 +60,35 @@ router.post(
     assertPlanRateLimit(user.id)
 
     const { goal, budgetUsdc } = parsed.data
-    const plan = await buildPlan(goal, SERVICE_CATALOG, budgetUsdc)
+
+    const fresh = findUserById(user.id)
+    if (!fresh) throw httpError(401, 'User no longer exists')
+    const policy = policyFor(fresh)
+
+    // The registry holds ~14k services, far past what fits in a prompt, so a
+    // shortlist is retrieved for this goal and only that reaches the model.
+    const candidates = selectCandidates(goal, { chains: policy.allowed })
+    const plan = await buildPlan(goal, candidates.services, budgetUsdc)
+
+    // Annotate from the registry rather than trusting the model's claims, so
+    // the approval card can warn about endpoints with no recorded usage.
+    const annotations: Record<number, StepAnnotation> = {}
+    for (const step of plan.steps) {
+      const service = findServiceByResource(step.endpointUrl)
+      if (!service) continue
+      const choice = chooseChain(service.networks, policy)
+      annotations[step.stepIndex] = {
+        trust: service.trust,
+        calls30d: service.calls30d,
+        host: service.host,
+        chain: choice?.chain ?? null,
+        isTestnet: choice?.isTestnet ?? false,
+        ...(choice ? {} : { blockedReason: unpayableReason(service.networks, policy) ?? undefined }),
+        ...(service.trust === 'untested'
+          ? { warning: 'No recorded usage in the last 30 days — this endpoint may not respond.' }
+          : {}),
+      }
+    }
 
     const taskId = randomUUID()
     const insertTask = db.prepare(
@@ -86,7 +116,14 @@ router.post(
       }
     })()
 
-    res.json({ taskId, plan })
+    res.json({
+      taskId,
+      plan,
+      annotations,
+      candidatesConsidered: candidates.services.length,
+      usedFallback: candidates.fallback,
+      mainnetEnabled: policy.mainnetEnabled,
+    })
   }),
 )
 
@@ -114,11 +151,24 @@ router.post(
     if (task.status === 'running') throw httpError(409, 'This task is already running')
     if (task.completed_at) throw httpError(409, 'This task has already finished')
 
-    const rogue = approvedSteps.find((s) => !isCataloguedEndpoint(s.endpointUrl))
+    const rogue = approvedSteps.find((s) => findServiceByResource(s.endpointUrl) === null)
     if (rogue) throw httpError(400, `Endpoint is not in the service catalog: ${rogue.endpointUrl}`)
 
     const fresh = findUserById(user.id)
     if (!fresh?.eoa_address) throw httpError(409, 'No agent wallet has been set up for this account')
+
+    // Reject the whole run if any step needs a chain the user has not enabled,
+    // rather than discovering it mid-execution after money has already moved.
+    const policy = policyFor(fresh)
+    for (const step of approvedSteps) {
+      const service = findServiceByResource(step.endpointUrl)!
+      if (!chooseChain(service.networks, policy)) {
+        throw httpError(
+          403,
+          `${step.serviceName}: ${unpayableReason(service.networks, policy) ?? 'no permitted settlement network'}`,
+        )
+      }
+    }
 
     syncApprovedSteps(taskId, approvedSteps)
 
@@ -129,7 +179,7 @@ router.post(
       agentPrivateKey,
       budgetUsdc: budgetUsdc ?? task.budget_usdc ?? null,
       spendingCapUsdc: fresh.spending_cap_usdc,
-      chainLabel: fresh.default_chain,
+      policy,
       res,
     })
   }),

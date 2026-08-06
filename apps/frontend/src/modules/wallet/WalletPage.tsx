@@ -58,6 +58,7 @@ export function WalletPage() {
         <DepositPanel />
         <GatewayPanel />
         <SpendingCapPanel onSaved={refreshUser} />
+        <MainnetPanel onSaved={refreshUser} />
       </div>
 
       <p className="mt-6 text-xs leading-relaxed text-slate-600">
@@ -340,6 +341,92 @@ function SpendingCapPanel({ onSaved }: { onSaved: () => void }) {
           {message.text}
         </p>
       )}
+    </Panel>
+  )
+}
+
+/**
+ * Mainnet spending is opt-in and off by default.
+ *
+ * Turning it on is the moment the agent stops playing with faucet funds and
+ * starts spending real USDC autonomously once a plan is approved — so it is a
+ * deliberate, separate action, stated plainly rather than buried in a setting.
+ */
+function MainnetPanel({ onSaved }: { onSaved: () => void }) {
+  const user = useAuthStore((s) => s.user)
+  const enabled = user?.mainnetEnabled ?? false
+  const [busy, setBusy] = useState(false)
+  const [confirming, setConfirming] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  async function apply(next: boolean) {
+    setBusy(true)
+    setError(null)
+    try {
+      await api.setMainnet(next, 'BASE')
+      onSaved()
+      setConfirming(false)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Panel title="Mainnet Spending">
+      <div className="mb-4 flex items-center gap-2">
+        <span
+          className={`badge ${enabled ? 'bg-[#FFA040]/10 text-[#FFA040]' : 'bg-[#00FF88]/10 text-[#00FF88]'}`}
+        >
+          {enabled ? 'real funds enabled' : 'testnet only'}
+        </span>
+        {enabled && (
+          <span className="badge bg-slate-500/10 text-slate-400">
+            {user?.mainnetChain ?? 'BASE'}
+          </span>
+        )}
+      </div>
+
+      <p className="mb-4 text-sm leading-relaxed text-slate-400">
+        {enabled
+          ? 'Your agent can settle on Base with real USDC. Testnet is still preferred whenever a service supports it.'
+          : 'Your agent can only spend testnet USDC. Almost every service in the registry settles on mainnet, so enabling this unlocks the catalog.'}
+      </p>
+
+      {!enabled && !confirming && (
+        <button className="btn-ghost w-full" onClick={() => setConfirming(true)}>
+          Enable mainnet spending
+        </button>
+      )}
+
+      {!enabled && confirming && (
+        <div className="rounded-lg border border-[#FFA040]/40 bg-[#FFA040]/10 p-3">
+          <p className="mb-3 text-xs leading-relaxed text-[#FFA040]">
+            Once enabled, an approved plan spends <strong>real USDC</strong> from your agent
+            wallet without further confirmation. Your spending cap and per-run budget stay in
+            force. Fund the wallet on Base before running anything.
+          </p>
+          <div className="flex gap-2">
+            <button className="btn-danger flex-1" onClick={() => apply(true)} disabled={busy}>
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              I understand — enable
+            </button>
+            <button className="btn-ghost" onClick={() => setConfirming(false)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {enabled && (
+        <button className="btn-ghost w-full" onClick={() => apply(false)} disabled={busy}>
+          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Switch back to testnet only
+        </button>
+      )}
+
+      {error && <p className="mt-3 text-xs text-[#FF4466]">{error}</p>}
     </Panel>
   )
 }

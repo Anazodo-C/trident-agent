@@ -2,7 +2,9 @@ import type {
   DepositInfo,
   ExecutionPlan,
   KeyMaterial,
+  RegistrySync,
   Service,
+  StepAnnotation,
   TaskStepDetail,
   TaskSummary,
   User,
@@ -117,22 +119,51 @@ export const api = {
 
   keyMaterial: () => request<KeyMaterial>('/auth/key-material'),
 
-  services: (q = '', category = '', probe = false) => {
+  services: (opts: {
+    q?: string
+    curated?: boolean
+    all?: boolean
+    limit?: number
+    offset?: number
+  } = {}) => {
     const params = new URLSearchParams()
-    if (q) params.set('q', q)
-    if (category) params.set('category', category)
-    if (probe) params.set('probe', '1')
+    if (opts.q) params.set('q', opts.q)
+    if (opts.curated) params.set('curated', '1')
+    if (opts.all) params.set('all', '1')
+    if (opts.limit) params.set('limit', String(opts.limit))
+    if (opts.offset) params.set('offset', String(opts.offset))
     const qs = params.toString()
-    return request<{ services: Service[]; categories: string[]; probed: boolean }>(
-      `/api/services${qs ? `?${qs}` : ''}`,
-    )
+    return request<{
+      services: Service[]
+      total: number
+      limit: number
+      offset: number
+      categories: string[]
+      mainnetEnabled: boolean
+      sync: RegistrySync
+    }>(`/api/services${qs ? `?${qs}` : ''}`)
   },
 
+  syncRegistry: () => request<RegistrySync>('/api/services/sync', { method: 'POST' }),
+
   plan: (goal: string, budgetUsdc?: number) =>
-    request<{ taskId: string; plan: ExecutionPlan }>('/api/agent/plan', {
+    request<{
+      taskId: string
+      plan: ExecutionPlan
+      annotations: Record<number, StepAnnotation>
+      candidatesConsidered: number
+      usedFallback: boolean
+      mainnetEnabled: boolean
+    }>('/api/agent/plan', {
       method: 'POST',
       body: JSON.stringify(budgetUsdc !== undefined ? { goal, budgetUsdc } : { goal }),
     }),
+
+  setMainnet: (enabled: boolean, chain: 'BASE' | 'ARC' = 'BASE') =>
+    request<{ ok: boolean; mainnetEnabled: boolean; mainnetChain: string; user: User }>(
+      '/api/wallet/user/mainnet',
+      { method: 'PATCH', body: JSON.stringify({ enabled, chain }) },
+    ),
 
   stop: (taskId: string) =>
     request<{ ok: boolean; note: string }>('/api/agent/stop', {

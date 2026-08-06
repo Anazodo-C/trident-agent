@@ -7,12 +7,21 @@
  *
  * Run with:  npm run test:runner -w @trident/node-backend
  */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { generatePrivateKey } from 'viem/accounts'
 import type { Response } from 'express'
 import db from '../src/db.ts'
 import { runTask } from '../src/agent/runner.ts'
 import type { PlanStep } from '../src/llm/planner.ts'
+import type { ChainPolicy } from '../src/circle/chainPolicy.ts'
+
+// Testnet-only, matching a user who has not opted into mainnet spending.
+const TEST_POLICY: ChainPolicy = {
+  allowed: ['arcTestnet'],
+  testnet: 'arcTestnet',
+  mainnet: null,
+  mainnetEnabled: false,
+}
 
 let passed = 0
 let failed = 0
@@ -86,6 +95,22 @@ function fakeResponse(): FakeRes {
         .filter((f): f is { event: string; data: Record<string, unknown> } => f !== null),
   }
 }
+
+/** The runner resolves endpoints against the registry, so seed the row it needs. */
+function seedService(resource: string): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO services (id, resource, service_name, host, network, chain_key,
+       is_testnet, networks_json, price_usdc, http_method, curated, calls_30d, payers_30d, synced_at)
+     VALUES (?, ?, 'x402 Reference', 'x402.org', 'eip155:5042002', 'arcTestnet', 1, ?, 0.01, 'GET', 1, 5, 1, 0)`,
+  ).run(
+    'seed-' + createHash('sha1').update(resource).digest('hex').slice(0, 12),
+    resource,
+    JSON.stringify([
+      { network: 'eip155:5042002', chainKey: 'arcTestnet', isTestnet: true, priceUsdc: 0.01, asset: null, scheme: 'exact' },
+    ]),
+  )
+}
+seedService('https://x402.org/protected')
 
 function seedUser(): string {
   const userId = randomUUID()
@@ -161,7 +186,7 @@ async function main(): Promise<void> {
       agentPrivateKey: key,
       budgetUsdc: 0.001,
       spendingCapUsdc: 100,
-      chainLabel: 'ARC-TESTNET',
+      policy: TEST_POLICY,
       res: fake.res,
     })
 
@@ -189,7 +214,7 @@ async function main(): Promise<void> {
       // No per-run budget: the account-level cap must still stop it.
       budgetUsdc: null,
       spendingCapUsdc: 0.001,
-      chainLabel: 'ARC-TESTNET',
+      policy: TEST_POLICY,
       res: fake.res,
     })
 
@@ -226,7 +251,7 @@ async function main(): Promise<void> {
       agentPrivateKey: key,
       budgetUsdc: null,
       spendingCapUsdc: 100,
-      chainLabel: 'ARC-TESTNET',
+      policy: TEST_POLICY,
       res: fake.res,
     })
 
@@ -261,7 +286,7 @@ async function main(): Promise<void> {
       agentPrivateKey: key,
       budgetUsdc: null,
       spendingCapUsdc: 100,
-      chainLabel: 'ARC-TESTNET',
+      policy: TEST_POLICY,
       res: fake.res,
     })
 
@@ -269,8 +294,8 @@ async function main(): Promise<void> {
     const failure = frames.find((f) => f.event === 'step_failed')
     check('uncatalogued endpoint is refused', failure !== undefined)
     check(
-      'refusal names the catalog rule',
-      String(failure?.data['error'] ?? '').includes('not in the service catalog'),
+      'refusal names the registry rule',
+      String(failure?.data['error'] ?? '').includes('not in the service registry'),
       String(failure?.data['error']),
     )
   }
@@ -290,7 +315,7 @@ async function main(): Promise<void> {
       agentPrivateKey: key,
       budgetUsdc: null,
       spendingCapUsdc: 100,
-      chainLabel: 'ARC-TESTNET',
+      policy: TEST_POLICY,
       res: fake.res,
     })
 

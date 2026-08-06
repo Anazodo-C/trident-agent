@@ -136,10 +136,49 @@ Arc Testnet: chain ID `5042002`, RPC `https://rpc.testnet.arc.network`, explorer
 `https://testnet.arcscan.app`, faucet `https://faucet.circle.com`. Its native gas
 token is also called USDC (18 decimals) and is distinct from the 6-decimal ERC-20.
 
-## Service catalog
+## Service registry
 
-`agents.circle.com` exposes no public JSON API, so the catalog is maintained in
-`src/circle/marketplaceService.ts`. Entries carry a `verification` status and
-`GET /api/services?probe=1` performs a live 402 handshake, so an unverified
-listing is visibly marked in the UI rather than silently presented as callable.
-Only `x402.org/protected` is currently confirmed live.
+`agents.circle.com` exposes no public JSON API — its catalogue is server-rendered
+and its JS bundle contains no fetch URLs. The x402 ecosystem does publish a
+discovery API, which is a superset of Circle's marketplace and flags it via
+`curated`:
+
+```
+https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources
+```
+
+`registryService.ts` mirrors it into SQLite — ~14,400 services, a full sync in
+about 20s — refreshed on boot and every 6 hours, so newly published services
+appear without a deploy. `POST /api/services/sync` forces a refresh.
+
+Services are tiered by evidence, not opinion:
+
+| Tier | Meaning |
+|---|---|
+| `curated` | in Circle's marketplace (~120) |
+| `active` | has recorded traffic in the last 30 days |
+| `untested` | listed, but no recorded usage — flagged, never hidden |
+
+A registry this size cannot go in a prompt, so `candidateService.ts` retrieves a
+shortlist (~40) for each goal and only that reaches the model. Ranking favours
+curated and well-used services, but nothing is excluded — an obscure service can
+still win if it is the only real match, and the approval card warns when a step
+uses an `untested` endpoint.
+
+## Chains and mainnet opt-in
+
+Almost the entire registry settles on **mainnet** (Base carries ~14,400 of the
+services; only 93 are testnet-payable, and just 2 on Arc Testnet). So:
+
+- **Arc Testnet is the default** — a verification tier. A user can prove their
+  wallet, passphrase and payment pipeline work with free faucet USDC.
+- **Base is the mainnet default**, and is **opt-in**. Until a user enables it in
+  Wallet, an approved plan cannot spend real money.
+
+`chainPolicy.ts` is the single gate. The runner resolves each step's chain from
+the registry rather than trusting the request, so a tampered payload cannot move
+spending onto mainnet. Testnet is preferred whenever a service supports both.
+
+Arc mainnet is already in the SDK (chainId 5042, Gateway domain 26), so
+switching when it goes live is a config change — it needs an RPC URL, as do
+Base, Arbitrum and Optimism.

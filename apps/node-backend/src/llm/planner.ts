@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { z } from 'zod'
 import { ANTHROPIC_API_KEY, ANTHROPIC_ENABLED } from '../env.ts'
-import type { Service } from '../circle/marketplaceService.ts'
+import type { Service } from '../circle/registryService.ts'
 
 const MODEL = 'claude-haiku-4-5-20251001'
 const MAX_RETRIES = 3
@@ -27,6 +27,25 @@ export const StepSchema = z.object({
   purpose: z.string().min(1),
   estimatedCostUsdc: z.number().nonnegative(),
 })
+
+/**
+ * Provenance attached to each step after planning. The model does not produce
+ * these — they are looked up from the registry, so the approval card shows the
+ * user facts rather than the model's claims about them.
+ */
+export interface StepAnnotation {
+  trust: 'curated' | 'active' | 'untested'
+  calls30d: number
+  host: string
+  chain: string | null
+  isTestnet: boolean
+  /** Set when the step cannot be paid under the user's current chain policy. */
+  blockedReason?: string
+  /** Shown on the approval card when the endpoint has no recorded usage. */
+  warning?: string
+}
+
+export type AnnotatedStep = PlanStep & { annotation: StepAnnotation }
 
 export const PlanSchema = z.object({
   goal: z.string(),
@@ -56,34 +75,37 @@ function textOf(msg: Anthropic.Message): string {
     .join('\n')
 }
 
-function systemPrompt(catalog: Service[]): string {
-  const compact = catalog.map((s) => ({
-    name: s.name,
-    description: s.description,
-    category: s.category,
-    baseUrl: s.baseUrl,
-    endpoints: s.endpoints,
-    priceRangeUsdc: s.priceRangeUsdc,
-    tags: s.tags,
-    verification: s.verification,
+function systemPrompt(candidates: Service[]): string {
+  // Only the fields that help the model choose. The registry holds ~14k
+  // services; these are the shortlist retrieved for this specific goal.
+  const compact = candidates.map((s) => ({
+    name: s.serviceName,
+    url: s.resource,
+    description: s.description.slice(0, 220),
+    tags: s.tags.slice(0, 6),
+    priceUsdc: s.priceUsdc,
+    trust: s.trust,
+    callsLast30Days: s.calls30d,
   }))
 
-  return `You are Trident's planning engine. Given a user goal and a service catalog, output a minimal, cost-effective execution plan as pure JSON. No markdown. No prose outside JSON.
+  return `You are Trident's planning engine. Given a user goal and a shortlist of x402-payable services, output a minimal, cost-effective execution plan as pure JSON. No markdown. No prose outside JSON.
 
-Catalog:
+Each service costs real money per call, charged to the user's wallet. Spend as little as possible.
+
+Services:
 ${JSON.stringify(compact, null, 2)}
 
 Rules:
 - Only include services genuinely needed to accomplish the goal.
-- endpointUrl MUST be exactly one of the catalog baseUrl values concatenated with one of that service's endpoints. Never invent a URL.
-- serviceName MUST match a catalog "name" exactly.
-- Prefer services with verification "verified-x402" when they can do the job.
+- endpointUrl MUST be copied exactly from a service's "url". Never invent, modify, or append to a URL.
+- serviceName MUST match that service's "name" exactly.
+- estimatedCostUsdc MUST equal that service's "priceUsdc".
+- Prefer trust "curated", then "active". A service with trust "untested" has no recorded usage and may not work — only choose one when nothing else fits the goal.
 - Order steps logically; stepIndex starts at 0 and increases by 1.
-- estimatedCostUsdc must sit inside the service's priceRangeUsdc.
 - totalEstimatedCostUsdc must equal the sum of the steps' estimatedCostUsdc.
 - If a budget is given, keep totalEstimatedCostUsdc at or under it.
 - If the budget is too low for any useful plan, return "steps": [] and set minCostUsdc to the cheapest workable total.
-- If no catalog service can address the goal, return "steps": [] and explain why in "reasoning".
+- If none of these services can address the goal, return "steps": [] and say so plainly in "reasoning". Do not substitute an unrelated service.
 
 Respond with exactly this JSON shape:
 {"goal":string,"steps":[{"stepIndex":number,"serviceName":string,"endpointUrl":string,"httpMethod":"GET"|"POST","params":object,"purpose":string,"estimatedCostUsdc":number}],"totalEstimatedCostUsdc":number,"reasoning":string,"alternativeSteps":[],"minCostUsdc":number}`
@@ -91,16 +113,15 @@ Respond with exactly this JSON shape:
 
 /**
  * Reject any step the model invented. A hallucinated URL would otherwise become
- * a real payment attempt against an arbitrary host.
+ * a real payment attempt against an arbitrary host, so this compares against
+ * the exact resource URLs offered — never a prefix.
  */
-export function assertStepsAreCatalogued(plan: ExecutionPlan, catalog: Service[]): void {
-  const allowed = new Set(
-    catalog.flatMap((s) => s.endpoints.map((e) => `${s.baseUrl}${e}`)),
-  )
+export function assertStepsAreCatalogued(plan: ExecutionPlan, candidates: Service[]): void {
+  const allowed = new Set(candidates.map((s) => s.resource))
   const offending = plan.steps.find((s) => !allowed.has(s.endpointUrl))
   if (offending) {
     throw new Error(
-      `Planner produced an endpoint outside the catalog: ${offending.endpointUrl}`,
+      `Planner produced an endpoint outside the offered shortlist: ${offending.endpointUrl}`,
     )
   }
 }
@@ -114,10 +135,21 @@ export function normalise(plan: ExecutionPlan): ExecutionPlan {
 
 export async function buildPlan(
   goal: string,
-  catalog: Service[],
+  candidates: Service[],
   budgetUsdc?: number,
 ): Promise<ExecutionPlan> {
-  const system = systemPrompt(catalog)
+  if (candidates.length === 0) {
+    return normalise({
+      goal,
+      steps: [],
+      totalEstimatedCostUsdc: 0,
+      reasoning:
+        'No payable services are available for this wallet yet. If the service catalog is still syncing, try again shortly.',
+      alternativeSteps: [],
+    })
+  }
+
+  const system = systemPrompt(candidates)
   const userContent = `Goal: ${goal}${budgetUsdc !== undefined ? `\nBudget: $${budgetUsdc} USDC` : ''}`
 
   let lastErr: Error | null = null
@@ -137,7 +169,7 @@ export async function buildPlan(
       const raw = textOf(msg)
       const json = extractJson(raw.trimStart().startsWith('{') ? raw : `{${raw}`)
       const plan = normalise(PlanSchema.parse(JSON.parse(json)))
-      assertStepsAreCatalogued(plan, catalog)
+      assertStepsAreCatalogued(plan, candidates)
       return plan
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err))

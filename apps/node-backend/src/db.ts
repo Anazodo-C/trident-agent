@@ -73,6 +73,10 @@ CREATE TABLE IF NOT EXISTS users (
   payment_key_iv        TEXT,
   spending_cap_usdc     REAL DEFAULT 10.0,
   default_chain         TEXT DEFAULT 'ARC-TESTNET',
+  -- Off by default: until a user opts in, the agent can only spend testnet
+  -- funds, so no goal can ever cost real money by accident.
+  mainnet_enabled       INTEGER DEFAULT 0,
+  mainnet_chain         TEXT DEFAULT 'BASE',
   created_at            INTEGER DEFAULT (strftime('%s','now'))
 );
 
@@ -110,6 +114,48 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   updated_at  INTEGER DEFAULT (strftime('%s','now'))
 );
 
+-- Mirror of the x402 discovery registry (the "Bazaar"). Synced periodically so
+-- new services appear without a deploy, and so the planner can retrieve
+-- candidates locally instead of shipping 14k services to the model.
+CREATE TABLE IF NOT EXISTS services (
+  id              TEXT PRIMARY KEY,
+  resource        TEXT UNIQUE NOT NULL,
+  service_name    TEXT,
+  description     TEXT,
+  tags            TEXT,
+  host            TEXT,
+  -- Preferred settlement network, chosen from the accepts list at sync time.
+  network         TEXT,
+  chain_key       TEXT,
+  is_testnet      INTEGER DEFAULT 0,
+  -- Every Gateway-settleable option, so the runner can pick per user.
+  networks_json   TEXT,
+  asset           TEXT,
+  price_usdc      REAL,
+  scheme          TEXT,
+  http_method     TEXT DEFAULT 'GET',
+  curated         INTEGER DEFAULT 0,
+  calls_30d       INTEGER DEFAULT 0,
+  payers_30d      INTEGER DEFAULT 0,
+  last_called_at  TEXT,
+  icon_url        TEXT,
+  synced_at       INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_services_rank    ON services(curated DESC, calls_30d DESC);
+CREATE INDEX IF NOT EXISTS idx_services_chain   ON services(chain_key, is_testnet);
+CREATE INDEX IF NOT EXISTS idx_services_name    ON services(service_name);
+
+CREATE TABLE IF NOT EXISTS registry_sync (
+  id            INTEGER PRIMARY KEY CHECK (id = 1),
+  started_at    INTEGER,
+  completed_at  INTEGER,
+  total_seen    INTEGER DEFAULT 0,
+  total_kept    INTEGER DEFAULT 0,
+  status        TEXT,
+  error         TEXT
+);
+
 CREATE TABLE IF NOT EXISTS rate_limits (
   user_id      TEXT PRIMARY KEY REFERENCES users(id),
   plan_count   INTEGER DEFAULT 0,
@@ -120,6 +166,44 @@ CREATE INDEX IF NOT EXISTS idx_tasks_user     ON tasks(user_id, created_at DESC)
 CREATE INDEX IF NOT EXISTS idx_steps_task     ON task_steps(task_id, step_index);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_unique ON task_steps(task_id, step_index);
 `)
+
+/**
+ * Additive migrations for databases created before a column existed.
+ * CREATE TABLE IF NOT EXISTS does nothing to an existing table, and the
+ * production volume already holds real users, so new columns have to be added
+ * explicitly. Adding a column that is already there is a no-op, not an error.
+ */
+function addColumnIfMissing(table: string, column: string, definition: string): void {
+  const existing = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  if (existing.some((c) => c.name === column)) return
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`)
+}
+
+addColumnIfMissing('users', 'mainnet_enabled', 'INTEGER DEFAULT 0')
+addColumnIfMissing('users', 'mainnet_chain', "TEXT DEFAULT 'BASE'")
+
+export interface ServiceRow {
+  id: string
+  resource: string
+  service_name: string | null
+  description: string | null
+  tags: string | null
+  host: string | null
+  network: string | null
+  chain_key: string | null
+  is_testnet: number
+  networks_json: string | null
+  asset: string | null
+  price_usdc: number | null
+  scheme: string | null
+  http_method: string
+  curated: number
+  calls_30d: number
+  payers_30d: number
+  last_called_at: string | null
+  icon_url: string | null
+  synced_at: number | null
+}
 
 export interface UserRow {
   id: string
@@ -132,6 +216,8 @@ export interface UserRow {
   payment_key_iv: string | null
   spending_cap_usdc: number
   default_chain: string
+  mainnet_enabled: number
+  mainnet_chain: string
   created_at: number
 }
 
