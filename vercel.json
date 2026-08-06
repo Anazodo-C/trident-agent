@@ -4,5 +4,15 @@
   "installCommand": "npm install --workspace @trident/frontend --include-workspace-root",
   "buildCommand": "npm run build -w @trident/frontend",
   "outputDirectory": "apps/frontend/dist",
-  "rewrites": [{ "source": "/((?!api/).*)", "destination": "/index.html" }]
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://trident-agent-production.up.railway.app/api/:path*"
+    },
+    {
+      "source": "/auth/:path*",
+      "destination": "https://trident-agent-production.up.railway.app/auth/:path*"
+    },
+    { "source": "/((?!api/|auth/).*)", "destination": "/index.html" }
+  ]
 }
