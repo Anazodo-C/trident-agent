@@ -7,6 +7,7 @@ import {
   searchServices,
   syncRegistry,
   syncStatus,
+  type ServiceSource,
 } from '../circle/registryService.ts'
 import { chooseChain, policyFor, unpayableReason } from '../circle/chainPolicy.ts'
 
@@ -25,16 +26,20 @@ router.get(
 
     const query = typeof req.query['q'] === 'string' ? req.query['q'] : ''
     const curatedOnly = req.query['curated'] === '1'
-    // Default view is what this wallet can actually pay for; `all=1` shows the
-    // whole registry so nothing is hidden, just marked unpayable.
-    const showAll = req.query['all'] === '1'
+    // 'free'  → public APIs, metered by an Arc Testnet verification payment.
+    // 'x402'  → paid services, mostly mainnet.
+    // absent  → both. x402 entries are always listed even when this wallet
+    //           cannot settle them; they are marked blocked rather than hidden.
+    const sourceParam = req.query['source']
+    const source =
+      sourceParam === 'free' || sourceParam === 'x402' ? (sourceParam as ServiceSource) : undefined
     const limit = Math.min(Number(req.query['limit'] ?? 24) || 24, MAX_LIMIT)
     const offset = Math.max(Number(req.query['offset'] ?? 0) || 0, 0)
 
     const result = searchServices({
       query,
       curatedOnly,
-      ...(showAll ? {} : { chains: policy.allowed }),
+      ...(source ? { source } : {}),
       limit,
       offset,
     })
@@ -51,8 +56,15 @@ router.get(
       }
     })
 
+    // Counts for the filter chips, so each tab can show its own size.
+    const counts = {
+      free: searchServices({ query, curatedOnly, source: 'free', limit: 1 }).total,
+      x402: searchServices({ query, curatedOnly, source: 'x402', limit: 1 }).total,
+    }
+
     res.json({
       services,
+      counts,
       total: result.total,
       limit,
       offset,

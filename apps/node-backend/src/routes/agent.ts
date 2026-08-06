@@ -8,6 +8,7 @@ import { buildPlan, StepSchema, type PlanStep, type StepAnnotation } from '../ll
 import { findServiceByResource } from '../circle/registryService.ts'
 import { selectCandidates } from '../circle/candidateService.ts'
 import { chooseChain, policyFor, unpayableReason } from '../circle/chainPolicy.ts'
+import { findUpgrades } from '../circle/upgradeService.ts'
 import { runTask } from '../agent/runner.ts'
 import { findUserById } from '../auth/users.ts'
 
@@ -116,10 +117,15 @@ router.post(
       }
     })()
 
+    // Advisory only: what paying would buy, for the free steps in this plan.
+    // Nothing is substituted and nothing is pre-selected.
+    const upgrades = findUpgrades(plan.steps, policy)
+
     res.json({
       taskId,
       plan,
       annotations,
+      upgrades,
       candidatesConsidered: candidates.services.length,
       usedFallback: candidates.fallback,
       mainnetEnabled: policy.mainnetEnabled,

@@ -13,7 +13,7 @@ loadDotenv({ path: resolve(here, '../../../.env') })
  * Central env access. Values are read by name only — the .env file itself is
  * never read, written, or logged by application code.
  */
-function optional(name: string, fallback = ''): string {
+export function optional(name: string, fallback = ''): string {
   return process.env[name] ?? fallback
 }
 

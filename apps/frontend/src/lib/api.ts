@@ -4,7 +4,9 @@ import type {
   KeyMaterial,
   RegistrySync,
   Service,
+  Stats,
   StepAnnotation,
+  StepUpgrade,
   TaskStepDetail,
   TaskSummary,
   User,
@@ -122,19 +124,20 @@ export const api = {
   services: (opts: {
     q?: string
     curated?: boolean
-    all?: boolean
+    source?: 'free' | 'x402'
     limit?: number
     offset?: number
   } = {}) => {
     const params = new URLSearchParams()
     if (opts.q) params.set('q', opts.q)
     if (opts.curated) params.set('curated', '1')
-    if (opts.all) params.set('all', '1')
+    if (opts.source) params.set('source', opts.source)
     if (opts.limit) params.set('limit', String(opts.limit))
     if (opts.offset) params.set('offset', String(opts.offset))
     const qs = params.toString()
     return request<{
       services: Service[]
+      counts: { free: number; x402: number }
       total: number
       limit: number
       offset: number
@@ -144,6 +147,9 @@ export const api = {
     }>(`/api/services${qs ? `?${qs}` : ''}`)
   },
 
+  stats: (scope: 'me' | 'global' = 'global', days = 30) =>
+    request<Stats>(`/api/stats?scope=${scope}&days=${days}`),
+
   syncRegistry: () => request<RegistrySync>('/api/services/sync', { method: 'POST' }),
 
   plan: (goal: string, budgetUsdc?: number) =>
@@ -151,6 +157,7 @@ export const api = {
       taskId: string
       plan: ExecutionPlan
       annotations: Record<number, StepAnnotation>
+      upgrades: StepUpgrade[]
       candidatesConsidered: number
       usedFallback: boolean
       mainnetEnabled: boolean

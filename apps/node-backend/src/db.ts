@@ -120,6 +120,9 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 CREATE TABLE IF NOT EXISTS services (
   id              TEXT PRIMARY KEY,
   resource        TEXT UNIQUE NOT NULL,
+  -- 'x402' = paid, settled through Gateway.
+  -- 'free' = public API, still metered by an Arc Testnet verification payment.
+  source          TEXT DEFAULT 'x402',
   service_name    TEXT,
   description     TEXT,
   tags            TEXT,
@@ -181,10 +184,14 @@ function addColumnIfMissing(table: string, column: string, definition: string): 
 
 addColumnIfMissing('users', 'mainnet_enabled', 'INTEGER DEFAULT 0')
 addColumnIfMissing('users', 'mainnet_chain', "TEXT DEFAULT 'BASE'")
+addColumnIfMissing('services', 'source', "TEXT DEFAULT 'x402'")
+// Verification transfer hash for free-API calls, alongside the x402 tx_ref.
+addColumnIfMissing('task_steps', 'verification_tx', 'TEXT')
 
 export interface ServiceRow {
   id: string
   resource: string
+  source: string
   service_name: string | null
   description: string | null
   tags: string | null

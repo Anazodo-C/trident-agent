@@ -12,9 +12,13 @@ export interface User {
 /** curated = in Circle's marketplace; active = used recently; untested = no recorded traffic. */
 export type TrustTier = 'curated' | 'active' | 'untested'
 
+export type ServiceSource = 'free' | 'x402'
+
 export interface Service {
   id: string
   resource: string
+  source: ServiceSource
+  premiumCategory: string | null
   serviceName: string
   description: string
   tags: string[]
@@ -45,6 +49,26 @@ export interface RegistrySync {
   status: string | null
   error: string | null
   serviceCount: number
+}
+
+export interface PremiumUpgrade {
+  serviceName: string
+  resource: string
+  description: string
+  priceUsdc: number
+  chain: string | null
+  curated: boolean
+  calls30d: number
+  /** False when the user has not enabled mainnet yet. */
+  available: boolean
+}
+
+/** Advisory: what paying would buy for a step currently using a free API. */
+export interface StepUpgrade {
+  stepIndex: number
+  freeServiceName: string
+  category: string
+  options: PremiumUpgrade[]
 }
 
 /** Registry-sourced facts about a planned step — not the model's claims. */
@@ -148,4 +172,42 @@ export interface KeyMaterial {
   salt: string
   iv: string
   eoaAddress: string
+}
+
+export interface StatBreakdown {
+  label: string
+  count: number
+  amountUsdc: number
+}
+
+export interface StatTimePoint {
+  day: string
+  runs: number
+  spentUsdc: number
+  activeUsers: number
+}
+
+export interface Stats {
+  scope: 'me' | 'global'
+  totals: {
+    uniqueUsers: number
+    walletsCreated: number
+    runs: number
+    stepsExecuted: number
+    transactions: number
+    totalSpentUsdc: number
+    endpointsCalled: number
+    servicesUsed: number
+    freeCalls: number
+    paidCalls: number
+  }
+  successRate: number
+  avgCostPerRun: number
+  avgStepsPerRun: number
+  runsByStatus: StatBreakdown[]
+  topServices: StatBreakdown[]
+  spendByChain: StatBreakdown[]
+  failureReasons: StatBreakdown[]
+  daily: StatTimePoint[]
+  registry: { total: number; free: number; x402: number; curated: number }
 }

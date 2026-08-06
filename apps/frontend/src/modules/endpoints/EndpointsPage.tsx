@@ -28,11 +28,12 @@ export function EndpointsPage() {
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [curatedOnly, setCuratedOnly] = useState(false)
-  const [showAll, setShowAll] = useState(false)
+  const [source, setSource] = useState<'free' | 'x402' | null>(null)
   const [offset, setOffset] = useState(0)
 
   const [services, setServices] = useState<Service[]>([])
   const [total, setTotal] = useState(0)
+  const [counts, setCounts] = useState({ free: 0, x402: 0 })
   const [sync, setSync] = useState<RegistrySync | null>(null)
   const [loading, setLoading] = useState(true)
   const [syncing, setSyncing] = useState(false)
@@ -42,11 +43,12 @@ export function EndpointsPage() {
     (signal?: { cancelled: boolean }) => {
       setLoading(true)
       api
-        .services({ q: query, curated: curatedOnly, all: showAll, limit: PAGE_SIZE, offset })
+        .services({ q: query, curated: curatedOnly, ...(source ? { source } : {}), limit: PAGE_SIZE, offset })
         .then((res) => {
           if (signal?.cancelled) return
           setServices(res.services)
           setTotal(res.total)
+          setCounts(res.counts)
           setSync(res.sync)
           setError(null)
         })
@@ -57,7 +59,7 @@ export function EndpointsPage() {
         })
         .finally(() => !signal?.cancelled && setLoading(false))
     },
-    [query, curatedOnly, showAll, offset],
+    [query, curatedOnly, source, offset],
   )
 
   useEffect(() => {
@@ -71,7 +73,7 @@ export function EndpointsPage() {
   }, [load])
 
   // Any filter change invalidates the current page.
-  useEffect(() => setOffset(0), [query, curatedOnly, showAll])
+  useEffect(() => setOffset(0), [query, curatedOnly, source])
 
   async function refresh() {
     setSyncing(true)
@@ -93,7 +95,8 @@ export function EndpointsPage() {
       <header className="mb-5">
         <h1 className="font-mono text-lg uppercase tracking-widest text-slate-100">Endpoints</h1>
         <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-400">
-          Every x402 service your agent can reach, synced from the live registry.
+          Free public APIs and x402 paid services your agent can reach. Free calls are
+          metered by a small Arc Testnet payment; x402 services settle on mainnet.
           {sync?.serviceCount ? (
             <>
               {' '}
@@ -124,11 +127,23 @@ export function EndpointsPage() {
       </div>
 
       <div className="mb-6 flex flex-wrap items-center gap-2">
-        <Toggle active={curatedOnly} onClick={() => setCuratedOnly((v) => !v)}>
-          Curated only
+        <Toggle
+          active={source === 'free'}
+          onClick={() => setSource((v) => (v === 'free' ? null : 'free'))}
+        >
+          Free (testnet)
+          <Count n={counts.free} />
         </Toggle>
-        <Toggle active={showAll} onClick={() => setShowAll((v) => !v)}>
-          Include services I can&apos;t pay yet
+        <Toggle
+          active={source === 'x402'}
+          onClick={() => setSource((v) => (v === 'x402' ? null : 'x402'))}
+        >
+          x402 (mainnet)
+          <Count n={counts.x402} />
+        </Toggle>
+        <span className="mx-1 h-4 w-px bg-[#1A7FFF]/25" />
+        <Toggle active={curatedOnly} onClick={() => setCuratedOnly((v) => !v)}>
+          Curated
         </Toggle>
         <span className="ml-auto font-mono text-[11px] text-slate-500">
           {total.toLocaleString()} result{total === 1 ? '' : 's'}
@@ -148,8 +163,8 @@ export function EndpointsPage() {
         </div>
       ) : services.length === 0 ? (
         <p className="py-12 text-sm text-slate-500">
-          Nothing matched that search.{' '}
-          {!showAll && 'Try enabling services you can’t pay for yet.'}
+          Nothing matched that search.
+          {source && ' Try clearing the source filter.'}
         </p>
       ) : (
         <div className={`grid gap-4 sm:grid-cols-2 lg:grid-cols-3 ${loading ? 'opacity-60' : ''}`}>
@@ -249,7 +264,11 @@ function ServiceCard({ service, onUse }: { service: Service; onUse: () => void }
       )}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="price text-xs">${usdc(service.payPriceUsdc, 3)}</span>
+        {service.source === 'free' ? (
+          <span className="badge bg-[#00FF88]/10 text-[#00FF88]">free · testnet metered</span>
+        ) : (
+          <span className="price text-xs">${usdc(service.payPriceUsdc, 3)}</span>
+        )}
         {service.payChain && (
           <span className="badge bg-slate-500/10 text-slate-400">
             {service.payIsTestnet ? 'testnet' : service.payChain}
@@ -268,4 +287,10 @@ function ServiceCard({ service, onUse }: { service: Service; onUse: () => void }
       </button>
     </article>
   )
+}
+
+/** Count badge inside a filter chip. */
+function Count({ n }: { n: number }) {
+  if (!n) return null
+  return <span className="ml-1.5 opacity-60">{n.toLocaleString()}</span>
 }

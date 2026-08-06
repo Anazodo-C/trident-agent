@@ -1,16 +1,17 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, ArrowRight, Ban, Play, ShieldCheck, TrendingUp } from 'lucide-react'
-import type { ExecutionPlan, PlanStep, StepAnnotation } from '../../lib/types.ts'
+import { AlertTriangle, ArrowRight, Ban, Play, ShieldCheck, Sparkles, TrendingUp } from 'lucide-react'
+import type { ExecutionPlan, PlanStep, StepAnnotation, StepUpgrade } from '../../lib/types.ts'
 import { usdc } from '../../lib/format.ts'
 
 interface Props {
   plan: ExecutionPlan
   annotations: Record<number, StepAnnotation>
+  upgrades: StepUpgrade[]
   onApprove: (steps: PlanStep[], budgetUsdc: number | null) => void
   onCancel: () => void
 }
 
-export function ApprovalCard({ plan, annotations, onApprove, onCancel }: Props) {
+export function ApprovalCard({ plan, annotations, upgrades, onApprove, onCancel }: Props) {
   const [excluded, setExcluded] = useState<Set<number>>(new Set())
   const [budgetInput, setBudgetInput] = useState('')
 
@@ -87,6 +88,7 @@ export function ApprovalCard({ plan, annotations, onApprove, onCancel }: Props) 
                   {step.httpMethod} {step.endpointUrl}
                 </p>
                 <StepProvenance annotation={annotations[step.stepIndex]} />
+                <PremiumHint upgrade={upgrades.find((u) => u.stepIndex === step.stepIndex)} />
               </div>
             </li>
           )
@@ -193,5 +195,46 @@ function StepProvenance({ annotation }: { annotation: StepAnnotation | undefined
         </p>
       )}
     </>
+  )
+}
+
+/**
+ * What paying would buy for a step currently using a free API.
+ *
+ * Advisory only — nothing here is selected, and approving the plan runs the
+ * free service as planned. It exists so the choice is visible at the moment
+ * cost is being considered, rather than discovered later.
+ */
+function PremiumHint({ upgrade }: { upgrade: StepUpgrade | undefined }) {
+  if (!upgrade || upgrade.options.length === 0) return null
+
+  return (
+    <div className="mt-2 rounded-lg border border-[#1A7FFF]/25 bg-[#1A7FFF]/5 p-2.5">
+      <p className="mb-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-[#1A7FFF]">
+        <Sparkles className="h-3 w-3" />
+        Premium alternative — {upgrade.category}
+      </p>
+      <ul className="flex flex-col gap-1.5">
+        {upgrade.options.map((option) => (
+          <li key={option.resource} className="flex items-baseline justify-between gap-3 text-[11px]">
+            <span className="min-w-0 truncate text-slate-300">
+              {option.curated && <span className="mr-1 text-[#00FF88]">★</span>}
+              {option.serviceName}
+              <span className="ml-1.5 text-slate-600">
+                {option.calls30d.toLocaleString()} calls/30d
+              </span>
+            </span>
+            <span className="shrink-0 font-mono text-[#00D4FF]">
+              ${option.priceUsdc.toFixed(4)}
+            </span>
+          </li>
+        ))}
+      </ul>
+      {upgrade.options.some((o) => !o.available) && (
+        <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+          Requires mainnet spending, which is off for this wallet.
+        </p>
+      )}
+    </div>
   )
 }

@@ -66,7 +66,7 @@ export function AgentTab() {
       useTaskStore.getState().startPlanning(trimmed)
       try {
         const res = await api.plan(trimmed, useTaskStore.getState().budgetUsdc ?? undefined)
-        useTaskStore.getState().planReady(res.taskId, res.plan, res.annotations)
+        useTaskStore.getState().planReady(res.taskId, res.plan, res.annotations, res.upgrades)
       } catch (err) {
         useTaskStore
           .getState()
@@ -243,6 +243,7 @@ export function AgentTab() {
               <ApprovalCard
                 plan={plan}
                 annotations={store.annotations}
+                upgrades={store.upgrades}
                 onApprove={runApproved}
                 onCancel={store.reset}
               />

@@ -4,6 +4,7 @@ import type { PlanStep } from '../llm/planner.ts'
 import { gatewayClientFor, safeErrorMessage } from '../circle/gatewayService.ts'
 import { findServiceByResource } from '../circle/registryService.ts'
 import { chooseChain, unpayableReason, type ChainPolicy } from '../circle/chainPolicy.ts'
+import { callFreeApi, payVerification } from '../circle/testnetVerification.ts'
 import type { GatewayClient } from '@circle-fin/x402-batching/client'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 
@@ -185,33 +186,60 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           )
         }
 
-        const payOptions =
-          step.httpMethod === 'POST'
-            ? ({ method: 'POST', body: step.params } as const)
-            : undefined
+        let cost: number
+        let txRef: string
+        let verificationTx: string | null = null
+        let data: unknown
 
-        const result = await clientFor(choice.chain).pay(step.endpointUrl, payOptions)
+        if (service.source === 'free') {
+          // Free APIs do not implement x402 — there is no 402 to answer and
+          // nobody to pay. They are metered instead: a real Arc Testnet transfer
+          // settles first, so a call still moves value on chain and leaves a
+          // receipt, and an unfunded wallet cannot reach them.
+          const receipt = await payVerification(agentPrivateKey)
+          verificationTx = receipt.txHash
+          txRef = receipt.txHash
+          cost = receipt.amountUsdc
 
-        const cost = Number.parseFloat(result.formattedAmount)
-        totalSpent = usdc(totalSpent + (Number.isFinite(cost) ? cost : 0))
+          const response = await callFreeApi(step.endpointUrl, {
+            method: step.httpMethod,
+            ...(step.httpMethod === 'POST' ? { body: step.params } : {}),
+          })
+          data = response.data
+        } else {
+          const payOptions =
+            step.httpMethod === 'POST'
+              ? ({ method: 'POST', body: step.params } as const)
+              : undefined
+
+          const result = await clientFor(choice.chain).pay(step.endpointUrl, payOptions)
+          const parsed = Number.parseFloat(result.formattedAmount)
+          cost = Number.isFinite(parsed) ? parsed : 0
+          txRef = result.transaction
+          data = result.data
+        }
+
+        totalSpent = usdc(totalSpent + cost)
 
         db.prepare(
           `UPDATE task_steps
-           SET status = 'done', actual_cost_usdc = ?, tx_ref = ?, response_summary = ?,
-               completed_at = strftime('%s','now')
+           SET status = 'done', actual_cost_usdc = ?, tx_ref = ?, verification_tx = ?,
+               response_summary = ?, completed_at = strftime('%s','now')
            WHERE task_id = ? AND step_index = ?`,
-        ).run(cost, result.transaction, truncate(result.data), taskId, step.stepIndex)
+        ).run(cost, txRef, verificationTx, truncate(data), taskId, step.stepIndex)
         db.prepare('UPDATE tasks SET total_cost_usdc = ? WHERE id = ?').run(totalSpent, taskId)
 
         emit(res, 'step_done', {
           stepIndex: step.stepIndex,
           serviceName: step.serviceName,
+          source: service.source,
           cost,
           totalSpent,
           chain: choice.chain,
           isTestnet: choice.isTestnet,
-          txRef: result.transaction,
-          result: result.data,
+          txRef,
+          verificationTx,
+          result: data,
         })
       } catch (err) {
         const detail = safeErrorMessage(err)

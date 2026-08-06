@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Check, Clipboard, Clock, Grid3x3, LogOut, Radar, Wallet } from 'lucide-react'
+import { BarChart3, Check, Clipboard, Clock, Grid3x3, LogOut, Radar, Wallet } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore.ts'
 import { useAgentStore } from '../../store/agentStore.ts'
 import { copyToClipboard, shortAddress } from '../../lib/format.ts'
@@ -12,6 +12,7 @@ const NAV = [
   { to: '/app/endpoints', label: 'Endpoints', Icon: Grid3x3, end: false },
   { to: '/app/history', label: 'History', Icon: Clock, end: false },
   { to: '/app/wallet', label: 'Wallet', Icon: Wallet, end: false },
+  { to: '/app/dashboard', label: 'Stats', Icon: BarChart3, end: false },
 ]
 
 export function AppShell() {

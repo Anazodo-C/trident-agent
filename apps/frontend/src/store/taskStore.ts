@@ -1,6 +1,12 @@
 import { create } from 'zustand'
 import { api } from '../lib/api.ts'
-import type { ExecutionPlan, LiveStep, StepAnnotation, TaskSummary } from '../lib/types.ts'
+import type {
+  ExecutionPlan,
+  LiveStep,
+  StepAnnotation,
+  StepUpgrade,
+  TaskSummary,
+} from '../lib/types.ts'
 
 export type RunPhase = 'idle' | 'planning' | 'awaiting-approval' | 'running' | 'finished'
 
@@ -17,6 +23,8 @@ interface TaskState {
   plan: ExecutionPlan | null
   /** Registry facts per step index — drives the approval-card warnings. */
   annotations: Record<number, StepAnnotation>
+  /** Advisory paid alternatives for free steps. */
+  upgrades: StepUpgrade[]
   budgetUsdc: number | null
   liveSteps: LiveStep[]
   totalSpent: number
@@ -32,7 +40,12 @@ interface TaskState {
   setGoal: (goal: string) => void
   setBudget: (budget: number | null) => void
   startPlanning: (goal: string) => void
-  planReady: (taskId: string, plan: ExecutionPlan, annotations: Record<number, StepAnnotation>) => void
+  planReady: (
+    taskId: string,
+    plan: ExecutionPlan,
+    annotations: Record<number, StepAnnotation>,
+    upgrades: StepUpgrade[],
+  ) => void
   planFailed: (message: string) => void
   beginRun: (steps: LiveStep[], controller: AbortController) => void
   patchStep: (stepIndex: number, patch: Partial<LiveStep>) => void
@@ -49,6 +62,7 @@ const initial = {
   taskId: null,
   plan: null,
   annotations: {} as Record<number, StepAnnotation>,
+  upgrades: [] as StepUpgrade[],
   budgetUsdc: null,
   liveSteps: [] as LiveStep[],
   totalSpent: 0,
@@ -69,8 +83,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   startPlanning: (goal) =>
     set({ ...initial, goal, phase: 'planning', history: get().history }),
 
-  planReady: (taskId, plan, annotations) =>
-    set({ taskId, plan, annotations, phase: 'awaiting-approval', error: null }),
+  planReady: (taskId, plan, annotations, upgrades) =>
+    set({ taskId, plan, annotations, upgrades, phase: 'awaiting-approval', error: null }),
 
   planFailed: (message) => set({ phase: 'idle', error: message }),
 
