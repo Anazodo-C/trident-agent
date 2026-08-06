@@ -41,7 +41,7 @@ export function AppShell() {
     <div className="flex h-dvh flex-col">
       <header className="z-30 flex shrink-0 items-center justify-between gap-4 border-b border-[#1A7FFF]/20 bg-[#0A0E1A]/85 px-4 py-3 backdrop-blur-md sm:px-6">
         <div className="flex items-center gap-2.5">
-          <TridentMark className="h-6 w-6 text-[#00D4FF]" />
+          <TridentMark className="h-7 w-7" />
           <span className="font-mono text-sm uppercase tracking-[0.3em] text-slate-100">
             Trident
           </span>

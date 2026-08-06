@@ -78,7 +78,7 @@ export function AuthPage() {
     <div className="flex min-h-screen items-center justify-center px-4 py-12">
       <div className="w-full max-w-md">
         <div className="mb-10 text-center">
-          <TridentMark className="mx-auto mb-5 h-12 w-12 text-[#00D4FF]" />
+          <TridentMark className="mx-auto mb-4 h-20 w-20" />
           <h1 className="font-mono text-3xl uppercase tracking-[0.35em] text-slate-100">
             Trident
           </h1>

@@ -56,7 +56,7 @@ export function SetupPassphrasePage() {
   return (
     <CenteredCard>
       <div className="mb-8 text-center">
-        <TridentMark className="mx-auto mb-4 h-10 w-10 text-[#00D4FF]" />
+        <TridentMark className="mx-auto mb-3 h-16 w-16" />
         <h1 className="font-mono text-lg uppercase tracking-widest text-slate-100">
           Create Agent Wallet
         </h1>
