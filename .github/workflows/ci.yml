@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main, v1]
+  pull_request:
+    branches: [main, v1]
+
+# A newer push to the same branch makes an in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Typecheck, build, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          # Single lockfile at the repo root — this is an npm workspaces
+          # monorepo, and there is no per-app lockfile to cache from.
+          cache-dependency-path: package-lock.json
+
+      # Installs both workspaces from the root lockfile.
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      # Pure logic: JSON extraction, schema coercion, and the allowlist that
+      # stops a hallucinated URL from becoming a real payment. No network, no
+      # credentials, so it is safe to gate merges on.
+      - name: Planner tests
+        run: npm run test:planner -w @trident/node-backend
+
+      # Budget gate, spending-cap gate, abort flag, SSE framing, and the
+      # guarantee that a private key never reaches the stream or the database.
+      - name: Runner tests
+        env:
+          DB_PATH: ${{ runner.temp }}/ci-runner.db
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: npm run test:runner -w @trident/node-backend
