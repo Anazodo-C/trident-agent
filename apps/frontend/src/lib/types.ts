@@ -51,6 +51,26 @@ export interface RegistrySync {
   serviceCount: number
 }
 
+export interface PremiumUpgrade {
+  serviceName: string
+  resource: string
+  description: string
+  priceUsdc: number
+  chain: string | null
+  curated: boolean
+  calls30d: number
+  /** False when the user has not enabled mainnet yet. */
+  available: boolean
+}
+
+/** Advisory: what paying would buy for a step currently using a free API. */
+export interface StepUpgrade {
+  stepIndex: number
+  freeServiceName: string
+  category: string
+  options: PremiumUpgrade[]
+}
+
 /** Registry-sourced facts about a planned step — not the model's claims. */
 export interface StepAnnotation {
   trust: TrustTier

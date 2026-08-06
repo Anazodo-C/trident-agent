@@ -5,6 +5,7 @@ import type {
   RegistrySync,
   Service,
   StepAnnotation,
+  StepUpgrade,
   TaskStepDetail,
   TaskSummary,
   User,
@@ -152,6 +153,7 @@ export const api = {
       taskId: string
       plan: ExecutionPlan
       annotations: Record<number, StepAnnotation>
+      upgrades: StepUpgrade[]
       candidatesConsidered: number
       usedFallback: boolean
       mainnetEnabled: boolean

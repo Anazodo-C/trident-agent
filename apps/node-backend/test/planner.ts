@@ -12,6 +12,7 @@ import {
   type ExecutionPlan,
 } from '../src/llm/planner.ts'
 import { chooseChain, policyFor, unpayableReason } from '../src/circle/chainPolicy.ts'
+import { findUpgrades } from '../src/circle/upgradeService.ts'
 import db from '../src/db.ts'
 import { isKnownResource, type Service } from '../src/circle/registryService.ts'
 
@@ -244,6 +245,74 @@ section('chain policy (mainnet is opt-in)')
     chooseChain(bothChains, opted)?.isTestnet === true,
   )
   check('a locked wallet still pays the testnet option', chooseChain(bothChains, locked)?.chain === 'arcTestnet')
+}
+
+// ------------------------------------------------------------ premium upsell
+section('premium upgrade suggestions')
+{
+  // A free service with a declared premium category, and one without.
+  db.prepare(
+    `INSERT OR REPLACE INTO services (id, resource, source, service_name, description, tags, host,
+       network, chain_key, is_testnet, networks_json, price_usdc, http_method, curated, calls_30d,
+       payers_30d, synced_at)
+     VALUES ('free-wiki', 'https://wiki.test/search', 'free', 'Wiki Search', 'search wikipedia',
+       ?, 'wiki.test', 'eip155:5042002', 'arcTestnet', 1, '[]', 0.000001, 'GET', 1, 1000, 0, 0)`,
+  ).run(JSON.stringify(['wiki', 'search', 'premium:web search and research']))
+
+  db.prepare(
+    `INSERT OR REPLACE INTO services (id, resource, source, service_name, description, tags, host,
+       network, chain_key, is_testnet, networks_json, price_usdc, http_method, curated, calls_30d,
+       payers_30d, synced_at)
+     VALUES ('free-cat', 'https://cat.test/fact', 'free', 'Cat Facts', 'a cat fact',
+       ?, 'cat.test', 'eip155:5042002', 'arcTestnet', 1, '[]', 0.000001, 'GET', 0, 100, 0, 0)`,
+  ).run(JSON.stringify(['cat', 'facts', 'fun']))
+
+  // A paid search service that should be recommended, and a well-used but
+  // unrelated one that should not.
+  const paidNets = JSON.stringify([
+    { network: 'eip155:8453', chainKey: 'base', isTestnet: false, priceUsdc: 0.01, asset: null, scheme: 'exact' },
+  ])
+  db.prepare(
+    `INSERT OR REPLACE INTO services (id, resource, source, service_name, description, tags, host,
+       network, chain_key, is_testnet, networks_json, price_usdc, http_method, curated, calls_30d,
+       payers_30d, synced_at)
+     VALUES ('paid-search', 'https://paid.test/search', 'x402', 'PaidSearch', 'neural web search and research',
+       ?, 'paid.test', 'eip155:8453', 'base', 0, ?, 0.01, 'GET', 1, 5000, 10, 0)`,
+  ).run(JSON.stringify(['search', 'research']), paidNets)
+
+  db.prepare(
+    `INSERT OR REPLACE INTO services (id, resource, source, service_name, description, tags, host,
+       network, chain_key, is_testnet, networks_json, price_usdc, http_method, curated, calls_30d,
+       payers_30d, synced_at)
+     VALUES ('paid-fun', 'https://fun.test/jokes', 'x402', 'FunGateway', 'jokes and fun content',
+       ?, 'fun.test', 'eip155:8453', 'base', 0, ?, 0.01, 'GET', 1, 9000, 10, 0)`,
+  ).run(JSON.stringify(['fun', 'facts']), paidNets)
+
+  const opted = policyFor({ default_chain: 'ARC-TESTNET', mainnet_enabled: 1, mainnet_chain: 'BASE' })
+  const locked = policyFor({ default_chain: 'ARC-TESTNET', mainnet_enabled: 0, mainnet_chain: 'BASE' })
+
+  const forWiki = findUpgrades([{ stepIndex: 0, endpointUrl: 'https://wiki.test/search' }], opted)
+  check('a free service with a paid equivalent gets a suggestion', forWiki.length === 1)
+  check(
+    'and it is the matching paid service',
+    forWiki[0]?.options[0]?.serviceName === 'PaidSearch',
+    String(forWiki[0]?.options[0]?.serviceName),
+  )
+
+  // The bug this guards: Cat Facts once matched an AI gateway on the tag "fun".
+  const forCat = findUpgrades([{ stepIndex: 0, endpointUrl: 'https://cat.test/fact' }], opted)
+  check('a free service with no paid equivalent gets no suggestion', forCat.length === 0)
+
+  const forPaidStep = findUpgrades([{ stepIndex: 0, endpointUrl: 'https://paid.test/search' }], opted)
+  check('x402 steps are never upsold', forPaidStep.length === 0)
+
+  const whenLocked = findUpgrades([{ stepIndex: 0, endpointUrl: 'https://wiki.test/search' }], locked)
+  check('suggestions still appear when mainnet is off', whenLocked.length === 1)
+  check(
+    'but are marked unavailable',
+    whenLocked[0]?.options[0]?.available === false,
+    String(whenLocked[0]?.options[0]?.available),
+  )
 }
 
 console.log(`\n${'─'.repeat(52)}`)
