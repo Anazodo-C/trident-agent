@@ -20,7 +20,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # 22, not 20: the backend runs TypeScript directly via
+          # --experimental-strip-types, which Node added in 22.6. On 20 the
+          # test scripts fail with "node: bad option". Matches the Dockerfile.
+          node-version: "22"
           cache: "npm"
           # Single lockfile at the repo root — this is an npm workspaces
           # monorepo, and there is no per-app lockfile to cache from.
