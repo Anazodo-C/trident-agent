@@ -12,9 +12,13 @@ export interface User {
 /** curated = in Circle's marketplace; active = used recently; untested = no recorded traffic. */
 export type TrustTier = 'curated' | 'active' | 'untested'
 
+export type ServiceSource = 'free' | 'x402'
+
 export interface Service {
   id: string
   resource: string
+  source: ServiceSource
+  premiumCategory: string | null
   serviceName: string
   description: string
   tags: string[]

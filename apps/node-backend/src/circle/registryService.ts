@@ -427,6 +427,8 @@ function safeParse<T>(json: string | null, fallback: T): T {
 export interface SearchOptions {
   query?: string
   curatedOnly?: boolean
+  /** 'free' = public APIs metered on testnet; 'x402' = paid services. */
+  source?: ServiceSource
   /** Restrict to services settleable on these chains. */
   chains?: SupportedChainName[]
   limit?: number
@@ -437,9 +439,14 @@ export function searchServices(options: SearchOptions = {}): {
   services: Service[]
   total: number
 } {
-  const { query = '', curatedOnly = false, chains, limit = 30, offset = 0 } = options
+  const { query = '', curatedOnly = false, source, chains, limit = 30, offset = 0 } = options
   const where: string[] = []
   const params: Record<string, unknown> = {}
+
+  if (source) {
+    where.push('source = @source')
+    params['source'] = source
+  }
 
   if (query.trim()) {
     where.push('(service_name LIKE @q OR description LIKE @q OR tags LIKE @q OR host LIKE @q)')
