@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto'
 import { CHAIN_CONFIGS } from '@circle-fin/x402-batching/client'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import db, { type ServiceRow } from '../db.ts'
+import { FREE_API_CATALOG } from './freeApiCatalog.ts'
+import { VERIFICATION_AMOUNT_USDC, VERIFICATION_CHAIN } from './testnetVerification.ts'
 
 /**
  * Mirror of the x402 discovery registry (the "Bazaar").
@@ -28,9 +30,12 @@ export interface ServiceNetworkOption {
   scheme: string
 }
 
+export type ServiceSource = 'x402' | 'free'
+
 export interface Service {
   id: string
   resource: string
+  source: ServiceSource
   serviceName: string
   description: string
   tags: string[]
@@ -47,6 +52,8 @@ export interface Service {
   lastCalledAt: string | null
   iconUrl: string | null
   trust: TrustTier
+  /** For free APIs: the paid category an x402 service could upgrade this to. */
+  premiumCategory: string | null
 }
 
 /* ------------------------------------------------------------------ chains */
@@ -176,6 +183,7 @@ function normalise(item: DiscoveryItem): Omit<ServiceRow, 'synced_at'> | null {
   return {
     id: createHash('sha1').update(resource).digest('hex').slice(0, 24),
     resource,
+    source: 'x402',
     service_name: item.serviceName?.trim() || host || 'Unnamed service',
     description: item.description?.trim() || '',
     tags: JSON.stringify(tags),
@@ -195,6 +203,52 @@ function normalise(item: DiscoveryItem): Omit<ServiceRow, 'synced_at'> | null {
     last_called_at: quality.lastCalledAt ?? null,
     icon_url: item.iconUrl ?? null,
   }
+}
+
+/**
+ * Free public APIs, stored in the same table as x402 services so search,
+ * retrieval and the runner treat them uniformly.
+ *
+ * They are priced at the Arc Testnet verification amount rather than zero: a
+ * free call still moves value on chain before it runs, so the cost shown is the
+ * cost actually incurred.
+ */
+function freeApiRows(syncedAt: number): ServiceRow[] {
+  const option: ServiceNetworkOption = {
+    network: `eip155:${CHAIN_CONFIGS[VERIFICATION_CHAIN].chain.id}`,
+    chainKey: VERIFICATION_CHAIN,
+    isTestnet: true,
+    priceUsdc: VERIFICATION_AMOUNT_USDC,
+    asset: CHAIN_CONFIGS[VERIFICATION_CHAIN].usdc,
+    scheme: 'verification',
+  }
+
+  return FREE_API_CATALOG.map((api) => ({
+    id: `free-${api.id}`,
+    resource: api.resource,
+    source: 'free',
+    service_name: api.name,
+    description: api.description,
+    tags: JSON.stringify(
+      api.premiumCategory ? [...api.tags, `premium:${api.premiumCategory}`] : api.tags,
+    ),
+    host: hostOf(api.resource),
+    network: option.network,
+    chain_key: VERIFICATION_CHAIN,
+    is_testnet: 1,
+    networks_json: JSON.stringify([option]),
+    asset: option.asset,
+    price_usdc: VERIFICATION_AMOUNT_USDC,
+    scheme: 'verification',
+    http_method: 'GET',
+    curated: api.curated ? 1 : 0,
+    // Free entries are hand-verified, so they rank as used rather than untested.
+    calls_30d: api.curated ? 1000 : 100,
+    payers_30d: 0,
+    last_called_at: null,
+    icon_url: null,
+    synced_at: syncedAt,
+  }))
 }
 
 async function fetchPage(offset: number): Promise<DiscoveryItem[]> {
@@ -238,16 +292,16 @@ async function runSync(): Promise<SyncResult> {
 
   const upsert = db.prepare(`
     INSERT INTO services (
-      id, resource, service_name, description, tags, host, network, chain_key,
+      id, resource, source, service_name, description, tags, host, network, chain_key,
       is_testnet, networks_json, asset, price_usdc, scheme, http_method, curated,
       calls_30d, payers_30d, last_called_at, icon_url, synced_at
     ) VALUES (
-      @id, @resource, @service_name, @description, @tags, @host, @network, @chain_key,
+      @id, @resource, @source, @service_name, @description, @tags, @host, @network, @chain_key,
       @is_testnet, @networks_json, @asset, @price_usdc, @scheme, @http_method, @curated,
       @calls_30d, @payers_30d, @last_called_at, @icon_url, @synced_at
     )
     ON CONFLICT(resource) DO UPDATE SET
-      service_name = excluded.service_name, description = excluded.description,
+      source = excluded.source, service_name = excluded.service_name, description = excluded.description,
       tags = excluded.tags, host = excluded.host, network = excluded.network,
       chain_key = excluded.chain_key, is_testnet = excluded.is_testnet,
       networks_json = excluded.networks_json, asset = excluded.asset,
@@ -279,6 +333,14 @@ async function runSync(): Promise<SyncResult> {
 
       if (items.length < PAGE_SIZE) break
     }
+
+    // Free APIs are part of the same catalog, written every run so a change to
+    // the curated list takes effect without a separate migration.
+    const freeRows = freeApiRows(syncedAt)
+    db.transaction(() => {
+      for (const row of freeRows) upsert.run(row)
+    })()
+    kept += freeRows.length
 
     // Anything not seen this run has left the registry.
     db.prepare('DELETE FROM services WHERE synced_at IS NULL OR synced_at < ?').run(syncedAt)
@@ -325,12 +387,18 @@ export function syncStatus(): {
 
 export function rowToService(row: ServiceRow): Service {
   const networks = safeParse<ServiceNetworkOption[]>(row.networks_json, [])
+  const tags = safeParse<string[]>(row.tags, [])
+  // premiumCategory rides along in tags as a prefixed entry so the free catalog
+  // needs no extra column.
+  const premiumTag = tags.find((t) => t.startsWith('premium:'))
   return {
     id: row.id,
     resource: row.resource,
+    source: (row.source as ServiceSource) ?? 'x402',
     serviceName: row.service_name ?? row.host ?? 'Unnamed service',
+    premiumCategory: premiumTag ? premiumTag.slice('premium:'.length) : null,
     description: row.description ?? '',
-    tags: safeParse<string[]>(row.tags, []),
+    tags: tags.filter((t) => !t.startsWith('premium:')),
     host: row.host ?? '',
     network: row.network,
     chainKey: (row.chain_key as SupportedChainName | null) ?? null,

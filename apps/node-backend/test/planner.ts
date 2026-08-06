@@ -22,7 +22,8 @@ import { isKnownResource, type Service } from '../src/circle/registryService.ts'
 const DEMO = 'https://x402.org/protected'
 function svc(resource: string, name = 'Demo'): Service {
   return {
-    id: resource, resource, serviceName: name, description: '', tags: [],
+    id: resource, resource, source: 'x402', premiumCategory: null,
+    serviceName: name, description: '', tags: [],
     host: new URL(resource).host, network: 'eip155:8453', chainKey: 'base',
     isTestnet: false, networks: [], priceUsdc: 0.01, httpMethod: 'GET',
     curated: true, calls30d: 10, payers30d: 1, lastCalledAt: null, iconUrl: null,

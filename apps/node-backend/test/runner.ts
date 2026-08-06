@@ -112,6 +112,20 @@ function seedService(resource: string): void {
 }
 seedService('https://x402.org/protected')
 
+/** A free public API, metered by an Arc Testnet verification payment. */
+const FREE_URL = 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd'
+db.prepare(
+  `INSERT OR REPLACE INTO services (id, resource, source, service_name, host, network, chain_key,
+     is_testnet, networks_json, price_usdc, http_method, curated, calls_30d, payers_30d, synced_at)
+   VALUES ('free-test', ?, 'free', 'CoinGecko', 'api.coingecko.com', 'eip155:5042002', 'arcTestnet',
+           1, ?, 0.000001, 'GET', 1, 1000, 0, 0)`,
+).run(
+  FREE_URL,
+  JSON.stringify([
+    { network: 'eip155:5042002', chainKey: 'arcTestnet', isTestnet: true, priceUsdc: 0.000001, asset: null, scheme: 'verification' },
+  ]),
+)
+
 function seedUser(): string {
   const userId = randomUUID()
   db.prepare('INSERT INTO users (id, email, eoa_address) VALUES (?, ?, ?)').run(
@@ -339,6 +353,52 @@ async function main(): Promise<void> {
       'private key never persisted to the database',
       persisted.every((r) => !(r.response_summary ?? '').includes(key.slice(2))),
     )
+  }
+
+  // ------------------------------------------- free APIs are metered, not free
+  section('Free API metering (Arc Testnet verification)')
+  {
+    const userId = seedUser()
+    const steps: PlanStep[] = [
+      {
+        stepIndex: 0,
+        serviceName: 'CoinGecko',
+        endpointUrl: FREE_URL,
+        httpMethod: 'GET',
+        params: {},
+        purpose: 'fetch a price',
+        estimatedCostUsdc: 0.000001,
+      },
+    ]
+    const taskId = seedTask(userId, steps)
+    const fake = fakeResponse()
+
+    await runTask({
+      taskId,
+      userId,
+      steps,
+      agentPrivateKey: key,
+      budgetUsdc: null,
+      spendingCapUsdc: 100,
+      policy: TEST_POLICY,
+      res: fake.res,
+    })
+
+    const frames = fake.frames()
+    const events = frames.map((f) => f.event)
+    check('free step is attempted', events.includes('step_start'), events.join(','))
+
+    // The wallet is unfunded, so the verification transfer must refuse it —
+    // that refusal IS the gate, and it must happen before the API is called.
+    const failed = frames.find((f) => f.event === 'step_failed')
+    check('unfunded wallet cannot call a free API', failed !== undefined, events.join(','))
+    check(
+      'refusal names the verification payment',
+      String(failed?.data['error'] ?? '').includes('verification'),
+      String(failed?.data['error']).slice(0, 90),
+    )
+    check('run still reaches a terminal event', events.includes('complete') || events.includes('fatal'))
+    check('no spend recorded for a refused call', fake.raw().includes('"totalSpent":0'))
   }
 
   console.log(`\n${'─'.repeat(52)}`)
