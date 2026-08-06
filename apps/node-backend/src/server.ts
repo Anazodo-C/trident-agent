@@ -4,7 +4,7 @@ import { ALLOWED_ORIGINS, IS_PROD, PORT, isOriginAllowed } from './env.ts'
 import { messageOf, statusOf } from './http.ts'
 import { scrubSecrets } from './circle/gatewayService.ts'
 import { STORAGE_PERSISTENT } from './db.ts'
-import { syncRegistry, syncStatus } from './circle/registryService.ts'
+import { syncFreeApis, syncRegistry, syncStatus } from './circle/registryService.ts'
 import authRoutes from './routes/auth.ts'
 import serviceRoutes from './routes/services.ts'
 import agentRoutes from './routes/agent.ts'
@@ -94,6 +94,16 @@ const REGISTRY_REFRESH_MS = 6 * 60 * 60 * 1000
 const REGISTRY_STALE_SECONDS = 12 * 60 * 60
 
 function refreshRegistry(force = false): void {
+  // Free APIs are local static data, so they are written every boot rather than
+  // waiting on the remote refresh below — otherwise a deploy that changes the
+  // list leaves production without it until the 6-hour timer fires.
+  try {
+    const count = syncFreeApis()
+    console.log(`[trident] free API catalog: ${count} services`)
+  } catch (err) {
+    console.error('[trident] free API catalog failed:', String(err))
+  }
+
   const status = syncStatus()
   const age = status.completedAt ? Math.floor(Date.now() / 1000) - status.completedAt : Infinity
   if (!force && status.serviceCount > 0 && age < REGISTRY_STALE_SECONDS) return

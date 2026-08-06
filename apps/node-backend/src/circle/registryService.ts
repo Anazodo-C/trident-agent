@@ -361,6 +361,42 @@ async function runSync(): Promise<SyncResult> {
   }
 }
 
+/**
+ * Write the free catalog without touching the discovery API.
+ *
+ * The full sync is skipped when the remote registry was fetched recently, which
+ * meant a deploy that changed this list left production without it — the free
+ * entries are local static data, so they should not wait on a remote refresh.
+ * Cheap and idempotent, so it runs on every boot.
+ */
+export function syncFreeApis(): number {
+  const syncedAt = Math.floor(Date.now() / 1000)
+  const rows = freeApiRows(syncedAt)
+  const upsert = db.prepare(`
+    INSERT INTO services (
+      id, resource, source, service_name, description, tags, host, network, chain_key,
+      is_testnet, networks_json, asset, price_usdc, scheme, http_method, curated,
+      calls_30d, payers_30d, last_called_at, icon_url, synced_at
+    ) VALUES (
+      @id, @resource, @source, @service_name, @description, @tags, @host, @network, @chain_key,
+      @is_testnet, @networks_json, @asset, @price_usdc, @scheme, @http_method, @curated,
+      @calls_30d, @payers_30d, @last_called_at, @icon_url, @synced_at
+    )
+    ON CONFLICT(resource) DO UPDATE SET
+      source = excluded.source, service_name = excluded.service_name,
+      description = excluded.description, tags = excluded.tags, host = excluded.host,
+      network = excluded.network, chain_key = excluded.chain_key,
+      is_testnet = excluded.is_testnet, networks_json = excluded.networks_json,
+      asset = excluded.asset, price_usdc = excluded.price_usdc, scheme = excluded.scheme,
+      curated = excluded.curated, calls_30d = excluded.calls_30d,
+      synced_at = excluded.synced_at
+  `)
+  db.transaction(() => {
+    for (const row of rows) upsert.run(row)
+  })()
+  return rows.length
+}
+
 export function syncStatus(): {
   startedAt: number | null
   completedAt: number | null
