@@ -155,7 +155,11 @@ router.post(
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined
     if (!task || task.user_id !== user.id) throw httpError(404, 'Task not found')
     if (task.status === 'running') throw httpError(409, 'This task is already running')
-    if (task.completed_at) throw httpError(409, 'This task has already finished')
+    // A completed run is final — re-running would charge twice for work already
+    // delivered. A failed or stopped one is retryable: the usual cause is an
+    // unfunded wallet or a flaky endpoint, and forcing a re-plan there would
+    // charge another LLM call to reproduce a plan the user already approved.
+    if (task.status === 'done') throw httpError(409, 'This task has already completed')
 
     const rogue = approvedSteps.find((s) => findServiceByResource(s.endpointUrl) === null)
     if (rogue) throw httpError(400, `Endpoint is not in the service catalog: ${rogue.endpointUrl}`)
@@ -177,6 +181,10 @@ router.post(
     }
 
     syncApprovedSteps(taskId, approvedSteps)
+    // Clear the previous attempt's outcome so the retry starts clean.
+    db.prepare(
+      `UPDATE tasks SET status = 'pending', completed_at = NULL, total_cost_usdc = 0 WHERE id = ?`,
+    ).run(taskId)
 
     await runTask({
       taskId,
