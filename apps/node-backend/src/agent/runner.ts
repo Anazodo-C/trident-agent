@@ -168,11 +168,14 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
          WHERE task_id = ? AND step_index = ?`,
       ).run(taskId, step.stepIndex)
 
+      // Resolved outside the try so the failure path can tell a free-API
+      // metering failure apart from an x402 settlement failure.
+      const service = findServiceByResource(step.endpointUrl)
+
       try {
         // Defence in depth: approvedSteps arrive from the client and could be
         // edited, so the endpoint is re-checked against the registry here and
         // matched exactly — never by prefix.
-        const service = findServiceByResource(step.endpointUrl)
         if (!service) {
           throw new Error(`Endpoint is not in the service registry: ${step.endpointUrl}`)
         }
@@ -252,8 +255,14 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
         emit(res, 'step_failed', { stepIndex: step.stepIndex, error: detail, totalSpent })
 
         if (isBalanceError(detail)) {
+          // A free API fails on the Arc Testnet metering payment, not on
+          // Gateway — pointing the user at the Gateway panel would send them
+          // to top up a balance that was never involved.
           emit(res, 'fatal', {
-            error: 'Insufficient Gateway balance. Top up in the Wallet tab.',
+            error:
+              service?.source === 'free'
+                ? 'Not enough testnet USDC to meter this call. Fund your agent wallet on Arc Testnet from the Circle faucet.'
+                : 'Insufficient Gateway balance. Top up in the Wallet tab.',
             totalSpent,
           })
           finish('failed')
