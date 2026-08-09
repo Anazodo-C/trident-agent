@@ -1,7 +1,11 @@
 import type { Response } from 'express'
 import db from '../db.ts'
 import type { PlanStep } from '../llm/planner.ts'
-import { gatewayClientFor, safeErrorMessage } from '../circle/gatewayService.ts'
+import {
+  gatewayClientFor,
+  lastErrorBodyFor,
+  safeErrorMessage,
+} from '../circle/gatewayService.ts'
 import { findServiceByResource } from '../circle/registryService.ts'
 import { chooseChain, unpayableReason, type ChainPolicy } from '../circle/chainPolicy.ts'
 import { callFreeApi, payVerification } from '../circle/testnetVerification.ts'
@@ -31,6 +35,27 @@ function emit(res: Response, event: SseEvent, data: object): void {
 
 function isBalanceError(message: string): boolean {
   return /insufficient|balance|not enough funds/i.test(message)
+}
+
+/**
+ * One payment attempt, retried once when the facilitator says to.
+ *
+ * "Payment verification temporarily unavailable, please retry" is an upstream
+ * hiccup, not a rejection — the endpoint never served the request, so nothing
+ * was bought and a second attempt cannot double-charge.
+ */
+async function payOnce(
+  client: GatewayClient,
+  step: PlanStep,
+  payOptions: { method: 'POST'; body: Record<string, unknown> } | undefined,
+): Promise<Awaited<ReturnType<GatewayClient['pay']>>> {
+  try {
+    return await client.pay(requestUrl(step), payOptions)
+  } catch (err) {
+    if (!/temporarily unavailable|please retry/i.test(safeErrorMessage(err))) throw err
+    await new Promise((resolve) => setTimeout(resolve, 1500))
+    return await client.pay(requestUrl(step), payOptions)
+  }
 }
 
 /**
@@ -125,7 +150,7 @@ async function payWithMethodRecovery(
   }
 
   try {
-    return await client.pay(requestUrl(step), payOptions)
+    return await payOnce(client, step, payOptions)
   } catch (err) {
     const detail = safeErrorMessage(err)
     if (!isMethodNotAllowed(detail)) throw err
@@ -467,7 +492,14 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           result: data,
         })
       } catch (err) {
-        const detail = safeErrorMessage(err)
+        let detail = safeErrorMessage(err)
+
+        // The SDK stringifies structured endpoint errors into "[object
+        // Object]". Recover what the endpoint actually said.
+        if (detail.includes('[object Object]')) {
+          const body = lastErrorBodyFor(requestUrl(step))
+          if (body) detail = `${detail.replace('[object Object]', '').trim()} ${body}`
+        }
 
         /**
          * The only place a failed endpoint is recorded where an operator can

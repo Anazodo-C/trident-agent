@@ -122,6 +122,47 @@ export function scrubSecrets(message: string): string {
   return message.replace(/0x[0-9a-fA-F]{64}/g, '0x<redacted>')
 }
 
+/**
+ * Last error body seen per URL, so a failure can say what the endpoint said.
+ *
+ * The SDK builds its error as `Payment failed: ${error.error}` — a template
+ * literal — so when an endpoint returns a structured error object it arrives
+ * as the string "[object Object]" and the detail is gone before we can catch
+ * it. The only place it still exists is the HTTP response, so it is recorded
+ * as it goes past.
+ *
+ * Installed once and never removed: restoring a patched global around each
+ * call would race with any concurrent run. Bounded so it cannot grow.
+ */
+const lastErrorBodies = new Map<string, string>()
+const MAX_TRACKED_BODIES = 50
+
+const originalFetch = globalThis.fetch
+globalThis.fetch = async function trackingFetch(input, init) {
+  const response = await originalFetch(input, init)
+  if (!response.ok) {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    // Read from a clone so the caller still gets an unconsumed body.
+    void response
+      .clone()
+      .text()
+      .then((text) => {
+        if (!text) return
+        if (lastErrorBodies.size >= MAX_TRACKED_BODIES) {
+          lastErrorBodies.delete(lastErrorBodies.keys().next().value as string)
+        }
+        lastErrorBodies.set(url, text.slice(0, 400))
+      })
+      .catch(() => undefined)
+  }
+  return response
+}
+
+/** What the endpoint actually returned, when the SDK flattened it away. */
+export function lastErrorBodyFor(url: string): string | null {
+  return lastErrorBodies.get(url) ?? null
+}
+
 export function safeErrorMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err)
 
