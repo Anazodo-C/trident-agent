@@ -13,7 +13,12 @@ import {
 import { messageOf, statusOf } from './http.ts'
 import { scrubSecrets } from './circle/gatewayService.ts'
 import { STORAGE_PERSISTENT } from './db.ts'
-import { syncFreeApis, syncRegistry, syncStatus } from './circle/registryService.ts'
+import {
+  catalogSourceChanged,
+  syncFreeApis,
+  syncRegistry,
+  syncStatus,
+} from './circle/registryService.ts'
 import authRoutes from './routes/auth.ts'
 import serviceRoutes from './routes/services.ts'
 import agentRoutes from './routes/agent.ts'
@@ -142,7 +147,10 @@ function refreshRegistry(force = false): void {
 
   const status = syncStatus()
   const age = status.completedAt ? Math.floor(Date.now() / 1000) - status.completedAt : Infinity
-  if (!force && status.serviceCount > 0 && age < REGISTRY_STALE_SECONDS) return
+  // A catalog from a different provider is stale no matter how recently it was
+  // fetched, so the age check cannot be the only gate.
+  const staleSource = catalogSourceChanged()
+  if (!force && !staleSource && status.serviceCount > 0 && age < REGISTRY_STALE_SECONDS) return
   syncRegistry().catch(() => undefined)
 }
 

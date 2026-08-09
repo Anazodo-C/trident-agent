@@ -24,6 +24,12 @@ import { VERIFICATION_AMOUNT_USDC, VERIFICATION_CHAIN } from './testnetVerificat
  */
 const DISCOVERY_URL = 'https://api.circle.com/v2/x402/discovery/resources'
 const PAGE_SIZE = 200 // Circle's documented maximum.
+
+/**
+ * Identifies the upstream catalog. Bump when the source changes so existing
+ * deployments rebuild instead of serving rows from the previous provider.
+ */
+export const CATALOG_SOURCE = 'circle-agent-marketplace-v1'
 const MAX_PAGES = 40
 const REQUEST_TIMEOUT_MS = 45_000
 
@@ -367,10 +373,22 @@ export function syncRegistry(): Promise<SyncResult> {
 
 async function runSync(): Promise<SyncResult> {
   const startedAt = Date.now()
+
+  /*
+   * On a source swap, clear the old provider's listings first. Upsert is keyed
+   * by resource, so without this the previous catalog simply stays alongside
+   * the new one — thousands of services the agent cannot pay, still visible in
+   * the Endpoints page. Free entries are ours and are rewritten every boot.
+   */
+  if (catalogSourceChanged()) {
+    const removed = db.prepare(`DELETE FROM services WHERE source = 'x402'`).run().changes
+    console.warn(`[trident] discovery source changed — dropped ${removed} stale services`)
+  }
   db.prepare(
-    `INSERT INTO registry_sync (id, started_at, status) VALUES (1, ?, 'running')
-     ON CONFLICT(id) DO UPDATE SET started_at = excluded.started_at, status = 'running', error = NULL`,
-  ).run(Math.floor(startedAt / 1000))
+    `INSERT INTO registry_sync (id, started_at, status, source_version) VALUES (1, ?, 'running', ?)
+     ON CONFLICT(id) DO UPDATE SET started_at = excluded.started_at, status = 'running',
+       error = NULL, source_version = excluded.source_version`,
+  ).run(Math.floor(startedAt / 1000), CATALOG_SOURCE)
 
   const upsert = db.prepare(`
     INSERT INTO services (
@@ -477,6 +495,16 @@ export function syncFreeApis(): number {
     for (const row of rows) upsert.run(row)
   })()
   return rows.length
+}
+
+/** True when the stored catalog came from a different upstream than the code. */
+export function catalogSourceChanged(): boolean {
+  const row = db.prepare('SELECT source_version FROM registry_sync WHERE id = 1').get() as
+    | { source_version: string | null }
+    | undefined
+  // No row at all is a first boot, which the normal empty-catalog path covers.
+  if (!row) return false
+  return row.source_version !== CATALOG_SOURCE
 }
 
 export function syncStatus(): {

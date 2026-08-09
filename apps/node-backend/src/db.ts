@@ -213,6 +213,14 @@ addColumnIfMissing('task_steps', 'verification_tx', 'TEXT')
  * alone would have locked every existing wallet out permanently.
  */
 addColumnIfMissing('users', 'kdf_iterations', 'INTEGER DEFAULT 200000')
+/**
+ * Which upstream catalog the stored services came from.
+ *
+ * Changing the discovery source does not make the existing rows stale by age,
+ * so the boot-time freshness check happily kept serving a catalog from the old
+ * provider. Recording the source means a swap forces a rebuild.
+ */
+addColumnIfMissing('registry_sync', 'source_version', 'TEXT')
 
 export interface MessageRow {
   id: string
