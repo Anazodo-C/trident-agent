@@ -31,7 +31,22 @@ export const StepSchema = z.object({
   endpointUrl: z.string().url(),
   httpMethod: z.enum(['GET', 'POST']),
   // Models emit numbers/booleans here often enough that coercing beats retrying.
-  params: z.record(z.union([z.string(), z.number(), z.boolean()])).default({}),
+  // Lists too: asked for two coins, a model will reach for ["bitcoin","ethereum"]
+  // where the API wants ids=bitcoin,ethereum. Rejecting that burned all three
+  // retries and failed the whole plan, so it is joined instead — which is the
+  // encoding these query parameters use anyway.
+  params: z
+    .record(
+      z.union([
+        z.string(),
+        z.number(),
+        z.boolean(),
+        z
+          .array(z.union([z.string(), z.number(), z.boolean()]))
+          .transform((values) => values.join(',')),
+      ]),
+    )
+    .default({}),
   purpose: z.string().min(1),
   estimatedCostUsdc: z.number().nonnegative(),
 })
@@ -55,12 +70,27 @@ export interface StepAnnotation {
 
 export type AnnotatedStep = PlanStep & { annotation: StepAnnotation }
 
+/**
+ * A second, more reliable way to do the same job — offered alongside the
+ * cheapest one so the user can trade cost against reliability knowingly.
+ * Null when the cheapest route is already the most reliable.
+ */
+export const RouteSchema = z.object({
+  steps: z.array(StepSchema),
+  rationale: z.string(),
+})
+
+export type PlanRoute = z.infer<typeof RouteSchema>
+
 export const PlanSchema = z.object({
   goal: z.string(),
   steps: z.array(StepSchema),
   totalEstimatedCostUsdc: z.number().nonnegative(),
   reasoning: z.string(),
   alternativeSteps: z.array(StepSchema).default([]),
+  // Present even when it exceeds the cap: an unaffordable route is exactly
+  // what the budget guidance needs in order to quote a figure.
+  alternativeRoute: RouteSchema.nullable().default(null),
   minCostUsdc: z.number().nonnegative().optional(),
 })
 
@@ -111,12 +141,19 @@ Rules:
 - Prefer trust "curated", then "active". A service with trust "untested" has no recorded usage and may not work — only choose one when nothing else fits the goal.
 - Order steps logically; stepIndex starts at 0 and increases by 1.
 - totalEstimatedCostUsdc must equal the sum of the steps' estimatedCostUsdc.
-- If a budget is given, keep totalEstimatedCostUsdc at or under it.
-- If the budget is too low for any useful plan, return "steps": [] and set minCostUsdc to the cheapest workable total.
 - If none of these services can address the goal, return "steps": [] and say so plainly in "reasoning". Do not substitute an unrelated service.
 
+Two routes:
+- "steps" is the CHEAPEST route that genuinely accomplishes the goal. Cost is the only thing being minimised here; it must still do the whole job.
+- "alternativeRoute" is a MORE RELIABLE route for the same goal — higher trust tiers, more recorded usage, or better-suited services — even when it costs more. Set it to null if the cheapest route is already the most reliable one available, or if no second route exists. Never pad it with extra calls just to make it different.
+- Cost the two independently. Do not make the cheapest route worse in order to create a contrast.
+
+Spending limit:
+- A limit is given below. It is absolute and set by the user: never plan above it, and never assume it can be raised.
+- If the cheapest route that accomplishes the goal costs MORE than the limit, still return it in "steps", and set minCostUsdc to its total. It will be shown to the user as a quote, not run. Do not substitute a cheaper route that does not actually accomplish the goal.
+
 Respond with exactly this JSON shape:
-{"goal":string,"steps":[{"stepIndex":number,"serviceName":string,"endpointUrl":string,"httpMethod":"GET"|"POST","params":object,"purpose":string,"estimatedCostUsdc":number}],"totalEstimatedCostUsdc":number,"reasoning":string,"alternativeSteps":[],"minCostUsdc":number}`
+{"goal":string,"steps":[{"stepIndex":number,"serviceName":string,"endpointUrl":string,"httpMethod":"GET"|"POST","params":object (values must be strings, numbers or booleans — join a list into one comma-separated string),"purpose":string,"estimatedCostUsdc":number}],"totalEstimatedCostUsdc":number,"reasoning":string,"alternativeSteps":[],"alternativeRoute":{"steps":[...same step shape...],"rationale":string}|null,"minCostUsdc":number}`
 }
 
 /**
@@ -126,7 +163,10 @@ Respond with exactly this JSON shape:
  */
 export function assertStepsAreCatalogued(plan: ExecutionPlan, candidates: Service[]): void {
   const allowed = new Set(candidates.map((s) => s.resource))
-  const offending = plan.steps.find((s) => !allowed.has(s.endpointUrl))
+  // The alternative route is quoted to the user and can be approved, so it is
+  // held to the same standard as the primary one.
+  const all = [...plan.steps, ...(plan.alternativeRoute?.steps ?? [])]
+  const offending = all.find((s) => !allowed.has(s.endpointUrl))
   if (offending) {
     throw new Error(
       `Planner produced an endpoint outside the offered shortlist: ${offending.endpointUrl}`,
@@ -138,13 +178,40 @@ export function assertStepsAreCatalogued(plan: ExecutionPlan, candidates: Servic
 export function normalise(plan: ExecutionPlan): ExecutionPlan {
   const steps = plan.steps.map((s, i) => ({ ...s, stepIndex: i }))
   const total = steps.reduce((sum, s) => sum + s.estimatedCostUsdc, 0)
-  return { ...plan, steps, totalEstimatedCostUsdc: Number(total.toFixed(6)) }
+
+  const alternativeRoute = plan.alternativeRoute
+    ? {
+        ...plan.alternativeRoute,
+        steps: plan.alternativeRoute.steps.map((s, i) => ({ ...s, stepIndex: i })),
+      }
+    : null
+
+  // A route identical to the primary is not an alternative, and showing the
+  // same thing twice at two prices would be worse than showing it once.
+  const sameAsPrimary =
+    alternativeRoute !== null &&
+    alternativeRoute.steps.length === steps.length &&
+    alternativeRoute.steps.every((s, i) => s.endpointUrl === steps[i]?.endpointUrl)
+
+  return {
+    ...plan,
+    steps,
+    totalEstimatedCostUsdc: Number(total.toFixed(6)),
+    alternativeRoute: sameAsPrimary ? null : alternativeRoute,
+  }
+}
+
+export interface PlanLimits {
+  /** The account spending cap. Absolute — the planner is never told to exceed it. */
+  capUsdc: number
+  /** Optional per-run budget, which can only tighten the cap. */
+  budgetUsdc?: number | undefined
 }
 
 export async function buildPlan(
   goal: string,
   candidates: Service[],
-  budgetUsdc?: number,
+  limits: PlanLimits,
 ): Promise<ExecutionPlan> {
   if (candidates.length === 0) {
     return normalise({
@@ -154,11 +221,23 @@ export async function buildPlan(
       reasoning:
         'No payable services are available for this wallet yet. If the service catalog is still syncing, try again shortly.',
       alternativeSteps: [],
+      alternativeRoute: null,
     })
   }
 
+  const ceiling =
+    limits.budgetUsdc === undefined
+      ? limits.capUsdc
+      : Math.min(limits.capUsdc, limits.budgetUsdc)
+
   const system = systemPrompt(candidates)
-  const userContent = `Goal: ${goal}${budgetUsdc !== undefined ? `\nBudget: $${budgetUsdc} USDC` : ''}`
+  const userContent = [
+    `Goal: ${goal}`,
+    `Spending limit: $${ceiling} USDC (absolute)`,
+    limits.budgetUsdc !== undefined && limits.budgetUsdc < limits.capUsdc
+      ? `This is a per-run budget, tighter than the $${limits.capUsdc} account cap.`
+      : `This is the user's account spending cap.`,
+  ].join('\n')
 
   let lastErr: Error | null = null
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {

@@ -68,14 +68,23 @@ function StatusIcon({ status }: { status: LiveStep['status'] }) {
 }
 
 function CostLabel({ step }: { step: LiveStep }) {
+  // Paid on an earlier attempt. Shown in the running total but not as a charge
+  // against this one, so a retry never looks like it billed twice.
+  if (step.replayed) {
+    return (
+      <span className="font-mono text-sm text-slate-500" title="Paid on an earlier attempt">
+        ${usdc(step.cost)} · reused
+      </span>
+    )
+  }
   if (step.status === 'done') {
     return (
-      <span className="font-mono text-sm text-[#00FF88]">${usdc(step.cost ?? 0, 3)}</span>
+      <span className="font-mono text-sm text-[#00FF88]">${usdc(step.cost)}</span>
     )
   }
   if (step.status === 'failed') return <span className="font-mono text-sm text-slate-600">—</span>
   return (
-    <span className="font-mono text-sm text-slate-500">~${usdc(step.estimatedCostUsdc, 3)}</span>
+    <span className="font-mono text-sm text-slate-500">~${usdc(step.estimatedCostUsdc)}</span>
   )
 }
 

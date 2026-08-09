@@ -81,7 +81,7 @@ export function ApprovalCard({ plan, annotations, upgrades, onApprove, onCancel 
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-baseline justify-between gap-2">
                   <span className="font-mono text-sm text-slate-100">{step.serviceName}</span>
-                  <span className="price text-sm">~${usdc(step.estimatedCostUsdc, 3)}</span>
+                  <span className="price text-sm">~${usdc(step.estimatedCostUsdc)}</span>
                 </div>
                 <p className="mt-1 text-sm text-slate-400">{step.purpose}</p>
                 <p className="mt-1.5 truncate font-mono text-[11px] text-slate-600">
@@ -110,7 +110,7 @@ export function ApprovalCard({ plan, annotations, upgrades, onApprove, onCancel 
       <div className="border-t border-[#1A7FFF]/20 px-5 py-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <span className="heading-mono">Estimated total</span>
-          <span className="price text-lg">${usdc(estimatedTotal, 3)}</span>
+          <span className="price text-lg">${usdc(estimatedTotal)}</span>
         </div>
 
         <label className="mt-4 flex flex-col gap-1.5">

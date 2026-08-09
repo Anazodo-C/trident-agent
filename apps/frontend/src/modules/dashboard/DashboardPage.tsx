@@ -94,8 +94,8 @@ export function DashboardPage() {
             <Stat
               Icon={CircleDollarSign}
               label="Total paid"
-              value={`$${usdc(stats.totals.totalSpentUsdc, 6)}`}
-              sub={`$${usdc(stats.avgCostPerRun, 6)} per run`}
+              value={`$${usdc(stats.totals.totalSpentUsdc)}`}
+              sub={`$${usdc(stats.avgCostPerRun)} per run`}
               accent
             />
             <Stat
@@ -143,7 +143,7 @@ export function DashboardPage() {
                 rows={stats.topServices.map((r) => ({
                   label: r.label,
                   value: r.count,
-                  detail: `$${usdc(r.amountUsdc, 6)}`,
+                  detail: `$${usdc(r.amountUsdc)}`,
                 }))}
                 empty="No services called yet."
               />
@@ -154,7 +154,7 @@ export function DashboardPage() {
                 rows={stats.spendByChain.map((r) => ({
                   label: r.label,
                   value: r.count,
-                  detail: `$${usdc(r.amountUsdc, 6)}`,
+                  detail: `$${usdc(r.amountUsdc)}`,
                 }))}
                 empty="No settled payments yet."
               />
@@ -286,7 +286,7 @@ function DailyChart({ points }: { points: { day: string; runs: number; spentUsdc
             key={p.day}
             className="group relative flex-1 rounded-t bg-[#00D4FF]/25 transition-colors hover:bg-[#00D4FF]/60"
             style={{ height: `${Math.max(4, (p.runs / max) * 100)}%` }}
-            title={`${p.day}: ${p.runs} run${p.runs === 1 ? '' : 's'}, $${usdc(p.spentUsdc, 6)}`}
+            title={`${p.day}: ${p.runs} run${p.runs === 1 ? '' : 's'}, $${usdc(p.spentUsdc)}`}
           />
         ))}
       </div>

@@ -143,4 +143,29 @@ export const ANTHROPIC_BASE_URL = optional('ANTHROPIC_BASE_URL').replace(/\/+$/,
 /** Overridable because gateways do not always expose Anthropic's model ids. */
 export const ANTHROPIC_MODEL = optional('ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')
 
+function anthropicHost(url: string): string {
+  if (!url) return 'api.anthropic.com'
+  try {
+    return new URL(url).host.toLowerCase()
+  } catch {
+    return url.toLowerCase()
+  }
+}
+
+/** Where Messages API calls actually land, for the boot log. */
+export const ANTHROPIC_HOST = anthropicHost(ANTHROPIC_BASE_URL)
+
+/**
+ * An Anthropic-issued key (sk-ant-) aimed at a third-party gateway is almost
+ * always a leftover base URL from a previous setup — and it is the kind of
+ * mistake that is invisible in behaviour but sends every prompt, and the key
+ * itself, somewhere it was not meant to go. Say so at boot.
+ *
+ * The test is the host, not whether the variable is set: pointing explicitly at
+ * api.anthropic.com is direct, and warning about it would be crying wolf in the
+ * logs every boot.
+ */
+export const ANTHROPIC_KEY_MISDIRECTED =
+  ANTHROPIC_HOST !== 'api.anthropic.com' && ANTHROPIC_API_KEY.startsWith('sk-ant-')
+
 export const DB_PATH = optional('DB_PATH', './trident.db')

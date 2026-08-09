@@ -258,6 +258,65 @@ async function main(): Promise<void> {
   })
   check('spending cap updates', capRes.body?.newCap === 2.5)
 
+  // The cap is absolute: a plan over it is quoted, never approved, and the cap
+  // is never raised to accommodate it.
+  const tinyCap = await json<{ newCap: number }>('/api/wallet/user/spending-cap', {
+    method: 'PATCH',
+    headers: auth,
+    body: JSON.stringify({ cap: 0.0000001 }),
+  })
+  check('cap can be set below any service price', tinyCap.body?.newCap === 0.0000001)
+
+  // ------------------------------------------------------------ cap is final
+  section('Spending cap is absolute')
+  if (process.env['ANTHROPIC_API_KEY']) {
+    const capped = await json<{
+      affordable: boolean
+      plan: { steps: unknown[] }
+      budgetGuidance: {
+        message: string
+        options: { kind: string; totalUsdc: number; minimumCapUsdc: number }[]
+      } | null
+      costing: { capUsdc: number; primaryUsdc: number }
+    }>('/api/agent/plan', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ goal: 'Get the current price of bitcoin in USD' }),
+    })
+
+    const guidance = capped.body?.budgetGuidance
+    check('an over-cap goal is not affordable', capped.body?.affordable === false)
+    check('no steps are offered for approval', (capped.body?.plan?.steps?.length ?? -1) === 0)
+    check('the shortfall is quoted', (guidance?.options?.length ?? 0) > 0, guidance?.message)
+    check(
+      'the quote names a minimum cap above the current one',
+      (guidance?.options?.[0]?.minimumCapUsdc ?? 0) > (capped.body?.costing?.capUsdc ?? 0),
+      `min ${guidance?.options?.[0]?.minimumCapUsdc} vs cap ${capped.body?.costing?.capUsdc}`,
+    )
+    check(
+      'the message avoids exponent notation',
+      !(guidance?.message ?? '').includes('e-'),
+      guidance?.message,
+    )
+
+    // The cap itself must be untouched by all of that.
+    const after = await json<{ user: { spendingCapUsdc: number } }>('/auth/me', { headers: auth })
+    check(
+      'planning never adjusts the cap',
+      after.body?.user?.spendingCapUsdc === 0.0000001,
+      String(after.body?.user?.spendingCapUsdc),
+    )
+  } else {
+    console.log('  \x1b[33m•\x1b[0m ANTHROPIC_API_KEY not set — skipping cap planning checks')
+  }
+
+  // Restore a workable cap for the planner and runner sections below.
+  await json('/api/wallet/user/spending-cap', {
+    method: 'PATCH',
+    headers: auth,
+    body: JSON.stringify({ cap: 10 }),
+  })
+
   // ---------------------------------------------------------------- planner
   section('Planner')
   if (!process.env['ANTHROPIC_API_KEY']) {
@@ -306,22 +365,46 @@ async function main(): Promise<void> {
   if (steps.length === 0) return report()
 
   // ------------------------------------------------------------ budget gate
-  section('Runner — budget gate')
-  const budgetFrames = await readSse('/api/agent/run', jwt, {
-    taskId: planRes.body.taskId,
-    approvedSteps: steps,
-    agentPrivateKey: decrypted,
-    // Deliberately below the cheapest step so the gate must trip on step 0.
-    budgetUsdc: 0.0001,
+  //
+  // A plan whose total already exceeds the limit is refused before the stream
+  // opens, so nothing is charged and no partial run has to be explained. The
+  // runner's per-step gate still exists for a run that drifts over mid-flight
+  // — that path is covered deterministically in test:runner.
+  section('Run refused before it starts')
+  const refused = await json<{
+    error: string
+    budgetGuidance: {
+      ceilingUsdc: number
+      options: { minimumCapUsdc: number }[]
+    } | null
+  }>('/api/agent/run', {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({
+      taskId: planRes.body.taskId,
+      approvedSteps: steps,
+      agentPrivateKey: decrypted,
+      // Deliberately below the cheapest step so the limit must refuse it.
+      budgetUsdc: 0.0001,
+    }),
   })
-  const budgetEvents = budgetFrames.map((f) => f.event)
-  check('stream opened with a start event', budgetEvents[0] === 'start', budgetEvents.join(','))
+  check('an unaffordable run is refused outright', refused.status === 403, `got ${refused.status}`)
+  check('the refusal explains the shortfall', /over your/.test(refused.body?.error ?? ''))
   check(
-    'budget_exceeded fires before any payment',
-    budgetEvents.includes('budget_exceeded'),
-    budgetEvents.join(','),
+    'the refusal quotes what it would take',
+    (refused.body?.budgetGuidance?.options?.[0]?.minimumCapUsdc ?? 0) > 0.0001,
+    refused.body?.error,
   )
-  check('no step was paid', !budgetEvents.includes('step_done'), budgetEvents.join(','))
+
+  const untouched = await json<{ task: { status: string; totalCostUsdc: number } }>(
+    `/api/tasks/${planRes.body.taskId}`,
+    { headers: auth },
+  )
+  check(
+    'nothing was spent on the refused run',
+    (untouched.body?.task?.totalCostUsdc ?? -1) === 0,
+    String(untouched.body?.task?.totalCostUsdc),
+  )
 
   // ------------------------------------------------------------ normal run
   section('Runner — execution + stop')
@@ -354,34 +437,162 @@ async function main(): Promise<void> {
       },
     )
     const events = frames.map((f) => f.event)
-    check('run emitted step_start', events.includes('step_start'), events.join(','))
+    const blocked = events.includes('cap_exceeded') || events.includes('budget_exceeded')
+    check(
+      'run emitted step_start',
+      blocked ? !events.includes('step_start') : events.includes('step_start'),
+      events.join(','),
+    )
     check(
       'run reached a terminal event',
-      events.some((e) => ['complete', 'stopped', 'fatal', 'error'].includes(e)),
+      events.some((e) =>
+        ['complete', 'stopped', 'fatal', 'error', 'cap_exceeded', 'budget_exceeded'].includes(e),
+      ),
       events.join(','),
     )
     // With no Gateway balance, a real payment cannot settle — the run must fail
     // cleanly rather than hang or crash the process.
     check(
       'unfunded wallet fails gracefully',
-      !events.includes('step_done') ? events.includes('step_failed') : true,
+      blocked || events.includes('step_done') ? true : events.includes('step_failed'),
       events.join(','),
     )
+
+    // A run that produced results writes them up in prose. A run blocked before
+    // its first step has nothing to summarise, and must not invent one.
+    const summaryFrame = frames.find((f) => f.event === 'summary')
+    const produced = events.includes('step_done') || events.includes('step_failed')
+    check(
+      produced ? 'run summarised its results' : 'blocked run emitted no summary',
+      produced ? Boolean(summaryFrame) : !summaryFrame,
+      events.join(','),
+    )
+    if (summaryFrame) {
+      const text = String((summaryFrame.data as { summary?: string })?.summary ?? '')
+      check('summary is prose, not JSON', text.length > 0 && !text.trimStart().startsWith('{'))
+      check('summary does not leak the key', !text.includes(decrypted.slice(2)))
+    }
+
+    // ----------------------------------------------------------- retry/resume
+    // A retry must not re-pay for steps that already settled.
+    section('Retry resumes')
+    const before = await json<{ steps: { status: string; actualCostUsdc: number | null }[] }>(
+      `/api/tasks/${plan2.body.taskId}`,
+      { headers: auth },
+    )
+    const settled = (before.body?.steps ?? []).filter((step) => step.status === 'done')
+    const priorSpend = settled.reduce((sum, step) => sum + (step.actualCostUsdc ?? 0), 0)
+
+    // A run that completed is final and cannot be retried, which is correct —
+    // but it means there is nothing here to resume. Say so rather than letting
+    // the checks below pass on an empty set.
+    const taskNow = await json<{ task: { status: string } }>(
+      `/api/tasks/${plan2.body.taskId}`,
+      { headers: auth },
+    )
+    const retryable = taskNow.body?.task?.status !== 'done'
+    if (!retryable) {
+      console.log(
+        '  \x1b[33m•\x1b[0m the run completed, so there is nothing to resume — ' +
+          'resume is covered deterministically in test:runner',
+      )
+    }
+    if (retryable) {
+    const retry = await readSse('/api/agent/run', jwt, {
+      taskId: plan2.body.taskId,
+      approvedSteps: steps2,
+      agentPrivateKey: decrypted,
+      budgetUsdc: null,
+    })
+    const startFrame = retry.find((f) => f.event === 'start')?.data as
+      | { replayedSteps?: number; alreadySpent?: number }
+      | undefined
+
+    check(
+      'retry replays every settled step',
+      (startFrame?.replayedSteps ?? -1) === settled.length,
+      `replayed ${startFrame?.replayedSteps}, settled ${settled.length}`,
+    )
+    check(
+      'retry carries prior spend forward',
+      Math.abs((startFrame?.alreadySpent ?? -1) - priorSpend) < 1e-9,
+      `carried ${startFrame?.alreadySpent}, prior ${priorSpend}`,
+    )
+    check(
+      'replayed steps are not paid again',
+      retry.filter((f) => f.event === 'step_replayed').length === settled.length,
+    )
+    }
+
+    // ------------------------------------------------------------------ chat
+    section('Follow-up chat')
+    const transcript = await json<{ messages: { role: string; kind: string }[] }>(
+      `/api/agent/chat/${plan2.body.taskId}`,
+      { headers: auth },
+    )
+    check(
+      'transcript opens with the goal',
+      transcript.body?.messages?.[0]?.role === 'user',
+      JSON.stringify(transcript.body?.messages?.map((m) => `${m.role}/${m.kind}`)),
+    )
+
+    const followUp = await json<{
+      agentMessage: { content: string }
+      needsRun: boolean
+    }>('/api/agent/chat', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({ taskId: plan2.body.taskId, message: 'what did you find?' }),
+    })
+    check('follow-up answered', (followUp.body?.agentMessage?.content?.length ?? 0) > 0)
+    check(
+      'follow-up persisted to the transcript',
+      ((
+        await json<{ messages: unknown[] }>(`/api/agent/chat/${plan2.body.taskId}`, {
+          headers: auth,
+        })
+      ).body?.messages?.length ?? 0) >
+        (transcript.body?.messages?.length ?? 0),
+    )
+
+    // Chat is scoped to the owner like every other task route.
+    const noSuchTask = await json('/api/agent/chat', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({
+        taskId: '00000000-0000-4000-8000-000000000000',
+        message: 'hello',
+      }),
+    })
+    check('chat rejects an unknown task', noSuchTask.status === 404, `got ${noSuchTask.status}`)
     const serialised = JSON.stringify(frames)
     check('no private key leaked into the stream', !serialised.includes(decrypted.slice(2)))
   }
 
   // ---------------------------------------------------------------- history
   section('History')
-  const history = await json<{ tasks: { id: string; status: string; stepCount: number }[] }>(
+  const history = await json<
+    { tasks: { id: string; status: string; stepCount: number; stepsDone: number }[] }
+  >(
     '/api/tasks',
     { headers: auth },
   )
   check('history lists the runs', (history.body?.tasks?.length ?? 0) >= 2)
+  // 'pending' is a real resting state now: a plan that was quoted but never
+  // approved — because it was over the limit, or because no service could do
+  // it — never runs, and never should. What must not happen is a task left
+  // 'running' after its stream ended.
   check(
-    'tasks reached a terminal status',
-    history.body.tasks.every((t) => ['done', 'stopped', 'failed'].includes(t.status)),
+    'no task is stuck running',
+    history.body.tasks.every((t) => t.status !== 'running'),
     history.body.tasks.map((t) => t.status).join(','),
+  )
+  check(
+    'every task that ran reached a terminal status',
+    history.body.tasks
+      .filter((t) => t.stepsDone > 0)
+      .every((t) => ['done', 'stopped', 'failed'].includes(t.status)),
+    history.body.tasks.map((t) => `${t.status}:${t.stepsDone}`).join(','),
   )
 
   const detail = await json<{ steps: unknown[] }>(`/api/tasks/${planRes.body.taskId}`, {

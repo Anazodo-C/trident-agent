@@ -30,7 +30,7 @@ export function SetupPassphrasePage() {
         <p className="text-sm text-[#FF4466]">
           Missing setup token. Start again from the sign-in page.
         </p>
-        <button className="btn-ghost mt-5 w-full" onClick={() => navigate('/')}>
+        <button className="btn-ghost mt-5 w-full" onClick={() => navigate('/signin')}>
           Back to sign in
         </button>
       </CenteredCard>

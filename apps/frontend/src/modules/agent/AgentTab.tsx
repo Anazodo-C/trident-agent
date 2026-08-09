@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation } from 'react-router-dom'
-import { Loader2, Send, Sparkles } from 'lucide-react'
+import { Loader2, RotateCcw, Send, Sparkles } from 'lucide-react'
 import { api } from '../../lib/api.ts'
 import { streamAgentRun, type AgentEventName } from '../../lib/sseClient.ts'
 import { useAgentStore } from '../../store/agentStore.ts'
@@ -8,8 +8,10 @@ import { useAuthStore } from '../../store/authStore.ts'
 import { useTaskStore } from '../../store/taskStore.ts'
 import type { LiveStep, PlanStep } from '../../lib/types.ts'
 import { ApprovalCard } from './ApprovalCard.tsx'
+import { BudgetGuidanceCard } from './BudgetGuidanceCard.tsx'
 import { ExpenseTracker } from './ExpenseTracker.tsx'
-import { LiveStepCard } from './LiveStepCard.tsx'
+import { ChatBubble, ChatThinking, PlanOffer } from './ChatBubble.tsx'
+import { StepTrace } from './StepTrace.tsx'
 import { RunSummary } from './RunSummary.tsx'
 
 const EXAMPLE_PROMPTS = [
@@ -35,7 +37,11 @@ export function AgentTab() {
     outcome,
     error,
     budgetUsdc,
+    budgetGuidance,
     stopping,
+    messages,
+    chatPending,
+    suggestedGoal,
   } = store
 
   const [input, setInput] = useState('')
@@ -49,7 +55,7 @@ export function AgentTab() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [liveSteps, phase])
+  }, [liveSteps, phase, messages, chatPending])
 
   // Abort any in-flight stream if the user navigates away mid-run.
   useEffect(() => {
@@ -66,12 +72,90 @@ export function AgentTab() {
       useTaskStore.getState().startPlanning(trimmed)
       try {
         const res = await api.plan(trimmed, useTaskStore.getState().budgetUsdc ?? undefined)
-        useTaskStore.getState().planReady(res.taskId, res.plan, res.annotations, res.upgrades)
+        useTaskStore
+          .getState()
+          .planReady(res.taskId, res.plan, res.annotations, res.upgrades, res.budgetGuidance)
       } catch (err) {
         useTaskStore
           .getState()
           .planFailed(err instanceof Error ? err.message : 'Planning failed')
       }
+    },
+    [],
+  )
+
+  /**
+   * A follow-up about the run that just finished. This never spends anything:
+   * the backend answers from the data already fetched, or hands back a goal to
+   * plan — which still goes through the approval card like any other run.
+   */
+  const submitFollowUp = useCallback(async (message: string) => {
+    const trimmed = message.trim()
+    const currentTaskId = useTaskStore.getState().taskId
+    if (!trimmed || !currentTaskId) return
+    setInput('')
+
+    const s = useTaskStore.getState()
+    s.setSuggestedGoal(null)
+    s.addMessage({
+      id: `local-${Date.now()}`,
+      taskId: currentTaskId,
+      role: 'user',
+      content: trimmed,
+      kind: 'text',
+      createdAt: Math.floor(Date.now() / 1000),
+    })
+    s.setChatPending(true)
+
+    try {
+      const res = await api.chat(currentTaskId, trimmed)
+      useTaskStore.getState().addMessage(res.agentMessage)
+      if (res.needsRun && res.suggestedGoal) {
+        useTaskStore.getState().setSuggestedGoal(res.suggestedGoal)
+      }
+    } catch (err) {
+      useTaskStore.getState().addMessage({
+        id: `local-err-${Date.now()}`,
+        taskId: currentTaskId,
+        role: 'agent',
+        content: err instanceof Error ? err.message : 'That follow-up failed.',
+        kind: 'text',
+        createdAt: Math.floor(Date.now() / 1000),
+      })
+    } finally {
+      useTaskStore.getState().setChatPending(false)
+    }
+  }, [])
+
+  // One input serves both: a new goal starts a run, anything typed after a run
+  // finishes is a follow-up about it.
+  const canFollowUp = phase === 'finished' && Boolean(taskId)
+  const handleSubmit = useCallback(
+    (text: string) => {
+      if (canFollowUp) void submitFollowUp(text)
+      else void submitGoal(text)
+    },
+    [canFollowUp, submitFollowUp, submitGoal],
+  )
+
+  /**
+   * Lift whichever limit is actually blocking a quoted route, then re-plan.
+   *
+   * Only ever reached by the user clicking the amount on the guidance card — no
+   * code path adjusts a limit on its own. Raising the account cap is a lasting
+   * change and is only done when the cap is the blocker; a tighter per-run
+   * budget is loosened for this attempt alone. Either way the re-plan lands on
+   * the normal approval card, so nothing is spent by doing this.
+   */
+  const proceedPastLimit = useCallback(
+    async (option: { minimumCapUsdc: number }, raiseCap: boolean) => {
+      const goal = useTaskStore.getState().goal
+      if (raiseCap) {
+        await api.setSpendingCap(option.minimumCapUsdc)
+        await useAuthStore.getState().refreshUser()
+      }
+      useTaskStore.getState().setBudget(option.minimumCapUsdc)
+      await submitGoal(goal)
     },
     [],
   )
@@ -116,6 +200,14 @@ export function AgentTab() {
         }
       } catch (err) {
         if (controller.signal.aborted) return
+        const guidance = (err as { budgetGuidance?: unknown })?.budgetGuidance
+        if (guidance) {
+          // The cap refused this plan before anything ran, so there is no run
+          // to report on — go back to the quote.
+          useTaskStore.getState().setBudgetGuidance(guidance as never)
+          useTaskStore.setState({ phase: 'awaiting-approval' })
+          return
+        }
         useTaskStore.getState().finishRun({
           kind: 'error',
           message: err instanceof Error ? err.message : 'Run failed',
@@ -148,6 +240,18 @@ export function AgentTab() {
         })
         s.setTotalSpent(spent)
         break
+      case 'step_replayed':
+        // Same visual state as a completed step, flagged so the cost is shown
+        // as carried over rather than charged again on this attempt.
+        s.patchStep(index, {
+          status: 'done',
+          replayed: true,
+          cost: typeof data['cost'] === 'number' ? data['cost'] : 0,
+          txRef: typeof data['txRef'] === 'string' ? data['txRef'] : undefined,
+          result: data['result'],
+        })
+        s.setTotalSpent(spent)
+        break
       case 'step_failed':
         s.patchStep(index, {
           status: 'failed',
@@ -155,6 +259,14 @@ export function AgentTab() {
         })
         s.setTotalSpent(spent)
         break
+      case 'summary': {
+        // From the store, not the closure: runApproved is memoised on [token,
+        // requestUnlock], so the handleEvent it captured can hold a taskId from
+        // before the plan existed — and the summary would be dropped.
+        const id = s.taskId
+        if (typeof data['summary'] === 'string' && id) s.addSummary(id, data['summary'])
+        break
+      }
       case 'complete':
         s.finishRun({ kind: 'complete', message: 'All steps completed.', totalSpent: spent })
         break
@@ -216,11 +328,11 @@ export function AgentTab() {
               <EmptyState onPick={(p) => setInput(p)} onSubmit={submitGoal} />
             )}
 
-            {store.goal && phase !== 'idle' && (
-              <div className="mb-6 flex justify-end">
-                <div className="max-w-[85%] rounded-xl rounded-br-sm border border-[#1A7FFF]/25 bg-[#111D35] px-4 py-2.5 text-sm text-slate-200">
-                  {store.goal}
-                </div>
+            {/* The goal opens the transcript; everything the agent says comes
+                after the plan and the run, further down. */}
+            {messages[0] && (
+              <div className="mb-6">
+                <ChatBubble message={messages[0]} />
               </div>
             )}
 
@@ -239,7 +351,16 @@ export function AgentTab() {
               </div>
             )}
 
-            {phase === 'awaiting-approval' && plan && (
+            {/* Over the cap: quote the work, never approve it. The cap holds. */}
+            {phase === 'awaiting-approval' && budgetGuidance && (
+              <BudgetGuidanceCard
+                guidance={budgetGuidance}
+                onProceed={proceedPastLimit}
+                onCancel={store.reset}
+              />
+            )}
+
+            {phase === 'awaiting-approval' && plan && !budgetGuidance && (
               <ApprovalCard
                 plan={plan}
                 annotations={store.annotations}
@@ -250,11 +371,33 @@ export function AgentTab() {
             )}
 
             {(phase === 'running' || phase === 'finished') && (
-              <div className="flex flex-col gap-3">
-                {liveSteps.map((step) => (
-                  <LiveStepCard key={step.stepIndex} step={step} />
+              <div className="flex flex-col gap-5">
+                <StepTrace steps={liveSteps} running={phase === 'running'} />
+
+                {/* The write-up and every follow-up since. */}
+                {messages.slice(1).map((message) => (
+                  <ChatBubble key={message.id} message={message} />
                 ))}
-                {outcome && <RunSummary outcome={outcome} onReset={store.reset} />}
+
+                {chatPending && <ChatThinking />}
+
+                {suggestedGoal && !chatPending && (
+                  <PlanOffer goal={suggestedGoal} onPlan={submitGoal} />
+                )}
+
+                {/* A clean finish needs no banner — the write-up is the result,
+                    and the cost sits in the trace header. Anything else did not
+                    go to plan and has to be stated outright. */}
+                {outcome && outcome.kind !== 'complete' && (
+                  <RunSummary outcome={outcome} onReset={store.reset} />
+                )}
+
+                {phase === 'finished' && outcome?.kind === 'complete' && (
+                  <button className="btn-ghost self-start" onClick={store.reset}>
+                    <RotateCcw className="h-4 w-4" />
+                    New goal
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -266,9 +409,10 @@ export function AgentTab() {
         <ChatInput
           value={input}
           onChange={setInput}
-          onSubmit={submitGoal}
-          disabled={phase === 'planning' || phase === 'running'}
-          locked={!unlockedKey}
+          onSubmit={handleSubmit}
+          disabled={phase === 'planning' || phase === 'running' || chatPending}
+          locked={!unlockedKey && !canFollowUp}
+          followUp={canFollowUp}
         />
       </section>
 
@@ -323,12 +467,15 @@ function ChatInput({
   onSubmit,
   disabled,
   locked,
+  followUp,
 }: {
   value: string
   onChange: (v: string) => void
   onSubmit: (goal: string) => void
   disabled: boolean
   locked: boolean
+  /** After a run, the same box asks about the results instead of starting one. */
+  followUp: boolean
 }) {
   return (
     <div className="shrink-0 border-t border-[#1A7FFF]/20 bg-[#0A0E1A]/90 px-4 py-4 backdrop-blur-md sm:px-6">
@@ -344,7 +491,7 @@ function ChatInput({
           rows={1}
           // A long placeholder wraps and gets clipped at one row on narrow
           // screens, so the hint about unlocking lives above the input instead.
-          placeholder="Describe a goal…"
+          placeholder={followUp ? 'Ask about this, or start a new goal…' : 'Describe a goal…'}
           value={value}
           disabled={disabled}
           onChange={(e) => onChange(e.target.value)}

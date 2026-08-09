@@ -13,11 +13,13 @@ export type AgentEventName =
   | 'start'
   | 'step_start'
   | 'step_done'
+  | 'step_replayed'
   | 'step_failed'
   | 'budget_exceeded'
   | 'cap_exceeded'
   | 'stopped'
   | 'complete'
+  | 'summary'
   | 'fatal'
   | 'error'
 
@@ -42,13 +44,17 @@ export async function streamAgentRun(
 
   if (!res.ok) {
     let message = `Run failed (${res.status})`
+    let budgetGuidance: unknown
     try {
-      const body = (await res.json()) as { error?: string }
+      const body = (await res.json()) as { error?: string; budgetGuidance?: unknown }
       if (body.error) message = body.error
+      // A cap refusal carries the quote for the work. Carried on the error so
+      // the caller can show it instead of a bare message.
+      budgetGuidance = body.budgetGuidance
     } catch {
       /* non-JSON error body; keep the status-based message */
     }
-    throw new Error(message)
+    throw Object.assign(new Error(message), budgetGuidance ? { budgetGuidance } : {})
   }
   if (!res.body) throw new Error('Streaming is not supported by this browser')
 

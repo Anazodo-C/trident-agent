@@ -1,4 +1,8 @@
 import type {
+  BudgetGuidance,
+  ChatMessage,
+  PlanCosting,
+  ShowcaseCard,
   DepositInfo,
   ExecutionPlan,
   KeyMaterial,
@@ -158,6 +162,9 @@ export const api = {
       plan: ExecutionPlan
       annotations: Record<number, StepAnnotation>
       upgrades: StepUpgrade[]
+      costing: PlanCosting
+      affordable: boolean
+      budgetGuidance: BudgetGuidance | null
       candidatesConsidered: number
       usedFallback: boolean
       mainnetEnabled: boolean
@@ -179,6 +186,20 @@ export const api = {
     }),
 
   tasks: () => request<{ tasks: TaskSummary[] }>('/api/tasks'),
+
+  /** Public — the landing page calls this before anyone has signed in. */
+  showcase: () => request<{ cards: ShowcaseCard[] }>('/api/showcase'),
+
+  chat: (taskId: string, message: string) =>
+    request<{
+      userMessage: ChatMessage
+      agentMessage: ChatMessage
+      needsRun: boolean
+      suggestedGoal?: string
+    }>('/api/agent/chat', { method: 'POST', body: JSON.stringify({ taskId, message }) }),
+
+  chatHistory: (taskId: string) =>
+    request<{ messages: ChatMessage[] }>(`/api/agent/chat/${taskId}`),
 
   task: (id: string) =>
     request<{ task: TaskSummary; steps: TaskStepDetail[] }>(`/api/tasks/${id}`),

@@ -75,6 +75,7 @@ function plan(overrides: Partial<ExecutionPlan> = {}): ExecutionPlan {
     totalEstimatedCostUsdc: 0,
     reasoning: 'because',
     alternativeSteps: [],
+    alternativeRoute: null,
     ...overrides,
   }
 }

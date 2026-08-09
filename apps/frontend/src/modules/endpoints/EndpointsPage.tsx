@@ -267,7 +267,7 @@ function ServiceCard({ service, onUse }: { service: Service; onUse: () => void }
         {service.source === 'free' ? (
           <span className="badge bg-[#00FF88]/10 text-[#00FF88]">free · testnet metered</span>
         ) : (
-          <span className="price text-xs">${usdc(service.payPriceUsdc, 3)}</span>
+          <span className="price text-xs">${usdc(service.payPriceUsdc)}</span>
         )}
         {service.payChain && (
           <span className="badge bg-slate-500/10 text-slate-400">

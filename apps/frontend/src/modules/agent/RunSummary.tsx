@@ -34,7 +34,7 @@ export function RunSummary({
 
       <div className="mt-4 flex items-baseline gap-2">
         <span className="heading-mono">Total spent</span>
-        <span className="price text-lg">${usdc(outcome.totalSpent, 3)}</span>
+        <span className="price text-lg">${usdc(outcome.totalSpent)}</span>
       </div>
 
       <button className="btn-ghost mt-5" onClick={onReset}>

@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { useAccount, useSignMessage } from 'wagmi'
 import { SiweMessage } from 'siwe'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { AlertTriangle, Loader2, Wallet } from 'lucide-react'
 import { api, apiUrl } from '../../lib/api.ts'
 import { useAuthStore } from '../../store/authStore.ts'
 import { TridentMark } from '../layout/TridentMark.tsx'
@@ -122,9 +122,7 @@ export function AuthPage() {
           </div>
 
           <div className="flex flex-col gap-3">
-            <div className="[&_button]:!w-full [&_button]:!font-mono">
-              <ConnectButton showBalance={false} chainStatus="none" />
-            </div>
+            <WalletButton />
 
             {isConnected && (
               <button className="btn-primary w-full" onClick={signInWithEthereum} disabled={busy}>
@@ -141,6 +139,59 @@ export function AuthPage() {
         </div>
       </div>
     </div>
+  )
+}
+
+/**
+ * RainbowKit's own button, rebuilt with our markup.
+ *
+ * The stock ConnectButton renders its own internal layout, which left-aligns
+ * the label and leaves no slot for an icon — both only reachable by fighting
+ * its internals with `!important` overrides. ConnectButton.Custom hands over
+ * the rendering and keeps the connection logic, so this is just our button
+ * classes with RainbowKit's behaviour behind them.
+ */
+function WalletButton() {
+  return (
+    <ConnectButton.Custom>
+      {({ account, chain, openAccountModal, openChainModal, openConnectModal, mounted }) => {
+        // Nothing is known until RainbowKit mounts. Rendering a live button
+        // before then would flash the wrong state on first paint.
+        const ready = mounted
+        const connected = ready && account && chain
+
+        if (!ready) {
+          return <div aria-hidden className="h-[46px]" />
+        }
+
+        if (!connected) {
+          return (
+            <button className="btn-primary w-full" onClick={openConnectModal} type="button">
+              <Wallet className="h-4 w-4" />
+              Connect Wallet
+            </button>
+          )
+        }
+
+        if (chain.unsupported) {
+          return (
+            <button className="btn-danger w-full" onClick={openChainModal} type="button">
+              <AlertTriangle className="h-4 w-4" />
+              Wrong network
+            </button>
+          )
+        }
+
+        // Connected: secondary weight, because the primary action is now the
+        // "Sign in with Ethereum" button below it.
+        return (
+          <button className="btn-ghost w-full" onClick={openAccountModal} type="button">
+            <Wallet className="h-4 w-4" />
+            {account.displayName}
+          </button>
+        )
+      }}
+    </ConnectButton.Custom>
   )
 }
 

@@ -114,6 +114,64 @@ export interface LiveStep {
   txRef?: string
   error?: string
   result?: unknown
+  /** Carried over from an earlier attempt — already paid for, not re-charged. */
+  replayed?: boolean
+}
+
+/** A turn in the chat transcript. 'plan_offer' means a new run is required. */
+export type MessageKind = 'text' | 'summary' | 'plan_offer'
+
+export interface ChatMessage {
+  id: string
+  taskId: string | null
+  role: 'user' | 'agent'
+  content: string
+  kind: MessageKind
+  createdAt: number
+}
+
+/** One costed way to accomplish the goal, quoted when the limit will not cover it. */
+export interface BudgetOption {
+  kind: 'cheapest' | 'reliable'
+  totalUsdc: number
+  /** The cap the user would have to set for this route to run. */
+  minimumCapUsdc: number
+  /** 0–100, from the registry's trust tier and recorded usage. */
+  quality: number
+  services: string
+  rationale: string
+  steps: PlanStep[]
+}
+
+export interface BudgetGuidance {
+  capUsdc: number
+  budgetUsdc: number | null
+  ceilingUsdc: number
+  rangeUsdc: { min: number; max: number } | null
+  options: BudgetOption[]
+  message: string
+}
+
+/** Registry-priced totals for the plan — never the model's own estimates. */
+export interface PlanCosting {
+  ceilingUsdc: number
+  capUsdc: number
+  primaryUsdc: number
+  alternativeUsdc: number | null
+}
+
+/** A landing-page carousel card: authored copy plus live registry facts. */
+export interface ShowcaseCard {
+  resource: string
+  category: string
+  prompt: string
+  does: string
+  serviceName: string
+  host: string
+  priceUsdc: number
+  calls30d: number
+  curated: boolean
+  source: ServiceSource
 }
 
 export interface TaskSummary {

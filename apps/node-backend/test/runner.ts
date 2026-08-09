@@ -12,6 +12,7 @@ import { generatePrivateKey } from 'viem/accounts'
 import type { Response } from 'express'
 import db from '../src/db.ts'
 import { runTask } from '../src/agent/runner.ts'
+import { __testSyncApprovedSteps } from '../src/routes/agent.ts'
 import type { PlanStep } from '../src/llm/planner.ts'
 import type { ChainPolicy } from '../src/circle/chainPolicy.ts'
 
@@ -196,7 +197,9 @@ async function main(): Promise<void> {
     await runTask({
       taskId,
       userId,
+      goal: 'test goal',
       steps,
+      completed: new Map(),
       agentPrivateKey: key,
       budgetUsdc: 0.001,
       spendingCapUsdc: 100,
@@ -223,7 +226,9 @@ async function main(): Promise<void> {
     await runTask({
       taskId,
       userId,
+      goal: 'test goal',
       steps,
+      completed: new Map(),
       agentPrivateKey: key,
       // No per-run budget: the account-level cap must still stop it.
       budgetUsdc: null,
@@ -261,7 +266,9 @@ async function main(): Promise<void> {
     await runTask({
       taskId,
       userId,
+      goal: 'test goal',
       steps,
+      completed: new Map(),
       agentPrivateKey: key,
       budgetUsdc: null,
       spendingCapUsdc: 100,
@@ -296,7 +303,9 @@ async function main(): Promise<void> {
     await runTask({
       taskId,
       userId,
+      goal: 'test goal',
       steps,
+      completed: new Map(),
       agentPrivateKey: key,
       budgetUsdc: null,
       spendingCapUsdc: 100,
@@ -325,7 +334,9 @@ async function main(): Promise<void> {
     await runTask({
       taskId,
       userId,
+      goal: 'test goal',
       steps,
+      completed: new Map(),
       agentPrivateKey: key,
       budgetUsdc: null,
       spendingCapUsdc: 100,
@@ -376,7 +387,9 @@ async function main(): Promise<void> {
     await runTask({
       taskId,
       userId,
+      goal: 'test goal',
       steps,
+      completed: new Map(),
       agentPrivateKey: key,
       budgetUsdc: null,
       spendingCapUsdc: 100,
@@ -399,6 +412,88 @@ async function main(): Promise<void> {
     )
     check('run still reaches a terminal event', events.includes('complete') || events.includes('fatal'))
     check('no spend recorded for a refused call', fake.raw().includes('"totalSpent":0'))
+  }
+
+  // ------------------------------------------------------- retry / resume
+  section('Retry resumes instead of re-paying')
+  {
+    const key = generatePrivateKey()
+    const userId = seedUser()
+    const steps: PlanStep[] = [0, 1, 2].map((i) => ({
+      stepIndex: i,
+      serviceName: `Service ${i}`,
+      endpointUrl: `https://api.coingecko.com/api/v3/simple/price?step=${i}`,
+      httpMethod: 'GET',
+      params: { i: String(i) },
+      purpose: `step ${i}`,
+      estimatedCostUsdc: 0.01,
+    }))
+    const taskId = seedTask(userId, steps)
+
+    // First attempt: steps 0 and 1 settled, step 2 failed.
+    for (const i of [0, 1]) {
+      db.prepare(
+        `UPDATE task_steps SET status='done', actual_cost_usdc=0.01, tx_ref=?, response_summary=?
+         WHERE task_id=? AND step_index=?`,
+      ).run(`0xtx${i}`, JSON.stringify({ value: i }), taskId, i)
+    }
+    db.prepare(`UPDATE task_steps SET status='failed' WHERE task_id=? AND step_index=2`).run(taskId)
+
+    const completed = __testSyncApprovedSteps(taskId, structuredClone(steps))
+    check('settled steps are reused', [...completed.keys()].join(',') === '0,1')
+    check(
+      'their cost is carried forward',
+      [...completed.values()].reduce((sum, s) => sum + s.cost, 0) === 0.02,
+    )
+    check(
+      'the failed step is reset to pending',
+      (
+        db
+          .prepare('SELECT status FROM task_steps WHERE task_id=? AND step_index=2')
+          .get(taskId) as { status: string }
+      ).status === 'pending',
+    )
+
+    const fake = fakeResponse()
+    await runTask({
+      taskId,
+      userId,
+      goal: 'test goal',
+      steps,
+      completed,
+      agentPrivateKey: key,
+      budgetUsdc: null,
+      spendingCapUsdc: 100,
+      policy: TEST_POLICY,
+      res: fake.res,
+    })
+
+    const frames = fake.frames()
+    const replayed = frames.filter((f) => f.event === 'step_replayed')
+    const started = frames.filter((f) => f.event === 'step_start')
+    check('both settled steps are replayed', replayed.length === 2, `got ${replayed.length}`)
+    check(
+      'only the unsettled step is attempted',
+      started.length === 1 && started[0]?.data['stepIndex'] === 2,
+      started.map((f) => f.data['stepIndex']).join(','),
+    )
+    check(
+      'replayed results are carried into the stream',
+      JSON.stringify(replayed[0]?.data['result']) === JSON.stringify({ value: 0 }),
+    )
+    const start = frames.find((f) => f.event === 'start')
+    check('prior spend seeds the running total', start?.data['alreadySpent'] === 0.02)
+
+    // The whole point: the wallet is unfunded, so a re-payment would fail —
+    // and the earlier steps must not even be attempted.
+    check(
+      'no payment is attempted for settled steps',
+      !frames.some(
+        (f) =>
+          f.event === 'step_failed' &&
+          (f.data['stepIndex'] === 0 || f.data['stepIndex'] === 1),
+      ),
+    )
   }
 
   console.log(`\n${'─'.repeat(52)}`)

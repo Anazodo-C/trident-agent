@@ -133,3 +133,168 @@
 .animate-scanline {
   animation: scanline 2.4s linear infinite;
 }
+
+/*
+ * Landing hero loop — five beats on one shared 6s timeline.
+ *
+ *   0.0–1.4s  the goal types out          (beat 1)
+ *   1.4–2.8s  endpoints are scanned       (beat 2)
+ *   2.9–4.2s  the match is paid for       (beat 3)
+ *   4.2–5.2s  the answer comes back       (beat 4)
+ *   5.2–6.0s  hold, fade, repeat          (beat 5)
+ *
+ * Every element runs the same 6s duration and carves out its own slice in
+ * keyframe percentages rather than using animation-delay, because delays only
+ * offset the first cycle and the beats would drift apart on every loop after.
+ * 1s = 16.667%.
+ *
+ * Playback is paused wholesale by .hero-loop-paused when the tab is hidden.
+ */
+@keyframes heroBubble {
+  0%, 2% { opacity: 0; transform: translateY(4px); }
+  6%, 86% { opacity: 1; transform: translateY(0); }
+  94%, 100% { opacity: 0; transform: translateY(-4px); }
+}
+
+/*
+ * The goal being typed: a clip that widens, so no per-character DOM.
+ *
+ * One clip per line, sequenced. A single clip across both lines wipes them at
+ * the same x, so the shorter second line finishes first and it reads as a
+ * rectangular wipe rather than as typing.
+ */
+@keyframes heroTypingA {
+  0%, 4% { clip-path: inset(0 100% 0 0); }
+  15%, 100% { clip-path: inset(0 0 0 0); }
+}
+@keyframes heroTypingB {
+  0%, 15% { clip-path: inset(0 100% 0 0); }
+  23%, 100% { clip-path: inset(0 0 0 0); }
+}
+
+/* A caret per line, live only while that line is being typed. */
+@keyframes heroCaretA {
+  0%, 3% { opacity: 0; }
+  4%, 14% { opacity: 1; }
+  15%, 100% { opacity: 0; }
+}
+@keyframes heroCaretB {
+  0%, 15% { opacity: 0; }
+  16%, 22% { opacity: 1; }
+  23%, 100% { opacity: 0; }
+}
+
+/* Candidate endpoints being evaluated — three nodes, three offsets. */
+@keyframes heroScan {
+  0%, 26% { opacity: 0.18; }
+  32% { opacity: 0.75; }
+  38% { opacity: 0.22; }
+  44% { opacity: 0.6; }
+  50%, 100% { opacity: 0.18; }
+}
+
+/* The endpoint that matches: locks in and holds through the payment. */
+@keyframes heroLock {
+  0%, 44% { opacity: 0.18; r: 4; }
+  48% { opacity: 1; r: 7; }
+  52%, 86% { opacity: 1; r: 5.5; }
+  94%, 100% { opacity: 0.18; r: 4; }
+}
+
+@keyframes heroLockGlow {
+  0%, 45% { opacity: 0; transform: scale(0.6); }
+  50% { opacity: 0.5; transform: scale(1.5); }
+  60%, 86% { opacity: 0.18; transform: scale(1.1); }
+  94%, 100% { opacity: 0; transform: scale(0.6); }
+}
+
+/* The x402 settlement: a price flashes and clears. */
+@keyframes heroPay {
+  0%, 50% { opacity: 0; transform: translateY(3px); }
+  56%, 66% { opacity: 1; transform: translateY(0); }
+  74%, 100% { opacity: 0; transform: translateY(-3px); }
+}
+
+/* The answer arriving back in the thread. */
+@keyframes heroResult {
+  0%, 68% { opacity: 0; transform: translateY(3px); }
+  74%, 86% { opacity: 1; transform: translateY(0); }
+  94%, 100% { opacity: 0; transform: translateY(-3px); }
+}
+
+/* The request travelling out to the matched endpoint. */
+@keyframes heroWire {
+  0%, 46% { stroke-dashoffset: 96; opacity: 0; }
+  50% { opacity: 0.9; }
+  62% { stroke-dashoffset: 0; opacity: 0.5; }
+  86% { opacity: 0.3; }
+  94%, 100% { opacity: 0; stroke-dashoffset: 96; }
+}
+
+.hero-bubble { animation: heroBubble 6s ease-in-out infinite; }
+.hero-typing-a { animation: heroTypingA 6s steps(26, end) infinite; }
+.hero-typing-b { animation: heroTypingB 6s steps(14, end) infinite; }
+.hero-caret-a { animation: heroCaretA 6s steps(1, end) infinite; }
+.hero-caret-b { animation: heroCaretB 6s steps(1, end) infinite; }
+.hero-scan { animation: heroScan 6s ease-in-out infinite; }
+.hero-lock { animation: heroLock 6s ease-out infinite; }
+.hero-lock-glow { animation: heroLockGlow 6s ease-out infinite; transform-origin: center; }
+.hero-pay { animation: heroPay 6s ease-out infinite; }
+.hero-result { animation: heroResult 6s ease-out infinite; }
+.hero-wire { animation: heroWire 6s ease-in-out infinite; }
+
+.hero-loop-paused * { animation-play-state: paused !important; }
+
+/*
+ * Reduced motion: freeze on beat 4, the state that carries the meaning —
+ * goal asked, endpoint matched, answer returned. Nothing moves, and the
+ * picture still says what the product does.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .hero-bubble,
+  .hero-typing-a,
+  .hero-typing-b,
+  .hero-caret-a,
+  .hero-caret-b,
+  .hero-scan,
+  .hero-lock,
+  .hero-lock-glow,
+  .hero-pay,
+  .hero-result,
+  .hero-wire {
+    animation: none !important;
+  }
+  .hero-bubble, .hero-result { opacity: 1; transform: none; }
+  .hero-typing-a, .hero-typing-b { clip-path: inset(0 0 0 0); }
+  .hero-caret-a, .hero-caret-b, .hero-pay { opacity: 0; }
+  .hero-scan { opacity: 0.18; }
+  .hero-lock { opacity: 1; r: 5.5; }
+  .hero-lock-glow { opacity: 0.18; transform: scale(1.1); }
+  .hero-wire { opacity: 0.3; stroke-dashoffset: 0; }
+}
+
+/*
+ * Rolling line — two facts about pricing, shown one at a time in a slot that is
+ * exactly one line tall. Rolls up out of view and the next rolls up into it, so
+ * the strip never changes height and never shifts the layout below it.
+ *
+ * 9s cycle: ~4s on each line, ~0.5s of travel between.
+ */
+@keyframes rollLine {
+  0%, 44% { transform: translateY(0); }
+  50%, 94% { transform: translateY(-50%); }
+  100% { transform: translateY(0); }
+}
+.roll-track {
+  animation: rollLine 9s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+/*
+ * Reduced motion: nothing rolls. The slot opens to fit both lines and shows
+ * them at once — the information matters more than the effect, and hiding half
+ * of it would be a worse answer than a taller strip.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .roll-track { animation: none !important; }
+  .roll-window { height: auto !important; }
+}

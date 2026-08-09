@@ -1,16 +1,30 @@
 import { Router } from 'express'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import db, { type TaskRow } from '../db.ts'
+import db, { type TaskRow, type TaskStepRow } from '../db.ts'
 import { asyncRoute, httpError } from '../http.ts'
 import { currentUser, requireAuth } from '../auth/jwt.ts'
 import { buildPlan, StepSchema, type PlanStep, type StepAnnotation } from '../llm/planner.ts'
 import { findServiceByResource } from '../circle/registryService.ts'
 import { selectCandidates } from '../circle/candidateService.ts'
 import { chooseChain, policyFor, unpayableReason } from '../circle/chainPolicy.ts'
+import { formatUsdc } from '../money.ts'
+import {
+  describeRoute,
+  effectiveCeiling,
+  priceRoute,
+  type RouteCost,
+} from '../circle/routeCosting.ts'
 import { findUpgrades } from '../circle/upgradeService.ts'
-import { runTask } from '../agent/runner.ts'
+import { runTask, type CompletedStep } from '../agent/runner.ts'
 import { findUserById } from '../auth/users.ts'
+import { answerFollowUp } from '../llm/responder.ts'
+import {
+  appendMessage,
+  historyForTask,
+  messagesForTask,
+  runContextFor,
+} from '../agent/conversation.ts'
 
 const router = Router()
 
@@ -69,7 +83,45 @@ router.post(
     // The registry holds ~14k services, far past what fits in a prompt, so a
     // shortlist is retrieved for this goal and only that reaches the model.
     const candidates = selectCandidates(goal, { chains: policy.allowed })
-    const plan = await buildPlan(goal, candidates.services, budgetUsdc)
+    const ceilingUsdc = effectiveCeiling(fresh.spending_cap_usdc, budgetUsdc)
+    const plan = await buildPlan(goal, candidates.services, {
+      capUsdc: fresh.spending_cap_usdc,
+      budgetUsdc,
+    })
+
+    // Priced from the registry rather than from the plan's own estimates: the
+    // cap is absolute, so what it is measured against must be what the runner
+    // will actually be charged.
+    const primaryCost = priceRoute(plan.steps)
+    const alternativeCost = plan.alternativeRoute
+      ? priceRoute(plan.alternativeRoute.steps)
+      : null
+
+    // Three distinct outcomes, and they must not be conflated. No steps at all
+    // means nothing in the catalog can do this — a capability problem, which
+    // the plan's own reasoning already explains, and quoting a budget for it
+    // would tell the user to raise a limit that was never the obstacle.
+    const planned = plan.steps.length > 0
+    const affordable = planned && primaryCost.totalUsdc <= ceilingUsdc
+    const guidance = !planned || affordable
+      ? null
+      : buildBudgetGuidance({
+          ceilingUsdc,
+          capUsdc: fresh.spending_cap_usdc,
+          budgetUsdc: budgetUsdc ?? null,
+          cheapest:
+            plan.steps.length > 0
+              ? { steps: plan.steps, cost: primaryCost, rationale: plan.reasoning }
+              : null,
+          reliable:
+            plan.alternativeRoute && alternativeCost
+              ? {
+                  steps: plan.alternativeRoute.steps,
+                  cost: alternativeCost,
+                  rationale: plan.alternativeRoute.rationale,
+                }
+              : null,
+        })
 
     // Annotate from the registry rather than trusting the model's claims, so
     // the approval card can warn about endpoints with no recorded usage.
@@ -101,9 +153,13 @@ router.post(
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
     )
 
+    // An unaffordable plan is a quote, not something to approve — the steps are
+    // not persisted, so there is nothing the user could accidentally run.
+    const approvableSteps = affordable ? plan.steps : []
+
     db.transaction(() => {
       insertTask.run(taskId, user.id, goal, 'pending', budgetUsdc ?? null)
-      for (const step of plan.steps) {
+      for (const step of approvableSteps) {
         insertStep.run(
           randomUUID(),
           taskId,
@@ -119,19 +175,120 @@ router.post(
 
     // Advisory only: what paying would buy, for the free steps in this plan.
     // Nothing is substituted and nothing is pre-selected.
-    const upgrades = findUpgrades(plan.steps, policy)
+    const upgrades = findUpgrades(approvableSteps, policy)
 
     res.json({
       taskId,
-      plan,
+      plan: { ...plan, steps: approvableSteps },
       annotations,
       upgrades,
+      // Registry-priced totals, so the card never quotes the model's estimate.
+      costing: {
+        ceilingUsdc,
+        capUsdc: fresh.spending_cap_usdc,
+        primaryUsdc: primaryCost.totalUsdc,
+        alternativeUsdc: alternativeCost?.totalUsdc ?? null,
+      },
+      affordable,
+      budgetGuidance: guidance,
       candidatesConsidered: candidates.services.length,
       usedFallback: candidates.fallback,
       mainnetEnabled: policy.mainnetEnabled,
     })
   }),
 )
+
+/**
+ * What the user needs in order to do this, when their limit will not cover it.
+ *
+ * The cap is never adjusted and never negotiated — this quotes what each route
+ * would cost and the smallest cap that would permit it, and leaves the decision
+ * with the user. Two options at most: the cheapest way to accomplish the goal,
+ * and a more reliable way when one genuinely exists and costs more.
+ */
+export interface BudgetOption {
+  kind: 'cheapest' | 'reliable'
+  totalUsdc: number
+  /** The cap the user would have to set for this route to run. */
+  minimumCapUsdc: number
+  /** 0–100, from the registry's trust tier and recorded usage. */
+  quality: number
+  services: string
+  rationale: string
+  steps: PlanStep[]
+}
+
+export interface BudgetGuidance {
+  capUsdc: number
+  budgetUsdc: number | null
+  ceilingUsdc: number
+  /** Low and high ends of what this goal costs, across the offered options. */
+  rangeUsdc: { min: number; max: number } | null
+  options: BudgetOption[]
+  message: string
+}
+
+function buildBudgetGuidance(input: {
+  ceilingUsdc: number
+  capUsdc: number
+  budgetUsdc: number | null
+  cheapest: { steps: PlanStep[]; cost: RouteCost; rationale: string } | null
+  reliable: { steps: PlanStep[]; cost: RouteCost; rationale: string } | null
+}): BudgetGuidance {
+  const { ceilingUsdc, capUsdc, budgetUsdc } = input
+  const options: BudgetOption[] = []
+
+  const push = (
+    kind: BudgetOption['kind'],
+    route: { steps: PlanStep[]; cost: RouteCost; rationale: string } | null,
+  ): void => {
+    if (!route || route.steps.length === 0) return
+    // A route referencing something the registry does not know cannot be
+    // priced honestly, so it is not quoted at all.
+    if (route.cost.uncatalogued.length > 0) return
+    options.push({
+      kind,
+      totalUsdc: route.cost.totalUsdc,
+      minimumCapUsdc: route.cost.minimumCapUsdc,
+      quality: route.cost.quality,
+      services: describeRoute(route.steps),
+      rationale: route.rationale,
+      steps: route.steps,
+    })
+  }
+
+  push('cheapest', input.cheapest)
+  // Only worth showing if it is actually better; a pricier route that is no
+  // more reliable is not an option, it is a worse deal.
+  if (
+    input.reliable &&
+    (!input.cheapest || input.reliable.cost.quality > input.cheapest.cost.quality)
+  ) {
+    push('reliable', input.reliable)
+  }
+
+  const totals = options.map((o) => o.totalUsdc)
+  const rangeUsdc =
+    totals.length > 0 ? { min: Math.min(...totals), max: Math.max(...totals) } : null
+
+  const limitLabel =
+    budgetUsdc !== null && budgetUsdc < capUsdc
+      ? `Your budget for this run is $${formatUsdc(ceilingUsdc)}`
+      : `Your spending cap is $${formatUsdc(ceilingUsdc)}`
+
+  let message: string
+  if (options.length === 0) {
+    message = `${limitLabel}, and no route to this goal could be priced against the catalog.`
+  } else if (options.length === 1) {
+    message = `${limitLabel}. The cheapest route that does this costs $${formatUsdc(options[0]!.totalUsdc)}.`
+  } else {
+    message =
+      `${limitLabel}. The cheapest route costs $${formatUsdc(rangeUsdc!.min)}; ` +
+      `a more reliable one costs $${formatUsdc(rangeUsdc!.max)}.`
+  }
+
+  return { capUsdc, budgetUsdc, ceilingUsdc, rangeUsdc, options, message }
+}
 
 const RunBody = z.object({
   taskId: z.string().uuid(),
@@ -180,16 +337,58 @@ router.post(
       }
     }
 
-    syncApprovedSteps(taskId, approvedSteps)
-    // Clear the previous attempt's outcome so the retry starts clean.
+    /**
+     * The cap is absolute, so it is enforced before anything runs.
+     *
+     * The runner also checks it before every step, which is what stops a run
+     * that drifts over mid-flight. But that gate fires after earlier steps have
+     * already been paid for. Approved steps arrive from the client and can be
+     * edited, so the total is re-priced here from the registry and refused
+     * outright — the cap is never raised to fit the plan, the plan is refused
+     * for not fitting the cap.
+     */
+    const ceilingUsdc = effectiveCeiling(fresh.spending_cap_usdc, budgetUsdc ?? task.budget_usdc)
+    const cost = priceRoute(approvedSteps)
+    if (cost.totalUsdc > ceilingUsdc) {
+      const guidance = buildBudgetGuidance({
+        ceilingUsdc,
+        capUsdc: fresh.spending_cap_usdc,
+        budgetUsdc: budgetUsdc ?? task.budget_usdc ?? null,
+        cheapest: { steps: approvedSteps, cost, rationale: 'The plan as approved.' },
+        reliable: null,
+      })
+      // Answered directly rather than thrown: the guidance is the useful part
+      // of this response, and the shared error handler only forwards a message.
+      res.status(403).json({
+        error:
+          `This plan costs $${formatUsdc(cost.totalUsdc)}, over your ` +
+          `$${formatUsdc(ceilingUsdc)} limit. Raise the limit to at least ` +
+          `$${formatUsdc(cost.minimumCapUsdc)} to run it.`,
+        budgetGuidance: guidance,
+      })
+      return
+    }
+
+    // The goal opens the transcript. Written at run time rather than at plan
+    // time so an abandoned plan leaves no orphan message in the chat.
+    if (messagesForTask(taskId).length === 0) {
+      appendMessage(user.id, taskId, 'user', task.goal)
+    }
+
+    // Work already paid for is kept, so a retry resumes rather than restarts.
+    const completed = syncApprovedSteps(taskId, approvedSteps)
+    const priorSpend = [...completed.values()].reduce((sum, step) => sum + step.cost, 0)
+
     db.prepare(
-      `UPDATE tasks SET status = 'pending', completed_at = NULL, total_cost_usdc = 0 WHERE id = ?`,
-    ).run(taskId)
+      `UPDATE tasks SET status = 'pending', completed_at = NULL, total_cost_usdc = ? WHERE id = ?`,
+    ).run(Number(priorSpend.toFixed(6)), taskId)
 
     await runTask({
       taskId,
       userId: user.id,
+      goal: task.goal,
       steps: approvedSteps,
+      completed,
       agentPrivateKey,
       budgetUsdc: budgetUsdc ?? task.budget_usdc ?? null,
       spendingCapUsdc: fresh.spending_cap_usdc,
@@ -200,19 +399,61 @@ router.post(
 )
 
 /**
- * The user may drop steps on the approval card, so the stored plan is replaced
- * with exactly what they approved before anything is charged.
+ * Reconciles the stored plan with exactly what the user approved, and reports
+ * which steps are already paid for.
+ *
+ * A retry used to delete every step and zero the cost, so a three-step run that
+ * died on step 2 re-ran and re-paid for steps 0 and 1 — and the record of that
+ * earlier spend went with it. Steps that already succeeded are now left in
+ * place and handed to the runner to replay from storage.
+ *
+ * Reuse is only safe when the approved step is the same work: same endpoint,
+ * method and parameters, at the same position. The user can edit the plan
+ * between attempts, and an index alone does not mean the same call — a step
+ * that differs in any of those is discarded and paid for afresh.
  */
-function syncApprovedSteps(taskId: string, steps: PlanStep[]): void {
-  const del = db.prepare('DELETE FROM task_steps WHERE task_id = ?')
+function syncApprovedSteps(taskId: string, steps: PlanStep[]): Map<number, CompletedStep> {
+  const existing = db
+    .prepare('SELECT * FROM task_steps WHERE task_id = ?')
+    .all(taskId) as TaskStepRow[]
+  const byIndex = new Map(existing.map((row) => [row.step_index, row]))
+
+  const reusable = new Map<number, CompletedStep>()
+  steps.forEach((step, index) => {
+    const row = byIndex.get(index)
+    if (!row || row.status !== 'done') return
+    if (
+      row.endpoint_url !== step.endpointUrl ||
+      row.http_method !== step.httpMethod ||
+      (row.params ?? '{}') !== JSON.stringify(step.params)
+    ) {
+      return
+    }
+    reusable.set(index, {
+      serviceName: row.service_name,
+      cost: row.actual_cost_usdc ?? 0,
+      txRef: row.tx_ref,
+      verificationTx: (row as TaskStepRow & { verification_tx?: string | null }).verification_tx
+        ?? null,
+      data: parseStoredResponse(row.response_summary),
+      source: findServiceByResource(row.endpoint_url)?.source === 'free' ? 'free' : 'x402',
+    })
+  })
+
   const insert = db.prepare(
     `INSERT INTO task_steps
       (id, task_id, step_index, service_name, endpoint_url, http_method, params, estimated_cost_usdc, status)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
   )
+  const delOne = db.prepare('DELETE FROM task_steps WHERE task_id = ? AND step_index = ?')
+  const delBeyond = db.prepare('DELETE FROM task_steps WHERE task_id = ? AND step_index >= ?')
+
   db.transaction(() => {
-    del.run(taskId)
+    // Steps the user dropped from the plan.
+    delBeyond.run(taskId, steps.length)
     steps.forEach((step, index) => {
+      if (reusable.has(index)) return
+      delOne.run(taskId, index)
       insert.run(
         randomUUID(),
         taskId,
@@ -225,11 +466,88 @@ function syncApprovedSteps(taskId: string, steps: PlanStep[]): void {
       )
     })
   })()
+
   // Keep in-memory indices aligned with what was just persisted.
   steps.forEach((step, index) => {
     step.stepIndex = index
   })
+  return reusable
 }
+
+function parseStoredResponse(value: string | null): unknown {
+  if (value === null) return null
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
+const ChatBody = z.object({
+  taskId: z.string().uuid(),
+  message: z.string().min(1).max(2000),
+})
+
+/**
+ * Follow-up chat about a finished run.
+ *
+ * This route never spends the user's money. It either answers from data the
+ * run already fetched, or reports that a new run is needed and hands back a
+ * goal to plan — which the user then approves on the normal approval card.
+ * Keeping the spend decision on that card is what preserves their autonomy:
+ * a conversational reply can suggest, but it cannot charge.
+ */
+router.post(
+  '/chat',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const user = currentUser(req)
+    const parsed = ChatBody.safeParse(req.body)
+    if (!parsed.success) {
+      throw httpError(400, parsed.error.issues[0]?.message ?? 'Invalid request body')
+    }
+    const { taskId, message } = parsed.data
+
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined
+    if (!task || task.user_id !== user.id) throw httpError(404, 'Task not found')
+
+    const context = runContextFor(taskId)
+    if (!context) throw httpError(404, 'Task not found')
+
+    // History is read before the new question is stored, so the question is
+    // not duplicated as both history and prompt.
+    const history = historyForTask(taskId)
+    const userMessage = appendMessage(user.id, taskId, 'user', message)
+
+    const result = await answerFollowUp(message, context, history)
+    const agentMessage = appendMessage(
+      user.id,
+      taskId,
+      'agent',
+      result.content,
+      result.kind === 'needs_run' ? 'plan_offer' : 'text',
+    )
+
+    res.json({
+      userMessage,
+      agentMessage,
+      needsRun: result.kind === 'needs_run',
+      ...(result.suggestedGoal ? { suggestedGoal: result.suggestedGoal } : {}),
+    })
+  }),
+)
+
+router.get('/chat/:taskId', requireAuth, (req, res) => {
+  const user = currentUser(req)
+  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.taskId) as
+    | TaskRow
+    | undefined
+  if (!task || task.user_id !== user.id) {
+    res.status(404).json({ error: 'Task not found' })
+    return
+  }
+  res.json({ messages: messagesForTask(task.id) })
+})
 
 const StopBody = z.object({ taskId: z.string().uuid() })
 
@@ -258,3 +576,9 @@ router.post('/stop', requireAuth, (req, res) => {
 })
 
 export default router
+
+/** Test-only handle on the retry reconciliation; not reachable over HTTP. */
+export const __testSyncApprovedSteps = syncApprovedSteps
+
+/** Test-only handle on the budget guidance builder; not reachable over HTTP. */
+export const __testBuildBudgetGuidance = buildBudgetGuidance

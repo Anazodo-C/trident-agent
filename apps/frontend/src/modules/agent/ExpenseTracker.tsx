@@ -52,9 +52,9 @@ function Strip({ budgetUsdc, totalSpent, running, stopping, onStop }: Props) {
     <div className="shrink-0 border-t border-[#1A7FFF]/20 bg-[#0A0E1A]/95 px-4 py-2.5 backdrop-blur-md lg:hidden">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-baseline gap-2">
-          <span className="font-mono text-lg text-[#00D4FF]">${usdc(totalSpent, 3)}</span>
+          <span className="font-mono text-lg text-[#00D4FF]">${usdc(totalSpent)}</span>
           <span className="truncate font-mono text-[10px] uppercase tracking-widest text-slate-500">
-            spent{budgetUsdc !== null ? ` / $${usdc(budgetUsdc, 2)}` : ''}
+            spent{budgetUsdc !== null ? ` / $${usdc(budgetUsdc)}` : ''}
           </span>
         </div>
 
@@ -84,9 +84,9 @@ function Panel({ budgetUsdc, totalSpent, steps, running, stopping, onStop }: Pro
     <aside className="hidden w-72 shrink-0 flex-col gap-6 border-l border-[#1A7FFF]/20 p-5 lg:flex">
       <div>
         <span className="heading-mono">Expense Tracker</span>
-        <div className="mt-4 font-mono text-3xl text-[#00D4FF]">${usdc(totalSpent, 3)}</div>
+        <div className="mt-4 font-mono text-3xl text-[#00D4FF]">${usdc(totalSpent)}</div>
         <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
-          spent{budgetUsdc !== null ? ` of $${usdc(budgetUsdc, 2)}` : ''}
+          spent{budgetUsdc !== null ? ` of $${usdc(budgetUsdc)}` : ''}
         </div>
         {budgetUsdc !== null && (
           <div className="mt-4">
@@ -106,7 +106,7 @@ function Panel({ budgetUsdc, totalSpent, steps, running, stopping, onStop }: Pro
               <span
                 className={`shrink-0 font-mono ${step.status === 'done' ? 'text-[#00FF88]' : 'text-slate-600'}`}
               >
-                {step.status === 'done' ? `$${usdc(step.cost ?? 0, 3)}` : '—'}
+                {step.status === 'done' ? `$${usdc(step.cost ?? 0)}` : '—'}
               </span>
             </li>
           ))}

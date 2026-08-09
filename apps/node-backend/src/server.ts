@@ -1,6 +1,15 @@
 import express, { type NextFunction, type Request, type Response } from 'express'
 import cors from 'cors'
-import { ALLOWED_ORIGINS, IS_PROD, PORT, isOriginAllowed } from './env.ts'
+import {
+  ALLOWED_ORIGINS,
+  ANTHROPIC_ENABLED,
+  ANTHROPIC_HOST,
+  ANTHROPIC_KEY_MISDIRECTED,
+  ANTHROPIC_MODEL,
+  IS_PROD,
+  PORT,
+  isOriginAllowed,
+} from './env.ts'
 import { messageOf, statusOf } from './http.ts'
 import { scrubSecrets } from './circle/gatewayService.ts'
 import { STORAGE_PERSISTENT } from './db.ts'
@@ -11,6 +20,7 @@ import agentRoutes from './routes/agent.ts'
 import walletRoutes, { userRoutes } from './routes/wallet.ts'
 import taskRoutes from './routes/tasks.ts'
 import statsRoutes from './routes/stats.ts'
+import showcaseRoutes from './routes/showcase.ts'
 
 const app = express()
 
@@ -47,6 +57,8 @@ app.use('/api/wallet', walletRoutes)
 app.use('/api/user', userRoutes)
 app.use('/api/tasks', taskRoutes)
 app.use('/api/stats', statsRoutes)
+// Public: read by anonymous visitors on the landing page, before any sign-in.
+app.use('/api/showcase', showcaseRoutes)
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' })
@@ -77,6 +89,30 @@ const server = app.listen(PORT, () => {
     // surfaces in the frontend as "cannot reach backend" — so state the
     // allowlist at boot rather than leaving it to be inferred.
     console.log(`[trident] CORS allows: ${ALLOWED_ORIGINS.join(', ')}`)
+  }
+
+  // Which model endpoint is actually in use. Worth one line at boot: a stale
+  // gateway URL changes nothing visible until an answer is wrong or a key is
+  // somewhere it should not be.
+  if (ANTHROPIC_ENABLED) {
+    console.log(`[trident] model ${ANTHROPIC_MODEL} via ${ANTHROPIC_HOST}`)
+    if (ANTHROPIC_KEY_MISDIRECTED) {
+      console.warn(
+        [
+          '',
+          '  ┌─────────────────────────────────────────────────────────────────┐',
+          '  │  WARNING: an Anthropic key is being sent to a third party.      │',
+          '  └─────────────────────────────────────────────────────────────────┘',
+          '  ANTHROPIC_API_KEY starts with sk-ant- (issued by Anthropic) but',
+          `  requests are being sent to ${ANTHROPIC_HOST}, so every prompt and`,
+          '  the key itself go there instead of api.anthropic.com.',
+          '  Unset ANTHROPIC_BASE_URL to talk to Anthropic directly.',
+          '',
+        ].join('\n'),
+      )
+    }
+  } else {
+    console.warn('[trident] ANTHROPIC_API_KEY is not set — planning is disabled')
   }
 })
 

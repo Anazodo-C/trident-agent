@@ -159,6 +159,20 @@ CREATE TABLE IF NOT EXISTS registry_sync (
   error         TEXT
 );
 
+-- Chat transcript. The agent answers follow-ups from what it already fetched
+-- where it can, so history is part of the product, not just a log.
+CREATE TABLE IF NOT EXISTS messages (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT REFERENCES users(id),
+  task_id    TEXT,
+  role       TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  kind       TEXT DEFAULT 'text',
+  created_at INTEGER DEFAULT (strftime('%s','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_user ON messages(user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS rate_limits (
   user_id      TEXT PRIMARY KEY REFERENCES users(id),
   plan_count   INTEGER DEFAULT 0,
@@ -187,6 +201,16 @@ addColumnIfMissing('users', 'mainnet_chain', "TEXT DEFAULT 'BASE'")
 addColumnIfMissing('services', 'source', "TEXT DEFAULT 'x402'")
 // Verification transfer hash for free-API calls, alongside the x402 tx_ref.
 addColumnIfMissing('task_steps', 'verification_tx', 'TEXT')
+
+export interface MessageRow {
+  id: string
+  user_id: string
+  task_id: string | null
+  role: string
+  content: string
+  kind: string
+  created_at: number
+}
 
 export interface ServiceRow {
   id: string

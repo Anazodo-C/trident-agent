@@ -5,6 +5,8 @@ import { gatewayClientFor, safeErrorMessage } from '../circle/gatewayService.ts'
 import { findServiceByResource } from '../circle/registryService.ts'
 import { chooseChain, unpayableReason, type ChainPolicy } from '../circle/chainPolicy.ts'
 import { callFreeApi, payVerification } from '../circle/testnetVerification.ts'
+import { summariseRun, type StepResult } from '../llm/responder.ts'
+import { appendMessage } from './conversation.ts'
 import type { GatewayClient } from '@circle-fin/x402-batching/client'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 
@@ -12,11 +14,13 @@ export type SseEvent =
   | 'start'
   | 'step_start'
   | 'step_done'
+  | 'step_replayed'
   | 'step_failed'
   | 'budget_exceeded'
   | 'cap_exceeded'
   | 'stopped'
   | 'complete'
+  | 'summary'
   | 'fatal'
   | 'error'
 
@@ -34,12 +38,27 @@ function usdc(n: number): number {
   return Number(n.toFixed(6))
 }
 
-function truncate(value: unknown, max = 500): string {
+// Large enough for the responder to summarise from. 500 chars truncated most
+// API payloads mid-object, leaving nothing useful to describe.
+function truncate(value: unknown, max = 4000): string {
   try {
     return JSON.stringify(value).slice(0, max)
   } catch {
     return String(value).slice(0, max)
   }
+}
+
+/**
+ * A step from an earlier attempt that already settled. Replayed from storage on
+ * a retry so the user is not charged twice for the same call.
+ */
+export interface CompletedStep {
+  serviceName: string
+  cost: number
+  txRef: string | null
+  verificationTx: string | null
+  data: unknown
+  source: 'free' | 'x402'
 }
 
 export interface RunTaskOptions {
@@ -48,6 +67,10 @@ export interface RunTaskOptions {
   steps: PlanStep[]
   /** EOA key — never logged, never persisted, never echoed in an error. */
   agentPrivateKey: string
+  /** The user's original request, echoed into the transcript and the summary. */
+  goal: string
+  /** Steps already paid for on a previous attempt, keyed by step index. */
+  completed: Map<number, CompletedStep>
   budgetUsdc: number | null
   spendingCapUsdc: number
   /** Which chains this user may settle on; mainnet only when opted in. */
@@ -56,8 +79,18 @@ export interface RunTaskOptions {
 }
 
 export async function runTask(options: RunTaskOptions): Promise<void> {
-  const { taskId, userId, steps, agentPrivateKey, budgetUsdc, spendingCapUsdc, policy, res } =
-    options
+  const {
+    taskId,
+    userId,
+    goal,
+    steps,
+    completed,
+    agentPrivateKey,
+    budgetUsdc,
+    spendingCapUsdc,
+    policy,
+    res,
+  } = options
 
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache, no-transform')
@@ -84,7 +117,33 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
     if (!res.writableEnded) res.end()
   }
 
-  let totalSpent = 0
+  // Seeded with what earlier attempts already spent, so the budget and cap are
+  // measured against the true cost of the task rather than of this attempt.
+  let totalSpent = usdc([...completed.values()].reduce((sum, step) => sum + step.cost, 0))
+
+  // Kept in memory as the run proceeds so the summary is written from the live
+  // payloads rather than re-read from the truncated copies in the database.
+  const results: StepResult[] = []
+
+  /**
+   * Writes the run up as prose and puts it on the stream and in the transcript.
+   * Called on every terminal path that produced at least one result — a run
+   * stopped by the budget still fetched real data, and the user paid for it.
+   *
+   * Awaited before the stream closes so the client never has to poll for it,
+   * and never allowed to throw: the results are already safe in the database,
+   * and a summariser fault must not turn a successful run into a failed one.
+   */
+  const emitSummary = async (status: string): Promise<void> => {
+    if (results.length === 0) return
+    try {
+      const summary = await summariseRun({ goal, steps: results, totalCostUsdc: totalSpent, status })
+      appendMessage(userId, taskId, 'agent', summary, 'summary')
+      emit(res, 'summary', { taskId, summary })
+    } catch (err) {
+      console.error('[trident] summary emit failed:', String(err))
+    }
+  }
 
   // One client per chain, built lazily: a plan may span chains, and building a
   // client is cheap but not free.
@@ -112,6 +171,9 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
     emit(res, 'start', {
       taskId,
       totalSteps: steps.length,
+      // Non-zero on a retry: these steps are replayed, not re-paid.
+      replayedSteps: completed.size,
+      alreadySpent: totalSpent,
       budgetUsdc,
       spendingCapUsdc,
       eoaAddress: client.address,
@@ -123,12 +185,40 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
         return
       }
 
+      // Already settled on an earlier attempt. Replayed from storage: no
+      // payment, no budget gate — the money moved once and is already counted
+      // in totalSpent — and the result still reaches the summary and the UI.
+      const done = completed.get(step.stepIndex)
+      if (done) {
+        results.push({
+          stepIndex: step.stepIndex,
+          serviceName: done.serviceName,
+          purpose: step.purpose,
+          status: 'done',
+          data: done.data,
+          costUsdc: done.cost,
+          source: done.source,
+        })
+        emit(res, 'step_replayed', {
+          stepIndex: step.stepIndex,
+          serviceName: done.serviceName,
+          source: done.source,
+          cost: done.cost,
+          totalSpent,
+          txRef: done.txRef,
+          verificationTx: done.verificationTx,
+          result: done.data,
+        })
+        continue
+      }
+
       const session = db
         .prepare('SELECT abort_flag FROM agent_sessions WHERE user_id = ?')
         .get(userId) as { abort_flag: number } | undefined
 
       if (session?.abort_flag) {
         emit(res, 'stopped', { taskId, totalSpent, stoppedAt: step.stepIndex })
+        await emitSummary('stopped')
         finish('stopped')
         return
       }
@@ -141,6 +231,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           budgetUsdc,
           nextStepCost: step.estimatedCostUsdc,
         })
+        await emitSummary('stopped')
         finish('stopped')
         return
       }
@@ -153,6 +244,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           spendingCapUsdc,
           nextStepCost: step.estimatedCostUsdc,
         })
+        await emitSummary('stopped')
         finish('stopped')
         return
       }
@@ -232,6 +324,16 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
         ).run(cost, txRef, verificationTx, truncate(data), taskId, step.stepIndex)
         db.prepare('UPDATE tasks SET total_cost_usdc = ? WHERE id = ?').run(totalSpent, taskId)
 
+        results.push({
+          stepIndex: step.stepIndex,
+          serviceName: step.serviceName,
+          purpose: step.purpose,
+          status: 'done',
+          data,
+          costUsdc: cost,
+          source: service.source === 'free' ? 'free' : 'x402',
+        })
+
         emit(res, 'step_done', {
           stepIndex: step.stepIndex,
           serviceName: step.serviceName,
@@ -252,6 +354,16 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
            WHERE task_id = ? AND step_index = ?`,
         ).run(detail.slice(0, 500), taskId, step.stepIndex)
 
+        results.push({
+          stepIndex: step.stepIndex,
+          serviceName: step.serviceName,
+          purpose: step.purpose,
+          status: 'failed',
+          data: detail,
+          costUsdc: 0,
+          source: service?.source === 'free' ? 'free' : 'x402',
+        })
+
         emit(res, 'step_failed', { stepIndex: step.stepIndex, error: detail, totalSpent })
 
         if (isBalanceError(detail)) {
@@ -265,6 +377,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
                 : 'Insufficient Gateway balance. Top up in the Wallet tab.',
             totalSpent,
           })
+          await emitSummary('failed')
           finish('failed')
           return
         }
@@ -273,6 +386,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
     }
 
     emit(res, 'complete', { taskId, totalSpent, stepsCompleted: steps.length })
+    await emitSummary('done')
     finish('done')
   } catch (err) {
     // Headers are already sent, so surface the failure on the stream, not as a status code.

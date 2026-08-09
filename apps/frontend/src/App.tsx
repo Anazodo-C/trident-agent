@@ -4,6 +4,7 @@ import { Loader2 } from 'lucide-react'
 import { api, setAuthToken } from './lib/api.ts'
 import { useAuthStore } from './store/authStore.ts'
 import { AuthPage } from './modules/auth/AuthPage.tsx'
+import { LandingPage } from './modules/landing/LandingPage.tsx'
 import { SetupPassphrasePage } from './modules/auth/SetupPassphrasePage.tsx'
 import { AppShell } from './modules/layout/AppShell.tsx'
 import { AgentTab } from './modules/agent/AgentTab.tsx'
@@ -26,7 +27,8 @@ export default function App() {
   return (
     <ErrorBoundary>
       <Routes>
-        <Route path="/" element={<AuthPage />} />
+        <Route path="/" element={<LandingPage />} />
+        <Route path="/signin" element={<AuthPage />} />
         <Route path="/setup-passphrase" element={<SetupPassphrasePage />} />
         <Route
           path="/app"
@@ -71,7 +73,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
         navigate('/app', { replace: true })
       })
       .catch(() => {
-        if (!cancelled) navigate('/?authError=invalid_token', { replace: true })
+        if (!cancelled) navigate('/signin?authError=invalid_token', { replace: true })
       })
     return () => {
       cancelled = true
@@ -79,7 +81,7 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
   }, [urlToken, setSession, navigate])
 
   if (urlToken) return <FullscreenSpinner label="Signing in" />
-  if (!token) return <Navigate to="/" replace />
+  if (!token) return <Navigate to="/signin" replace />
   return <>{children}</>
 }
 

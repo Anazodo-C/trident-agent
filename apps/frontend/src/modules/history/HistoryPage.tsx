@@ -67,7 +67,7 @@ export function HistoryPage() {
                     <td className="px-4 py-3 font-mono text-slate-400">
                       {task.stepsDone}/{task.stepCount}
                     </td>
-                    <td className="price px-4 py-3">${usdc(task.totalCostUsdc, 3)}</td>
+                    <td className="price px-4 py-3">${usdc(task.totalCostUsdc)}</td>
                     <td className="px-4 py-3 text-slate-500">{relativeTime(task.createdAt)}</td>
                   </tr>
                 ))}
@@ -91,7 +91,7 @@ export function HistoryPage() {
                   <span>
                     {task.stepsDone}/{task.stepCount} steps
                   </span>
-                  <span className="text-[#00D4FF]">${usdc(task.totalCostUsdc, 3)}</span>
+                  <span className="text-[#00D4FF]">${usdc(task.totalCostUsdc)}</span>
                   <span>{relativeTime(task.createdAt)}</span>
                 </div>
               </button>
@@ -146,8 +146,8 @@ function TaskDrawer({ task, onClose }: { task: TaskSummary; onClose: () => void 
             <p className="mt-2 text-sm text-slate-200">{task.goal}</p>
             <div className="mt-3 flex flex-wrap items-center gap-3 font-mono text-[11px] text-slate-500">
               <StatusBadge status={task.status} />
-              <span className="text-[#00D4FF]">${usdc(task.totalCostUsdc, 3)} spent</span>
-              {task.budgetUsdc !== null && <span>cap ${usdc(task.budgetUsdc, 2)}</span>}
+              <span className="text-[#00D4FF]">${usdc(task.totalCostUsdc)} spent</span>
+              {task.budgetUsdc !== null && <span>cap ${usdc(task.budgetUsdc)}</span>}
               <span>{relativeTime(task.createdAt)}</span>
             </div>
           </div>
@@ -182,11 +182,11 @@ function TaskDrawer({ task, onClose }: { task: TaskSummary; onClose: () => void 
                 </p>
                 <div className="mt-3 flex flex-wrap gap-4 font-mono text-[11px]">
                   <span className="text-slate-500">
-                    est ${usdc(step.estimatedCostUsdc, 3)}
+                    est ${usdc(step.estimatedCostUsdc)}
                   </span>
                   <span className={step.actualCostUsdc !== null ? 'text-[#00FF88]' : 'text-slate-600'}>
                     actual{' '}
-                    {step.actualCostUsdc !== null ? `$${usdc(step.actualCostUsdc, 3)}` : '—'}
+                    {step.actualCostUsdc !== null ? `$${usdc(step.actualCostUsdc)}` : '—'}
                   </span>
                 </div>
                 {step.txRef && (
