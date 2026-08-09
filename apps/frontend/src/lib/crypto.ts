@@ -1,11 +1,14 @@
 /**
  * Browser half of the agent-wallet key encryption.
  *
- * These constants MUST stay identical to `apps/node-backend/src/auth/keySetup.ts`
- * (PBKDF2-SHA256, 200_000 iterations, AES-256-GCM with a 16-byte tag appended to
- * the ciphertext). Any drift makes every decryption fail.
+ * The scheme MUST stay identical to `apps/node-backend/src/auth/keySetup.ts`
+ * (PBKDF2-SHA256, AES-256-GCM with a 16-byte tag appended to the ciphertext).
+ * Any drift makes every decryption fail.
+ *
+ * The iteration count is no longer a constant here: it travels with each
+ * wallet, because raising it for new wallets must not strand the ones already
+ * encrypted at the old count.
  */
-const PBKDF2_ITERATIONS = 200_000
 const PBKDF2_HASH = 'SHA-256'
 
 export function hexToBytes(hex: string): Uint8Array {
@@ -18,7 +21,12 @@ export function hexToBytes(hex: string): Uint8Array {
   return out
 }
 
-async function deriveAesKey(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
+async function deriveAesKey(
+  passphrase: string,
+  salt: Uint8Array,
+  iterations: number,
+  usage: 'encrypt' | 'decrypt',
+): Promise<CryptoKey> {
   const baseKey = await crypto.subtle.importKey(
     'raw',
     new TextEncoder().encode(passphrase),
@@ -30,14 +38,18 @@ async function deriveAesKey(passphrase: string, salt: Uint8Array): Promise<Crypt
     {
       name: 'PBKDF2',
       salt: salt as BufferSource,
-      iterations: PBKDF2_ITERATIONS,
+      iterations,
       hash: PBKDF2_HASH,
     },
     baseKey,
     { name: 'AES-GCM', length: 256 },
     false,
-    ['decrypt'],
+    [usage],
   )
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 /**
@@ -49,12 +61,13 @@ export async function decryptEoaKey(
   encryptedHex: string,
   saltHex: string,
   ivHex: string,
+  iterations: number,
 ): Promise<string> {
   const salt = hexToBytes(saltHex)
   const iv = hexToBytes(ivHex)
   const payload = hexToBytes(encryptedHex)
 
-  const aesKey = await deriveAesKey(passphrase, salt)
+  const aesKey = await deriveAesKey(passphrase, salt, iterations, 'decrypt')
 
   let plain: ArrayBuffer
   try {
@@ -72,4 +85,54 @@ export async function decryptEoaKey(
     throw new Error('Decrypted value is not a valid private key')
   }
   return key
+}
+
+/**
+ * Re-encrypt an already-decrypted wallet key at a new iteration count, with a
+ * fresh salt and IV.
+ *
+ * Only ever called with a key the browser just decrypted successfully, so the
+ * passphrase is known-correct — re-encrypting under a wrong one would replace
+ * the stored blob with something nobody can open.
+ */
+export async function encryptEoaKey(
+  passphrase: string,
+  privateKey: string,
+  iterations: number,
+): Promise<{ encryptedKey: string; salt: string; iv: string; iterations: number }> {
+  const salt = crypto.getRandomValues(new Uint8Array(32))
+  const iv = crypto.getRandomValues(new Uint8Array(12))
+  const aesKey = await deriveAesKey(passphrase, salt, iterations, 'encrypt')
+
+  const sealed = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: iv as BufferSource },
+    aesKey,
+    new TextEncoder().encode(privateKey),
+  )
+
+  // WebCrypto appends the 16-byte GCM tag to the ciphertext, which is exactly
+  // the layout the Node side reads back.
+  return {
+    encryptedKey: bytesToHex(new Uint8Array(sealed)),
+    salt: bytesToHex(salt),
+    iv: bytesToHex(iv),
+    iterations,
+  }
+}
+
+/**
+ * MUST stay byte-identical to `buildRotationMessage` in the backend's
+ * `auth/keySetup.ts`, or the server rejects every rotation.
+ */
+export function buildRotationMessage(input: {
+  userId: string
+  encryptedKey: string
+  iterations: number
+}): string {
+  return [
+    'Trident agent wallet re-encryption',
+    `user: ${input.userId}`,
+    `key: ${input.encryptedKey}`,
+    `iterations: ${input.iterations}`,
+  ].join('\n')
 }

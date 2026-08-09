@@ -17,7 +17,14 @@
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node"]
+    "types": ["node"],
+    // Typecheck-only alias: better-sqlite3-multiple-ciphers has no bundled
+    // types and is API-identical to better-sqlite3. Does not affect runtime
+    // resolution, which still loads the real (cipher-capable) package.
+    "baseUrl": ".",
+    "paths": {
+      "better-sqlite3-multiple-ciphers": ["./src/types/better-sqlite3-multiple-ciphers.d.ts"]
+    }
   },
   "include": ["src/**/*.ts"]
 }

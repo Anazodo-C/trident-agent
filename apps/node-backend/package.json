@@ -22,6 +22,7 @@
     "@x402/core": "^2.3.0",
     "@x402/evm": "^2.3.0",
     "better-sqlite3": "^12.4.1",
+    "better-sqlite3-multiple-ciphers": "^13.0.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",

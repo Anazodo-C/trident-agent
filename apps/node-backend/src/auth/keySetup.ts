@@ -5,7 +5,19 @@ import { randomBytes, pbkdf2Sync, createCipheriv, createDecipheriv } from 'node:
  * Must stay byte-identical to the browser side (`lib/crypto.ts`), otherwise
  * decryption always fails. See ASSUMPTIONS #12 in the build prompt.
  */
-export const PBKDF2_ITERATIONS = 200_000
+/**
+ * What new wallets are encrypted with today. OWASP's current floor for
+ * PBKDF2-HMAC-SHA256.
+ */
+export const PBKDF2_ITERATIONS = 600_000
+
+/**
+ * What wallets created before that change used. Rows carry their own count in
+ * users.kdf_iterations, so this is only the default for rows that predate the
+ * column — never a value to encrypt anything new with.
+ */
+export const PBKDF2_ITERATIONS_LEGACY = 200_000
+
 export const PBKDF2_DIGEST = 'sha256'
 const GCM_TAG_BYTES = 16
 
@@ -14,15 +26,19 @@ export interface EncryptedEoa {
   encryptedKey: string
   salt: string
   iv: string
+  iterations: number
 }
 
-export function generateAndEncryptEoa(passphrase: string): EncryptedEoa {
+export function generateAndEncryptEoa(
+  passphrase: string,
+  iterations: number = PBKDF2_ITERATIONS,
+): EncryptedEoa {
   const privateKey = generatePrivateKey()
   const account = privateKeyToAccount(privateKey)
 
   const salt = randomBytes(32)
   const iv = randomBytes(12)
-  const derived = pbkdf2Sync(passphrase, salt, PBKDF2_ITERATIONS, 32, PBKDF2_DIGEST)
+  const derived = pbkdf2Sync(passphrase, salt, iterations, 32, PBKDF2_DIGEST)
 
   const cipher = createCipheriv('aes-256-gcm', derived, iv)
   const encrypted = Buffer.concat([cipher.update(privateKey, 'utf8'), cipher.final()])
@@ -33,6 +49,7 @@ export function generateAndEncryptEoa(passphrase: string): EncryptedEoa {
     encryptedKey: Buffer.concat([encrypted, tag]).toString('hex'),
     salt: salt.toString('hex'),
     iv: iv.toString('hex'),
+    iterations,
   }
 }
 
@@ -46,6 +63,7 @@ export function decryptEoaKey(
   encryptedHex: string,
   saltHex: string,
   ivHex: string,
+  iterations: number = PBKDF2_ITERATIONS,
 ): string {
   const payload = Buffer.from(encryptedHex, 'hex')
   const salt = Buffer.from(saltHex, 'hex')
@@ -54,7 +72,7 @@ export function decryptEoaKey(
   const ciphertext = payload.subarray(0, payload.length - GCM_TAG_BYTES)
   const tag = payload.subarray(payload.length - GCM_TAG_BYTES)
 
-  const derived = pbkdf2Sync(passphrase, salt, PBKDF2_ITERATIONS, 32, PBKDF2_DIGEST)
+  const derived = pbkdf2Sync(passphrase, salt, iterations, 32, PBKDF2_DIGEST)
   const decipher = createDecipheriv('aes-256-gcm', derived, iv)
   decipher.setAuthTag(tag)
 
@@ -69,4 +87,32 @@ export function isValidPrivateKey(key: unknown): key is `0x${string}` {
 /** Derive the public address for a key, to confirm it matches the stored EOA. */
 export function addressForKey(privateKey: `0x${string}`): string {
   return privateKeyToAccount(privateKey).address
+}
+
+/**
+ * The message a client signs to prove it really decrypted the wallet key
+ * before asking the server to store a re-encrypted copy.
+ *
+ * Without this, any holder of a valid JWT could overwrite someone's encrypted
+ * key with a blob of their own. They could not steal the funds — the EOA that
+ * holds them is unchanged and they still would not know its key — but they
+ * could lock the owner out of their own wallet permanently, which is bad
+ * enough. A signature that recovers to the stored EOA proves possession of the
+ * real key, and binding the ciphertext into the message stops the signature
+ * being reused to install a different blob.
+ *
+ * MUST stay byte-identical to `buildRotationMessage` in the browser's
+ * `lib/crypto.ts`, or every rotation fails signature verification.
+ */
+export function buildRotationMessage(input: {
+  userId: string
+  encryptedKey: string
+  iterations: number
+}): string {
+  return [
+    'Trident agent wallet re-encryption',
+    `user: ${input.userId}`,
+    `key: ${input.encryptedKey}`,
+    `iterations: ${input.iterations}`,
+  ].join('\n')
 }

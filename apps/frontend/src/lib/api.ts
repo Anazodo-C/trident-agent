@@ -125,6 +125,19 @@ export const api = {
 
   keyMaterial: () => request<KeyMaterial>('/auth/key-material'),
 
+  /** Store a re-encrypted key at a higher iteration count. Ciphertext only. */
+  rotateKdf: (payload: {
+    encryptedKey: string
+    salt: string
+    iv: string
+    iterations: number
+    signature: string
+  }) =>
+    request<{ ok: boolean; iterations: number }>('/auth/rotate-kdf', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   services: (opts: {
     q?: string
     curated?: boolean

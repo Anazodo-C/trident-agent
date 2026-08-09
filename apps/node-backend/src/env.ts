@@ -169,3 +169,17 @@ export const ANTHROPIC_KEY_MISDIRECTED =
   ANTHROPIC_HOST !== 'api.anthropic.com' && ANTHROPIC_API_KEY.startsWith('sk-ant-')
 
 export const DB_PATH = optional('DB_PATH', './trident.db')
+
+/**
+ * Key for SQLCipher whole-file encryption of the database.
+ *
+ * The database holds every user's encrypted wallet key alongside its salt and
+ * IV, which is a complete offline cracking target if the file ever escapes.
+ * Encrypting the file means a stolen volume snapshot or a leaked backup is
+ * useless without this value.
+ *
+ * It defends against the file leaking. It does NOT defend against anyone who
+ * can read this environment — they can read the key and the database with it.
+ * Keep it in the platform's secret store and out of the repo.
+ */
+export const DB_ENCRYPTION_KEY = optional('DB_ENCRYPTION_KEY')

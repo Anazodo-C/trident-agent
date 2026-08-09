@@ -11,13 +11,14 @@
 // Same env resolution as the server, so the planner tests aren't silently skipped.
 import '../src/env.ts'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { buildRotationMessage } from '../src/auth/keySetup.ts'
 import { SiweMessage } from 'siwe'
 // The real browser-side decrypt. Node exposes the same WebCrypto API, so this
 // exercises the exact code the app ships rather than a re-implementation.
 import { decryptEoaKey } from '../../frontend/src/lib/crypto.ts'
 
 const BASE = process.env['E2E_BASE_URL'] ?? 'http://localhost:3001'
-const PASSPHRASE = 'correct-horse-battery-staple'
+const PASSPHRASE = 'copper lantern drift oyster'
 
 let passed = 0
 let failed = 0
@@ -175,10 +176,13 @@ async function main(): Promise<void> {
   // ------------------------------------------ PBKDF2 / AES-GCM parity check
   section('Crypto — server encrypt ⇄ browser decrypt (ASSUMPTION #12)')
   const material = await json<{
+    userId: string
     encryptedKey: string
     salt: string
     iv: string
     eoaAddress: string
+    iterations: number
+    targetIterations: number
   }>('/auth/key-material', { headers: auth })
   check('key-material returns ciphertext', material.status === 200)
   check('response carries no raw key', !JSON.stringify(material.body).includes('privateKey'))
@@ -190,6 +194,7 @@ async function main(): Promise<void> {
       material.body.encryptedKey,
       material.body.salt,
       material.body.iv,
+      material.body.iterations,
     )
   } catch (err) {
     check('browser decrypt succeeds', false, String(err))
@@ -208,11 +213,86 @@ async function main(): Promise<void> {
 
   let wrongRejected = false
   try {
-    await decryptEoaKey('wrong-passphrase', material.body.encryptedKey, material.body.salt, material.body.iv)
+    await decryptEoaKey(
+      'wrong-passphrase-entirely',
+      material.body.encryptedKey,
+      material.body.salt,
+      material.body.iv,
+      material.body.iterations,
+    )
   } catch {
     wrongRejected = true
   }
   check('wrong passphrase is rejected', wrongRejected)
+  check(
+    'new wallets use 600k iterations',
+    material.body?.iterations === 600_000,
+    String(material.body?.iterations),
+  )
+
+  // ------------------------------------------------------ passphrase floor
+  section('Passphrase rules')
+  for (const [label, candidate, shouldPass] of [
+    ['too short is rejected', 'Trident1', false],
+    ['a denylisted phrase is rejected', 'correct-horse-battery-staple', false],
+    ['low-variety is rejected', 'ababababababab', false],
+  ] as [string, string, boolean][]) {
+    // A fresh account each time: setup only runs once per user.
+    const probe = await freshAccount()
+    const res = await json('/auth/setup-passphrase', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${probe.setupToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passphrase: candidate }),
+    })
+    check(label, shouldPass ? res.status === 200 : res.status === 400, `got ${res.status}`)
+  }
+
+  // ------------------------------------------------------- KDF re-encryption
+  section('KDF rotation')
+  {
+    // A rotation not signed by the wallet key must be refused, or a stolen JWT
+    // could overwrite someone's encrypted key and lock them out.
+    const forged = await json('/auth/rotate-kdf', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({
+        encryptedKey: 'deadbeef',
+        salt: 'aa',
+        iv: 'bb',
+        iterations: 600_000,
+        signature: `0x${'11'.repeat(65)}`,
+      }),
+    })
+    check('unsigned rotation is refused', forged.status === 403, `got ${forged.status}`)
+
+    const after = await json<{ encryptedKey: string }>('/auth/key-material', { headers: auth })
+    check(
+      'the refused rotation changed nothing',
+      after.body?.encryptedKey === material.body.encryptedKey,
+    )
+
+    // A downgrade must be refused even with a valid signature.
+    const account = privateKeyToAccount(decrypted as `0x${string}`)
+    const downgradeKey = 'c0ffee'
+    const downgrade = await json('/auth/rotate-kdf', {
+      method: 'POST',
+      headers: auth,
+      body: JSON.stringify({
+        encryptedKey: downgradeKey,
+        salt: 'aa',
+        iv: 'bb',
+        iterations: 200_000,
+        signature: await account.signMessage({
+          message: buildRotationMessage({
+            userId: material.body.userId,
+            encryptedKey: downgradeKey,
+            iterations: 200_000,
+          }),
+        }),
+      }),
+    })
+    check('a weaker iteration count is refused', downgrade.status === 400, `got ${downgrade.status}`)
+  }
 
   // --------------------------------------------------------------- catalog
   section('Marketplace')
@@ -623,7 +703,7 @@ async function main(): Promise<void> {
   const otherSetup = await json<{ token: string }>('/auth/setup-passphrase', {
     method: 'POST',
     headers: { Authorization: `Bearer ${otherVerify.body.setupToken}` },
-    body: JSON.stringify({ passphrase: 'a-different-passphrase' }),
+    body: JSON.stringify({ passphrase: 'a-different-passphrase-entirely' }),
   })
   const crossAccess = await json(`/api/tasks/${planRes.body.taskId}`, {
     headers: { Authorization: `Bearer ${otherSetup.body.token}` },
@@ -631,6 +711,30 @@ async function main(): Promise<void> {
   check("another user's task is not readable", crossAccess.status === 404, `got ${crossAccess.status}`)
 
   report()
+}
+
+/**
+ * A brand-new SIWE account that has not set a passphrase yet, so the
+ * passphrase rules can be exercised — setup only runs once per user.
+ */
+async function freshAccount(): Promise<{ setupToken: string }> {
+  const key = generatePrivateKey()
+  const account = privateKeyToAccount(key)
+  const nonce = await json<{ nonce: string }>('/auth/siwe/nonce')
+  const message = new SiweMessage({
+    domain: 'localhost',
+    address: account.address,
+    statement: 'Sign in to Trident.',
+    uri: 'http://localhost',
+    version: '1',
+    chainId: 1,
+    nonce: nonce.body.nonce,
+  }).prepareMessage()
+  const verify = await json<{ setupToken: string }>('/auth/siwe/verify', {
+    method: 'POST',
+    body: JSON.stringify({ message, signature: await account.signMessage({ message }) }),
+  })
+  return { setupToken: verify.body.setupToken }
 }
 
 function report(): void {

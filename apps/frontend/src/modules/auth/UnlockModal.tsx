@@ -2,7 +2,12 @@ import { useEffect, useState } from 'react'
 import { privateKeyToAccount } from 'viem/accounts'
 import { KeyRound, Loader2, X } from 'lucide-react'
 import { api } from '../../lib/api.ts'
-import { decryptEoaKey } from '../../lib/crypto.ts'
+import {
+  buildRotationMessage,
+  decryptEoaKey,
+  encryptEoaKey,
+} from '../../lib/crypto.ts'
+import type { KeyMaterial } from '../../lib/types.ts'
 import { useAgentStore } from '../../store/agentStore.ts'
 import { useAuthStore } from '../../store/authStore.ts'
 
@@ -46,16 +51,20 @@ export function UnlockModal() {
         material.encryptedKey,
         material.salt,
         material.iv,
+        material.iterations,
       )
 
       // Confirm the decrypted key really controls the account's agent wallet.
-      const derived = privateKeyToAccount(key as `0x${string}`).address
+      const account = privateKeyToAccount(key as `0x${string}`)
       const expected = material.eoaAddress ?? user?.eoaAddress
-      if (expected && derived.toLowerCase() !== expected.toLowerCase()) {
+      if (expected && account.address.toLowerCase() !== expected.toLowerCase()) {
         throw new Error('Wrong passphrase')
       }
 
+      // Unlock first. The upgrade below is housekeeping and must never be the
+      // reason someone cannot get into their own wallet.
       unlock(key)
+      void upgradeKdf(material, passphrase, key, account)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not unlock'
       setError(message === 'Wrong passphrase' ? 'Wrong passphrase' : message)
@@ -121,4 +130,41 @@ export function UnlockModal() {
       </div>
     </div>
   )
+}
+
+/**
+ * Re-encrypt this wallet at the current iteration count, if it is behind.
+ *
+ * Runs after a successful unlock, when the passphrase is known-correct and the
+ * decrypted key is in hand — the only moment this is possible, since the server
+ * can never do it itself. Silent on failure by design: the user has already
+ * been let in, the old ciphertext still works, and the next unlock will try
+ * again. Failing loudly here would turn a background improvement into an alarm
+ * about a wallet that is fine.
+ */
+async function upgradeKdf(
+  material: KeyMaterial,
+  passphrase: string,
+  privateKey: string,
+  account: ReturnType<typeof privateKeyToAccount>,
+): Promise<void> {
+  if (!material.targetIterations || material.iterations >= material.targetIterations) return
+
+  try {
+    const sealed = await encryptEoaKey(passphrase, privateKey, material.targetIterations)
+
+    // Proves to the server that whoever is asking really holds this wallet's
+    // key, and binds the approval to this exact ciphertext.
+    const signature = await account.signMessage({
+      message: buildRotationMessage({
+        userId: material.userId,
+        encryptedKey: sealed.encryptedKey,
+        iterations: sealed.iterations,
+      }),
+    })
+
+    await api.rotateKdf({ ...sealed, signature })
+  } catch {
+    /* keep the old ciphertext; retried on the next unlock */
+  }
 }

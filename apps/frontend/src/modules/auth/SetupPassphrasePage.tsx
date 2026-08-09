@@ -4,8 +4,12 @@ import { AlertTriangle, Loader2, ShieldCheck } from 'lucide-react'
 import { api } from '../../lib/api.ts'
 import { useAuthStore } from '../../store/authStore.ts'
 import { TridentMark } from '../layout/TridentMark.tsx'
-
-const MIN_LENGTH = 8
+import {
+  MIN_PASSPHRASE_LENGTH,
+  estimateStrength,
+  passphraseProblem,
+  type StrengthLevel,
+} from '../../lib/passphrase.ts'
 
 export function SetupPassphrasePage() {
   const navigate = useNavigate()
@@ -19,10 +23,12 @@ export function SetupPassphrasePage() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const tooShort = passphrase.length > 0 && passphrase.length < MIN_LENGTH
+  // Same rule the server applies, so the form never submits something that
+  // will come straight back as a 400.
+  const problem = passphrase.length > 0 ? passphraseProblem(passphrase) : null
+  const strength = estimateStrength(passphrase)
   const mismatch = confirm.length > 0 && passphrase !== confirm
-  const canSubmit =
-    passphrase.length >= MIN_LENGTH && passphrase === confirm && acknowledged && !busy
+  const canSubmit = !problem && passphrase.length > 0 && passphrase === confirm && acknowledged && !busy
 
   if (!setupToken) {
     return (
@@ -85,13 +91,10 @@ export function SetupPassphrasePage() {
             autoComplete="new-password"
             value={passphrase}
             onChange={(e) => setPassphrase(e.target.value)}
-            placeholder={`At least ${MIN_LENGTH} characters`}
+            placeholder={`At least ${MIN_PASSPHRASE_LENGTH} characters`}
           />
-          {tooShort && (
-            <span className="text-xs text-[#FF4466]">
-              Must be at least {MIN_LENGTH} characters.
-            </span>
-          )}
+          {passphrase.length > 0 && <StrengthMeter strength={strength} />}
+          {problem && <span className="text-xs text-[#FF4466]">{problem}</span>}
         </label>
 
         <label className="flex flex-col gap-1.5">
@@ -129,6 +132,47 @@ export function SetupPassphrasePage() {
         </button>
       </form>
     </CenteredCard>
+  )
+}
+
+const METER: Record<StrengthLevel, { bars: number; tone: string; label: string }> = {
+  weak: { bars: 1, tone: 'bg-[#FF4466]', label: 'Weak' },
+  fair: { bars: 2, tone: 'bg-[#FFA040]', label: 'Fair' },
+  good: { bars: 3, tone: 'bg-[#00D4FF]', label: 'Good' },
+  strong: { bars: 4, tone: 'bg-[#00FF88]', label: 'Strong' },
+}
+
+/**
+ * Advisory only — the length and denylist rules decide what is accepted, and
+ * they are enforced on the server. This exists to move people off short clever
+ * strings and onto long ordinary ones, which is the change that actually
+ * matters against offline guessing.
+ */
+function StrengthMeter({ strength }: { strength: ReturnType<typeof estimateStrength> }) {
+  const meter = METER[strength.level]
+
+  return (
+    <div className="mt-1">
+      <div className="flex items-center gap-2">
+        <div className="flex flex-1 gap-1" aria-hidden>
+          {[0, 1, 2, 3].map((i) => (
+            <span
+              key={i}
+              className={`h-1 flex-1 rounded-full transition-colors ${
+                i < meter.bars ? meter.tone : 'bg-[#1A2A4A]'
+              }`}
+            />
+          ))}
+        </div>
+        <span className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
+          {meter.label}
+        </span>
+      </div>
+      <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
+        {strength.hint}{' '}
+        <span className="text-slate-600">≈{strength.bits} bits estimated</span>
+      </p>
+    </div>
   )
 }
 

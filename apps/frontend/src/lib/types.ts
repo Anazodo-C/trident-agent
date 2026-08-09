@@ -226,10 +226,15 @@ export interface DepositInfo {
 }
 
 export interface KeyMaterial {
+  userId: string
   encryptedKey: string
   salt: string
   iv: string
   eoaAddress: string
+  /** The count this blob was encrypted at — decrypt with exactly this. */
+  iterations: number
+  /** The count it should be re-encrypted at, if it is behind. */
+  targetIterations: number
 }
 
 export interface StatBreakdown {

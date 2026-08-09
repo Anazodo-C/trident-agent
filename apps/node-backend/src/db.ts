@@ -1,7 +1,8 @@
-import Database from 'better-sqlite3'
+import type { Database } from 'better-sqlite3'
 import { mkdirSync, statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { DB_PATH, IS_PROD } from './env.ts'
+import { openDatabase } from './dbEncryption.ts'
 
 /**
  * better-sqlite3 refuses to create the database's parent directory, so a
@@ -56,7 +57,9 @@ function prepareDatabaseDirectory(path: string): void {
 
 prepareDatabaseDirectory(DB_PATH)
 
-const db = new Database(DB_PATH)
+// Encrypted with SQLCipher when DB_ENCRYPTION_KEY is set, and converted in
+// place on first boot if the existing file is still plaintext.
+const db: Database = openDatabase(DB_PATH)
 
 db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
@@ -201,6 +204,15 @@ addColumnIfMissing('users', 'mainnet_chain', "TEXT DEFAULT 'BASE'")
 addColumnIfMissing('services', 'source', "TEXT DEFAULT 'x402'")
 // Verification transfer hash for free-API calls, alongside the x402 tx_ref.
 addColumnIfMissing('task_steps', 'verification_tx', 'TEXT')
+/**
+ * PBKDF2 iteration count this user's key was encrypted with.
+ *
+ * Per-user because the number has to be able to rise over time. Existing rows
+ * default to 200000 — the value in force when they were created — and their
+ * ciphertext can only be decrypted with that count, so raising the constant
+ * alone would have locked every existing wallet out permanently.
+ */
+addColumnIfMissing('users', 'kdf_iterations', 'INTEGER DEFAULT 200000')
 
 export interface MessageRow {
   id: string
@@ -247,6 +259,7 @@ export interface UserRow {
   payment_key_iv: string | null
   spending_cap_usdc: number
   default_chain: string
+  kdf_iterations: number
   mainnet_enabled: number
   mainnet_chain: string
   created_at: number
