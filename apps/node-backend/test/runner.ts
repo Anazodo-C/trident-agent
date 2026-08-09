@@ -248,6 +248,37 @@ async function main(): Promise<void> {
     const obj = new URL(requestUrl(urlStep('https://x.dev/p', 'GET', { f: { a: 1 } })))
     check('a nested object is serialised', obj.searchParams.get('f') === '{"a":1}')
 
+    const path = requestUrl(
+      urlStep('https://api.aisa.one/apis/v2/coingecko/coins/{id}', 'GET', { id: 'bitcoin' }),
+    )
+    check(
+      'a path placeholder is filled from the parameters',
+      path === 'https://api.aisa.one/apis/v2/coingecko/coins/bitcoin',
+      path,
+    )
+    check(
+      'and is not also appended to the query string',
+      !path.includes('?'),
+      path,
+    )
+    const mixed = new URL(
+      requestUrl(
+        urlStep('https://api.dev/coins/{id}/chart', 'GET', { id: 'btc', days: 7 }),
+      ),
+    )
+    check(
+      'other parameters still reach the query',
+      mixed.pathname === '/coins/btc/chart' && mixed.searchParams.get('days') === '7',
+      mixed.toString(),
+    )
+    let refused = false
+    try {
+      requestUrl(urlStep('https://api.dev/videos/{id}', 'GET', {}))
+    } catch {
+      refused = true
+    }
+    check('an unfilled placeholder is refused, not requested literally', refused)
+
     // A POST defaults to carrying nothing in the query...
     const postDefault = requestUrl(urlStep('https://x.dev/p', 'POST', { query: 'ml' }))
     check('a POST leaves the URL alone by default', postDefault === 'https://x.dev/p')
@@ -287,10 +318,12 @@ async function main(): Promise<void> {
     // The real pair. /chat/completions serves 40 models; /api/v1/messages
     // serves 9, all Anthropic, and additionally requires max_tokens.
     const completions = {
+      resource: 'https://nano.blockrun.ai/api/v1/chat/completions',
       requiredParams: ['model', 'messages'],
       paramEnums: { model: ['openai/gpt-4o-mini', 'anthropic/claude-haiku-4.5'] },
     }
     const messages = {
+      resource: 'https://nano.blockrun.ai/api/v1/messages',
       requiredParams: ['model', 'messages', 'max_tokens'],
       paramEnums: { model: ['anthropic/claude-haiku-4.5', 'anthropic/claude-sonnet-5'] },
     }
@@ -325,6 +358,22 @@ async function main(): Promise<void> {
       'a parameter with no published enum is never blocked',
       invalidEnumParams({}, { anything: 'goes' }).length === 0,
     )
+
+    /*
+     * 117 of the catalog's 955 resources are path templates. Failover picked
+     * `/api/v1/videos/generations/{id}` — wrong shape and wrong purpose — and
+     * requested it with the braces intact.
+     */
+    const templated = {
+      resource: 'https://nano.blockrun.ai/api/v1/videos/generations/{id}',
+      requiredParams: [],
+      paramEnums: {},
+    }
+    check(
+      'a template with no value for its placeholder is not a substitute',
+      !paramsFit(templated, { model: 'x', messages: [] }),
+    )
+    check('the same template fits once the value exists', paramsFit(templated, { id: 'vid_1' }))
     check(
       'an absent optional value is not an enum violation',
       invalidEnumParams({ model: ['a'] }, {}).length === 0,

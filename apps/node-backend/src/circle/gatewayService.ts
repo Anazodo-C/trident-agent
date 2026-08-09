@@ -95,6 +95,74 @@ export function gatewayClientFor(
   })
 }
 
+export interface LiveQuote {
+  /** Exactly what the endpoint asks for, in USDC atomic units. */
+  amountAtomic: bigint
+  /** The same figure as a decimal string. Never rounded — this is what is paid. */
+  amountUsdc: string
+  network: string
+}
+
+/**
+ * What this call costs right now, from the endpoint itself.
+ *
+ * The catalog price is a snapshot and some sellers do not price statically:
+ * BlockRun lists 0.003 for chat completions and quoted 0.027982 for
+ * openai/gpt-5.5 — nearly ten times the figure the plan was approved at. The
+ * spending cap is meant to be absolute, and a cap tested against a stale number
+ * is not a cap at all.
+ *
+ * This is the unpaid half of the x402 handshake, which the SDK performs again
+ * inside pay(). One extra round trip buys the guarantee that nothing is ever
+ * charged above what the user approved.
+ *
+ * Null means the endpoint did not answer 402 — no quote to enforce against, so
+ * the caller proceeds and lets pay() surface whatever the real problem is.
+ */
+export async function quoteFromEndpoint(
+  url: string,
+  chain: SupportedChainName,
+  init: { method: 'GET' | 'POST'; body?: unknown },
+  { timeoutMs = 20_000 }: { timeoutMs?: number } = {},
+): Promise<LiveQuote | null> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(url, {
+      method: init.method,
+      signal: controller.signal,
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+    })
+    if (response.status !== 402) return null
+
+    const header = response.headers.get('payment-required')
+    if (!header) return null
+
+    const decoded = JSON.parse(Buffer.from(header, 'base64').toString('utf-8')) as {
+      accepts?: { network?: string; amount?: string; extra?: Record<string, unknown> }[]
+    }
+
+    // The same option pay() will choose: our chain, and Gateway-settleable.
+    const expected = `eip155:${chainConfig(chain).chain.id}`
+    const option = decoded.accepts?.find(
+      (a) =>
+        a.network === expected &&
+        a.extra?.['name'] === 'GatewayWalletBatched' &&
+        a.extra?.['version'] === '1',
+    )
+    if (!option?.amount) return null
+
+    const amountAtomic = BigInt(option.amount)
+    return { amountAtomic, amountUsdc: fromAtomicUsdc(amountAtomic), network: expected }
+  } catch {
+    // A quote is an optimisation on top of pay(), never a new way to fail.
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 const GATEWAY_API_MAINNET = 'https://gateway-api.circle.com/v1'
 const GATEWAY_API_TESTNET = 'https://gateway-api-testnet.circle.com/v1'
 

@@ -4,6 +4,7 @@ import type { PlanStep } from '../llm/planner.ts'
 import {
   gatewayClientFor,
   lastErrorBodyFor,
+  quoteFromEndpoint,
   safeErrorMessage,
 } from '../circle/gatewayService.ts'
 import { findServiceByResource, type Service } from '../circle/registryService.ts'
@@ -135,10 +136,16 @@ export function invalidEnumParams(
  * provider, with near-identical names, routinely do not.
  */
 export function paramsFit(
-  service: Pick<Service, 'requiredParams' | 'paramEnums'>,
+  service: Pick<Service, 'requiredParams' | 'paramEnums' | 'resource'>,
   params: Record<string, unknown>,
 ): boolean {
+  // A template we cannot fill is as unusable as a missing required field, and
+  // it is how `/videos/generations/{id}` came to be requested literally.
+  const unfillable = pathPlaceholders(service.resource).some(
+    (name) => params[name] === undefined || params[name] === null || params[name] === '',
+  )
   return (
+    !unfillable &&
     missingRequiredParams(service.requiredParams, params).length === 0 &&
     invalidEnumParams(service.paramEnums, params).length === 0
   )
@@ -160,15 +167,60 @@ export function paramsFit(
  * Array values repeat the key (symbols=ETH&symbols=BTC), which is the form the
  * published schemas ask for.
  */
+/** Placeholder segments in a catalogued URL, e.g. `{id}` in `/coins/{id}`. */
+const PATH_PLACEHOLDER = /\{([^{}]+)\}/g
+
+/** The placeholder names a URL still expects to have filled. */
+export function pathPlaceholders(url: string): string[] {
+  return [...url.matchAll(PATH_PLACEHOLDER)].map((m) => m[1] as string)
+}
+
+/**
+ * Fill `{id}`-style segments from the step's parameters.
+ *
+ * 117 of the catalog's 955 resources are templates. Sent as published they are
+ * requested with the braces still in them — a failover once called
+ * `/api/v1/videos/generations/{id}` verbatim and read the 400 as the endpoint
+ * being broken.
+ *
+ * A parameter spent on the path is returned so the caller does not also append
+ * it to the query string, where it would be a duplicate the server ignores.
+ */
+export function applyPathParams(
+  url: string,
+  params: Record<string, unknown>,
+): { url: string; consumed: Set<string> } {
+  const consumed = new Set<string>()
+  const filled = url.replace(PATH_PLACEHOLDER, (whole, name: string) => {
+    const value = params[name]
+    if (value === undefined || value === null || value === '') return whole
+    consumed.add(name)
+    return encodeURIComponent(String(value))
+  })
+  return { url: filled, consumed }
+}
+
 export function requestUrl(
   step: PlanStep,
   inQuery: boolean = step.httpMethod === 'GET',
 ): string {
-  if (!inQuery) return step.endpointUrl
-  const entries = Object.entries(step.params ?? {})
-  if (entries.length === 0) return step.endpointUrl
+  const { url: pathFilled, consumed } = applyPathParams(step.endpointUrl, step.params ?? {})
 
-  const url = new URL(step.endpointUrl)
+  // An unfilled placeholder cannot be requested. Better to say so than to ask
+  // the server what it thinks of a literal "{id}".
+  const unfilled = pathPlaceholders(pathFilled)
+  if (unfilled.length > 0) {
+    throw new Error(
+      `${step.serviceName} needs ${unfilled.join(', ')} in its path, and the request did not ` +
+        `supply ${unfilled.length === 1 ? 'it' : 'them'}. Nothing was charged.`,
+    )
+  }
+
+  if (!inQuery) return pathFilled
+  const entries = Object.entries(step.params ?? {}).filter(([key]) => !consumed.has(key))
+  if (entries.length === 0) return pathFilled
+
+  const url = new URL(pathFilled)
   for (const [key, value] of entries) {
     /*
      * Replace, never add alongside.
@@ -201,6 +253,21 @@ export function requestUrl(
     }
   }
   return url.toString()
+}
+
+/**
+ * The endpoint's own last error body, if one was captured.
+ *
+ * Wrapped because building the URL can now throw — an unfilled path template
+ * is refused there — and a diagnostic must never replace the error it was
+ * trying to explain.
+ */
+function safeRecordedBody(step: PlanStep): string | null {
+  try {
+    return lastErrorBodyFor(requestUrl(step))
+  } catch {
+    return null
+  }
 }
 
 /** Pull an HTTP status out of an SDK error string, for the failure log. */
@@ -621,6 +688,36 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
               ? ({ method: 'POST', body: step.params } as const)
               : undefined
 
+          /*
+           * Price the call at the endpoint, not from the catalog, and hold the
+           * cap against that.
+           *
+           * Some sellers price per request: BlockRun lists 0.003 and quoted
+           * 0.027982 for one model. The cap was being tested against the
+           * catalogued figure and the wallet charged the live one, so an
+           * "absolute" cap could be exceeded nearly tenfold without anything
+           * noticing. The quote is exact and is never rounded — it is the
+           * number that will be paid.
+           */
+          const quote = await quoteFromEndpoint(requestUrl(step, inQuery), choice.chain, {
+            method: step.httpMethod,
+            ...(payOptions ? { body: step.params } : {}),
+          })
+
+          if (quote && totalSpent + Number(quote.amountUsdc) > spendingCapUsdc) {
+            emit(res, 'cap_exceeded', {
+              taskId,
+              totalSpent,
+              spendingCapUsdc,
+              nextStepCost: Number(quote.amountUsdc),
+              quotedUsdc: quote.amountUsdc,
+              catalogUsdc: step.estimatedCostUsdc,
+            })
+            await emitSummary('stopped')
+            finish('stopped')
+            return
+          }
+
           const result = await payWithMethodRecovery(
             clientFor(choice.chain),
             step,
@@ -720,11 +817,23 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           }
         }
 
-        // The SDK stringifies structured endpoint errors into "[object
-        // Object]". Recover what the endpoint actually said.
-        if (detail.includes('[object Object]')) {
-          const body = lastErrorBodyFor(requestUrl(step))
-          if (body) detail = `${detail.replace('[object Object]', '').trim()} ${body}`
+        /*
+         * Recover what the endpoint actually said.
+         *
+         * Two ways the SDK loses it. It stringifies a structured error into
+         * "[object Object]", and it reports only the `error` field of the
+         * response body — so "Payment failed: Payment settlement failed"
+         * arrives with whatever detail sat alongside it discarded. Settlement
+         * is the step that costs money and the hardest to reason about after
+         * the fact; the body is the only account of it we get.
+         */
+        {
+          const body = safeRecordedBody(step)
+          if (detail.includes('[object Object]') && body) {
+            detail = `${detail.replace('[object Object]', '').trim()} ${body}`
+          } else if (body && !detail.includes(body.slice(0, 40))) {
+            detail = `${detail} — endpoint said: ${body}`
+          }
         }
 
         /**
