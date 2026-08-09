@@ -71,6 +71,8 @@ export interface Service {
   trust: TrustTier
   /** Parameter names the endpoint requires, from its published schema. */
   requiredParams: string[]
+  /** Compact POST body shape, or null for GET / no published schema. */
+  bodyShape: string | null
   /** For free APIs: the paid category an x402 service could upgrade this to. */
   premiumCategory: string | null
 }
@@ -298,6 +300,33 @@ function normalise(item: DiscoveryItem): Omit<ServiceRow, 'synced_at'> | null {
  * to fill in, and shipping whole schemas for forty candidates would crowd out
  * the prompt.
  */
+/**
+ * A one-line sketch of a POST body: property names, their types, and which are
+ * required. Enough for the model to build the right envelope without shipping
+ * forty full JSON Schemas into the prompt.
+ */
+export function bodyShapeOf(inputSchema: string | null): string | null {
+  if (!inputSchema) return null
+  try {
+    const body = (JSON.parse(inputSchema) as { body?: Record<string, unknown> }).body
+    const properties = body?.['properties'] as Record<string, { type?: unknown }> | undefined
+    if (!properties) return null
+
+    const required = new Set(
+      Array.isArray(body?.['required']) ? (body['required'] as unknown[]).map(String) : [],
+    )
+    const parts = Object.entries(properties)
+      .slice(0, 12)
+      .map(([name, spec]) => {
+        const type = Array.isArray(spec?.type) ? spec.type.join('|') : (spec?.type ?? 'any')
+        return `${name}${required.has(name) ? '' : '?'}: ${String(type)}`
+      })
+    return parts.length ? `{ ${parts.join(', ')} }` : null
+  } catch {
+    return null
+  }
+}
+
 export function requiredParamsOf(inputSchema: string | null): string[] {
   if (!inputSchema) return []
   try {
@@ -607,6 +636,7 @@ export function rowToService(row: ServiceRow): Service {
     iconUrl: row.icon_url,
     trust: row.curated === 1 ? 'curated' : row.calls_30d > 0 ? 'active' : 'untested',
     requiredParams: requiredParamsOf(row.input_schema),
+    bodyShape: row.http_method === 'POST' ? bodyShapeOf(row.input_schema) : null,
   }
 }
 

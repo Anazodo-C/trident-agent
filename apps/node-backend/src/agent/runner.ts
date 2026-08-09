@@ -111,10 +111,24 @@ export function requestUrl(step: PlanStep): string {
      */
     url.searchParams.delete(key)
 
-    // The planner joins lists into one comma-separated string; split them back
-    // out so a repeated-key schema gets what it expects.
-    const parts = typeof value === 'string' && value.includes(',') ? value.split(',') : [value]
-    for (const part of parts) url.searchParams.append(key, String(part).trim())
+    /*
+     * params is arbitrary JSON now, because a POST body can nest. A query
+     * string cannot, so flatten here: arrays become repeated keys, objects are
+     * serialised, and a comma-joined string is split back into repeated keys
+     * for the schemas that ask for that form.
+     */
+    const parts = Array.isArray(value)
+      ? value
+      : typeof value === 'object' && value !== null
+        ? [JSON.stringify(value)]
+        : typeof value === 'string' && value.includes(',')
+          ? value.split(',')
+          : [value]
+
+    for (const part of parts) {
+      if (part === null || part === undefined) continue
+      url.searchParams.append(key, String(part).trim())
+    }
   }
   return url.toString()
 }

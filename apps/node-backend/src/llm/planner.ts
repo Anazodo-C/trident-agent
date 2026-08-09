@@ -30,23 +30,16 @@ export const StepSchema = z.object({
   serviceName: z.string().min(1),
   endpointUrl: z.string().url(),
   httpMethod: z.enum(['GET', 'POST']),
-  // Models emit numbers/booleans here often enough that coercing beats retrying.
-  // Lists too: asked for two coins, a model will reach for ["bitcoin","ethereum"]
-  // where the API wants ids=bitcoin,ethereum. Rejecting that burned all three
-  // retries and failed the whole plan, so it is joined instead — which is the
-  // encoding these query parameters use anyway.
-  params: z
-    .record(
-      z.union([
-        z.string(),
-        z.number(),
-        z.boolean(),
-        z
-          .array(z.union([z.string(), z.number(), z.boolean()]))
-          .transform((values) => values.join(',')),
-      ]),
-    )
-    .default({}),
+  /**
+   * Request inputs: query parameters for a GET, the request body for a POST.
+   *
+   * Any JSON value, because a POST body is not always flat — Goldsky's
+   * JSON-RPC endpoints want {jsonrpc, id, method, params: []}, and a schema
+   * limited to scalars could not express that, so the body went out malformed
+   * and the endpoint answered "failed to unmarshal json-rpc request" after the
+   * payment had settled. Query strings are flattened at request time instead.
+   */
+  params: z.record(z.unknown()).default({}),
   purpose: z.string().min(1),
   estimatedCostUsdc: z.number().nonnegative(),
 })
@@ -129,6 +122,9 @@ function systemPrompt(candidates: Service[]): string {
     // Named so the model fills them in. An endpoint called without its
     // required parameters answers 400 after the payment has authorised.
     requiredParams: s.requiredParams,
+    // POST bodies are structured, and the shape cannot be guessed from a list
+    // of names — 210 of the 215 POST services publish one.
+    ...(s.bodyShape ? { bodyShape: s.bodyShape } : {}),
     trust: s.trust,
     callsLast30Days: s.calls30d,
   }))
@@ -147,6 +143,8 @@ Rules:
 - estimatedCostUsdc MUST equal that service's "priceUsdc".
 - httpMethod MUST equal that service's "httpMethod". Do not infer it from the endpoint's name or purpose.
 - "params" MUST include every name listed in that service's "requiredParams", filled with a value drawn from the goal. A service called without them fails after the user has paid.
+- For a GET, "params" are query parameters and each value must be a string, number, boolean, or an array of those.
+- For a POST, "params" IS the request body. When the service has a "bodyShape", follow it exactly, including nested objects and arrays. A JSON-RPC service needs the full envelope, e.g. {"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]} — not a flattened key/value map.
 - Prefer trust "curated", then "active". A service with trust "untested" has no recorded usage and may not work — only choose one when nothing else fits the goal.
 - Order steps logically; stepIndex starts at 0 and increases by 1.
 - totalEstimatedCostUsdc must equal the sum of the steps' estimatedCostUsdc.
