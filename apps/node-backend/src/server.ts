@@ -14,7 +14,7 @@ import { messageOf, statusOf } from './http.ts'
 import { scrubSecrets } from './circle/gatewayService.ts'
 import { STORAGE_PERSISTENT } from './db.ts'
 import {
-  catalogSourceChanged,
+  catalogNeedsRebuild,
   syncFreeApis,
   syncRegistry,
   syncStatus,
@@ -147,10 +147,21 @@ function refreshRegistry(force = false): void {
 
   const status = syncStatus()
   const age = status.completedAt ? Math.floor(Date.now() / 1000) - status.completedAt : Infinity
-  // A catalog from a different provider is stale no matter how recently it was
-  // fetched, so the age check cannot be the only gate.
-  const staleSource = catalogSourceChanged()
-  if (!force && !staleSource && status.serviceCount > 0 && age < REGISTRY_STALE_SECONDS) return
+  /*
+   * Age is the weakest of the three gates and cannot be the only one.
+   *
+   * A catalog is equally stale when it came from another provider, and when
+   * this build reads fields the rows were never written with — editing the code
+   * does not make the data any older. That second case went unnoticed for a
+   * day: input_schema landed one commit after the source switch, so every
+   * deploy found a catalog under twelve hours old from an unchanged source and
+   * skipped the sync. The 6-hour forced refresh would have caught it, except
+   * each deploy restarts the process and resets that timer, and we were
+   * deploying far more often than that.
+   */
+  if (!force && !catalogNeedsRebuild() && status.serviceCount > 0 && age < REGISTRY_STALE_SECONDS) {
+    return
+  }
   syncRegistry().catch(() => undefined)
 }
 

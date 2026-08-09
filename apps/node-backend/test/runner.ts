@@ -19,8 +19,12 @@ import {
   runTask,
 } from '../src/agent/runner.ts'
 import {
+  CATALOG_SOURCE,
+  CATALOG_VERSION,
   __testFreeApiRows,
   bodyShapeOf,
+  catalogNeedsRebuild,
+  catalogSourceChanged,
   paramEnumsOf,
   paramLocationOf,
   requiredParamsOf,
@@ -435,6 +439,46 @@ async function main(): Promise<void> {
     const geo = rows.find((r) => r.id === 'free-openmeteo-geocode')
     check('the geocoding entry no longer carries name=lagos', !geo?.resource.includes('lagos'), geo?.resource)
     check('its fixed count=3 is kept', geo?.resource.includes('count=3') === true, geo?.resource)
+  }
+
+  // -------------------------------------------------------- catalog freshness
+  section('Catalog rebuild gate')
+  {
+    /*
+     * The gate that let four fixes ship against data nobody rewrote. Age is not
+     * a proxy for "written by this build", and the source marker was unchanged
+     * because the source really had not changed — only what we read from it.
+     */
+    const saved = (
+      db.prepare('SELECT source_version FROM registry_sync WHERE id = 1').get() as
+        | { source_version: string | null }
+        | undefined
+    )?.source_version
+
+    db.prepare(
+      `INSERT INTO registry_sync (id, started_at, status, source_version) VALUES (1, 0, 'done', ?)
+       ON CONFLICT(id) DO UPDATE SET source_version = excluded.source_version`,
+    ).run(CATALOG_SOURCE)
+    check(
+      'a catalog written before the schema bump is rebuilt',
+      catalogNeedsRebuild(),
+      'this is exactly what production was serving',
+    )
+    check(
+      'but its rows are not treated as another provider’s',
+      !catalogSourceChanged(),
+      'a schema bump must not trigger the delete',
+    )
+
+    db.prepare('UPDATE registry_sync SET source_version = ? WHERE id = 1').run(CATALOG_VERSION)
+    check('a current catalog is left alone', !catalogNeedsRebuild())
+
+    db.prepare('UPDATE registry_sync SET source_version = ? WHERE id = 1').run(
+      'coinbase-bazaar-v1#2',
+    )
+    check('a genuine source change is still caught', catalogSourceChanged() && catalogNeedsRebuild())
+
+    db.prepare('UPDATE registry_sync SET source_version = ? WHERE id = 1').run(saved ?? CATALOG_VERSION)
   }
 
   // --------------------------------------------------- unified balance math

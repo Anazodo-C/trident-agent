@@ -30,6 +30,26 @@ const PAGE_SIZE = 200 // Circle's documented maximum.
  * deployments rebuild instead of serving rows from the previous provider.
  */
 export const CATALOG_SOURCE = 'circle-agent-marketplace-v1'
+
+/**
+ * Bump whenever the sync starts reading something new out of the upstream
+ * payload.
+ *
+ * A row is only as good as the code that wrote it. `input_schema` was added one
+ * commit after the switch to Circle, so every deployment that had already
+ * synced kept a catalog where that column was NULL — and the source had not
+ * changed, so nothing triggered a rebuild. The planner was handed no body
+ * shapes, the runner found no required parameters to check, and both behaved
+ * exactly as if the endpoints published nothing. Four fixes shipped against
+ * data that was never rewritten.
+ *
+ * The upstream identity and our extraction of it are separate things, and both
+ * have to invalidate the stored copy.
+ */
+const CATALOG_SCHEMA_VERSION = 2
+
+/** What gets written to `registry_sync.source_version`. */
+export const CATALOG_VERSION = `${CATALOG_SOURCE}#${CATALOG_SCHEMA_VERSION}`
 const MAX_PAGES = 40
 const REQUEST_TIMEOUT_MS = 45_000
 
@@ -604,7 +624,7 @@ async function runSync(): Promise<SyncResult> {
     `INSERT INTO registry_sync (id, started_at, status, source_version) VALUES (1, ?, 'running', ?)
      ON CONFLICT(id) DO UPDATE SET started_at = excluded.started_at, status = 'running',
        error = NULL, source_version = excluded.source_version`,
-  ).run(Math.floor(startedAt / 1000), CATALOG_SOURCE)
+  ).run(Math.floor(startedAt / 1000), CATALOG_VERSION)
 
   const upsert = db.prepare(`
     INSERT INTO services (
@@ -734,14 +754,43 @@ export function syncFreeApis(): number {
   return rows.length
 }
 
-/** True when the stored catalog came from a different upstream than the code. */
+/** True when the stored rows came from a different upstream than the code. */
 export function catalogSourceChanged(): boolean {
   const row = db.prepare('SELECT source_version FROM registry_sync WHERE id = 1').get() as
     | { source_version: string | null }
     | undefined
   // No row at all is a first boot, which the normal empty-catalog path covers.
   if (!row) return false
-  return row.source_version !== CATALOG_SOURCE
+  // Compare the source alone. A schema bump alone does not orphan the rows, so
+  // it must not trigger the delete this guards.
+  return (row.source_version ?? '').split('#')[0] !== CATALOG_SOURCE
+}
+
+/**
+ * True when the stored catalog must be rebuilt, whatever its age.
+ *
+ * Two reasons, and the second is the one that bit. Either the upstream changed,
+ * or this build reads fields the rows were never written with — and age cannot
+ * detect that, because rewriting the code does not make the data older.
+ *
+ * The final clause is a self-heal for the case already in production, where the
+ * version marker says current but not one row carries a schema. It is a cheap
+ * indexed count, and it can only fire when the column is empty catalog-wide.
+ */
+export function catalogNeedsRebuild(): boolean {
+  const row = db.prepare('SELECT source_version FROM registry_sync WHERE id = 1').get() as
+    | { source_version: string | null }
+    | undefined
+  if (!row) return false
+  if (row.source_version !== CATALOG_VERSION) return true
+
+  const withSchema = db
+    .prepare(`SELECT COUNT(*) AS n FROM services WHERE source = 'x402' AND input_schema IS NOT NULL`)
+    .get() as { n: number }
+  const total = db
+    .prepare(`SELECT COUNT(*) AS n FROM services WHERE source = 'x402'`)
+    .get() as { n: number }
+  return total.n > 0 && withSchema.n === 0
 }
 
 export function syncStatus(): {
