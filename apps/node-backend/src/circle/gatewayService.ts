@@ -95,6 +95,95 @@ export function gatewayClientFor(
   })
 }
 
+const GATEWAY_API_MAINNET = 'https://gateway-api.circle.com/v1'
+const GATEWAY_API_TESTNET = 'https://gateway-api-testnet.circle.com/v1'
+
+export interface UnifiedBalance {
+  /** Total spendable across every queried domain, as a decimal USDC string. */
+  totalUsdc: string
+  /** Per-chain breakdown, so the wallet can show where the funds actually sit. */
+  byChain: { chain: SupportedChainName; usdc: string }[]
+}
+
+/**
+ * The Gateway balance across every domain at once.
+ *
+ * `GatewayClient.getBalances()` cannot answer this. It posts a single source —
+ * `[{ depositor, domain: this.chainConfig.domain }]` — and reads `balances[0]`,
+ * so it only ever reports the deposit sitting on the chain the client happens
+ * to be pointed at. That is the wrong number for a product built on Gateway:
+ * the whole point is that a deposit on Base is spendable on Polygon, so a
+ * "Polygon balance" of zero next to a working Polygon payment is not a
+ * discrepancy to explain, it is the SDK reading one row of several.
+ *
+ * The underlying API takes a list. This asks it the question the SDK does not.
+ */
+export async function unifiedGatewayBalance(
+  address: string,
+  chains: SupportedChainName[],
+  { timeoutMs = 12_000 }: { timeoutMs?: number } = {},
+): Promise<UnifiedBalance> {
+  const queried = chains.filter((chain) => CHAIN_CONFIGS[chain])
+  if (queried.length === 0) return { totalUsdc: '0', byChain: [] }
+
+  // Testnet and mainnet are separate deployments with separate ledgers, so a
+  // single call cannot span both. Callers pass one side or the other.
+  const isTestnet = queried.every((chain) => CHAIN_CONFIGS[chain].chain.testnet === true)
+  const base = isTestnet ? GATEWAY_API_TESTNET : GATEWAY_API_MAINNET
+
+  const byDomain = new Map<number, SupportedChainName>()
+  for (const chain of queried) byDomain.set(CHAIN_CONFIGS[chain].domain, chain)
+
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const response = await fetch(`${base}/balances`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        token: 'USDC',
+        sources: [...byDomain.keys()].map((domain) => ({ depositor: address, domain })),
+      }),
+    })
+
+    const payload = (await response.json()) as {
+      balances?: { domain: number; balance: string }[]
+      message?: string
+    }
+    if (!response.ok) {
+      throw new Error(payload.message ?? `Gateway balance request failed (${response.status})`)
+    }
+
+    // Summed in atomic units. Adding decimal strings as floats is how a balance
+    // acquires a rounding error, and this figure gates spending.
+    let totalAtomic = 0n
+    const byChain: { chain: SupportedChainName; usdc: string }[] = []
+    for (const entry of payload.balances ?? []) {
+      const chain = byDomain.get(entry.domain)
+      if (!chain) continue
+      totalAtomic += toAtomicUsdc(entry.balance)
+      byChain.push({ chain, usdc: entry.balance })
+    }
+
+    return { totalUsdc: fromAtomicUsdc(totalAtomic), byChain }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Parse a decimal USDC string to 6-decimal atomic units, without floats. */
+export function toAtomicUsdc(value: string): bigint {
+  const [whole = '0', fraction = ''] = value.trim().split('.')
+  return BigInt(whole) * 1_000_000n + BigInt(fraction.padEnd(6, '0').slice(0, 6))
+}
+
+export function fromAtomicUsdc(atomic: bigint): string {
+  const whole = atomic / 1_000_000n
+  const fraction = (atomic % 1_000_000n).toString().padStart(6, '0').replace(/0+$/, '')
+  return fraction ? `${whole}.${fraction}` : whole.toString()
+}
+
 /**
  * A signer used only to construct a client for reads.
  *

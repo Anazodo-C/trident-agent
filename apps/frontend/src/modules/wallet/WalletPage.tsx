@@ -197,6 +197,20 @@ function BalancePanel() {
                   <Row label="USDC (gateway, spendable)" value={usdc(b.gatewayAvailableUsdc)} />
                 )}
               {/*
+                Gateway pools every chain into one balance, so the row above —
+                what sits on THIS chain — is not what the agent can spend. When
+                the two differ, showing only the per-chain figure would report
+                nothing available on a chain a payment is about to succeed on.
+              */}
+              {!b.isTestnet &&
+                b.gatewaySpendableUsdc != null &&
+                b.gatewaySpendableUsdc !== b.gatewayUsdc && (
+                  <Row
+                    label="USDC (spendable on any chain)"
+                    value={usdc(b.gatewaySpendableUsdc)}
+                  />
+                )}
+              {/*
                 On Arc the native gas token is also called USDC but is a
                 separate, 18-decimal balance from the ERC-20 above — label it
                 so they don't read as the same number.

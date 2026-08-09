@@ -16,10 +16,11 @@ import {
   rpcUrlFor,
   strictChain,
   safeErrorMessage,
+  unifiedGatewayBalance,
 } from '../circle/gatewayService.ts'
 import { bridge, bridgeChainOptions, estimateBridge } from '../circle/bridgeService.ts'
 import { isValidPrivateKey } from '../auth/keySetup.ts'
-import { policyFor } from '../circle/chainPolicy.ts'
+import { GATEWAY_MAINNET_CHAINS, policyFor } from '../circle/chainPolicy.ts'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import type { UserRow } from '../db.ts'
 
@@ -136,12 +137,27 @@ router.all(
     let gatewayUsdc: string | null = null
     let gatewayAvailableUsdc: string | null = null
     let gatewayWarning: string | null = null
+    /*
+     * What the agent can actually spend, which is not the same as what is
+     * deposited on this chain. Gateway pools every domain into one balance, so
+     * a Base deposit pays a Polygon invoice — showing only the per-chain figure
+     * would report "0" on the chain a payment is about to succeed on.
+     */
+    let gatewaySpendableUsdc: string | null = null
 
     {
       try {
         const balances = await readOnlyGatewayClient(chain).getBalances(address)
         gatewayUsdc = balances.gateway.formattedTotal
         gatewayAvailableUsdc = balances.gateway.formattedAvailable
+
+        // Mainnet and testnet ledgers are separate; ask about the side this
+        // chain is on. A failure here must not take the per-chain figure down
+        // with it, so it is caught separately.
+        const peers = config.chain.testnet === true ? [chain] : GATEWAY_MAINNET_CHAINS
+        gatewaySpendableUsdc = await unifiedGatewayBalance(address, peers)
+          .then((unified) => unified.totalUsdc)
+          .catch(() => null)
       } catch (err) {
         // A Gateway API hiccup shouldn't blank out the on-chain balances.
         // This goes in the body, not a header: SDK messages contain newlines,
@@ -161,6 +177,7 @@ router.all(
       walletUsdc,
       gatewayUsdc,
       gatewayAvailableUsdc,
+      gatewaySpendableUsdc,
       gatewayWarning,
       native: formatEther(nativeRaw),
       nativeSymbol: config.chain.nativeCurrency.symbol,

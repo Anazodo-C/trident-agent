@@ -11,7 +11,12 @@ import {
   normalise,
   type ExecutionPlan,
 } from '../src/llm/planner.ts'
-import { chooseChain, policyFor, unpayableReason } from '../src/circle/chainPolicy.ts'
+import {
+  GATEWAY_MAINNET_CHAINS,
+  chooseChain,
+  policyFor,
+  unpayableReason,
+} from '../src/circle/chainPolicy.ts'
 import { findUpgrades } from '../src/circle/upgradeService.ts'
 import db from '../src/db.ts'
 import { isKnownResource, type Service } from '../src/circle/registryService.ts'
@@ -248,6 +253,50 @@ section('chain policy (mainnet is opt-in)')
     chooseChain(bothChains, opted)?.isTestnet === true,
   )
   check('a locked wallet still pays the testnet option', chooseChain(bothChains, locked)?.chain === 'arcTestnet')
+
+  /*
+   * Gateway pools every domain into one balance, so the chain a seller names
+   * is not a constraint on a wallet funded elsewhere. BlockRun publishes 119
+   * Polygon-only endpoints; all of them were unreachable while the user's
+   * funding chain doubled as a spending allowlist.
+   */
+  const polygonOnly = [
+    { network: 'eip155:137', chainKey: 'polygon' as const, isTestnet: false, priceUsdc: 0.003 },
+  ]
+  check(
+    'a wallet funded on Base can settle a Polygon-only service',
+    chooseChain(polygonOnly, opted)?.chain === 'polygon',
+    String(chooseChain(polygonOnly, opted)?.chain),
+  )
+  check(
+    'opting into mainnet opts into every Gateway domain, not one',
+    GATEWAY_MAINNET_CHAINS.every((chain) => opted.allowed.includes(chain)) &&
+      opted.allowed.length > 2,
+    opted.allowed.join(','),
+  )
+  check(
+    'the funding chain is still recorded, just no longer a limit',
+    opted.fundingChain === 'base',
+  )
+  check(
+    'mainnet stays off until opted in, on every chain',
+    locked.allowed.length === 1 && locked.allowed[0] === 'arcTestnet',
+    locked.allowed.join(','),
+  )
+  check(
+    'Arc mainnet is excluded — it has no RPC and constructing a client throws',
+    !GATEWAY_MAINNET_CHAINS.includes('arc'),
+  )
+  check(
+    'the cheapest permitted mainnet option still wins across chains',
+    chooseChain(
+      [
+        { network: 'eip155:137', chainKey: 'polygon' as const, isTestnet: false, priceUsdc: 0.05 },
+        { network: 'eip155:10', chainKey: 'optimism' as const, isTestnet: false, priceUsdc: 0.01 },
+      ],
+      opted,
+    )?.chain === 'optimism',
+  )
 }
 
 // ------------------------------------------------------------ premium upsell

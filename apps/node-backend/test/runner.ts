@@ -19,6 +19,7 @@ import {
   requiredParamsOf,
 } from '../src/circle/registryService.ts'
 import { FREE_API_CATALOG } from '../src/circle/freeApiCatalog.ts'
+import { fromAtomicUsdc, toAtomicUsdc } from '../src/circle/gatewayService.ts'
 import { __testSyncApprovedSteps } from '../src/routes/agent.ts'
 import type { PlanStep } from '../src/llm/planner.ts'
 import type { ChainPolicy } from '../src/circle/chainPolicy.ts'
@@ -27,7 +28,7 @@ import type { ChainPolicy } from '../src/circle/chainPolicy.ts'
 const TEST_POLICY: ChainPolicy = {
   allowed: ['arcTestnet'],
   testnet: 'arcTestnet',
-  mainnet: null,
+  fundingChain: null,
   mainnetEnabled: false,
 }
 
@@ -312,6 +313,29 @@ async function main(): Promise<void> {
     const geo = rows.find((r) => r.id === 'free-openmeteo-geocode')
     check('the geocoding entry no longer carries name=lagos', !geo?.resource.includes('lagos'), geo?.resource)
     check('its fixed count=3 is kept', geo?.resource.includes('count=3') === true, geo?.resource)
+  }
+
+  // --------------------------------------------------- unified balance math
+  section('Unified Gateway balance')
+  {
+    // Summed in atomic units because this figure gates spending. Adding the
+    // decimal strings as floats loses money in the sixth place.
+    check('a whole number parses', toAtomicUsdc('5') === 5_000_000n)
+    check('six decimals parse exactly', toAtomicUsdc('0.123456') === 123_456n)
+    check('a short fraction is padded, not truncated', toAtomicUsdc('0.1') === 100_000n)
+    check('more than six decimals is cut, never rounded up', toAtomicUsdc('0.1234567') === 123_456n)
+    check('round-trips', fromAtomicUsdc(toAtomicUsdc('12.345678')) === '12.345678')
+    check('trailing zeros are dropped', fromAtomicUsdc(1_500_000n) === '1.5')
+    check('zero reads as zero, not 0.', fromAtomicUsdc(0n) === '0')
+
+    // The case this exists for: the same funds spread over three domains.
+    const spread = ['0.05', '0.1', '0.000001'].reduce((sum, v) => sum + toAtomicUsdc(v), 0n)
+    check('balances across domains sum exactly', fromAtomicUsdc(spread) === '0.150001', fromAtomicUsdc(spread))
+    check(
+      'the float route would have been wrong',
+      0.05 + 0.1 + 0.000001 !== 0.150001,
+      'if this ever fails, the bigint path is no longer load-bearing',
+    )
   }
 
   // ------------------------------------------------------------ budget gate

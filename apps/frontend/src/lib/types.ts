@@ -212,6 +212,12 @@ export interface WalletBalance {
   walletUsdc: string
   gatewayUsdc: string | null
   gatewayAvailableUsdc: string | null
+  /**
+   * Spendable across every Gateway domain, not just this chain. Gateway pools
+   * deposits, so this is what the agent can actually pay with — a Base deposit
+   * settles a Polygon invoice.
+   */
+  gatewaySpendableUsdc: string | null
   /** Set when the on-chain read succeeded but the Gateway API call did not. */
   gatewayWarning: string | null
   native: string

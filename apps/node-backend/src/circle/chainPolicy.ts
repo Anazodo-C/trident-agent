@@ -1,3 +1,4 @@
+import { CHAIN_CONFIGS } from '@circle-fin/x402-batching/client'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import type { UserRow } from '../db.ts'
 import { isTestnetChain } from './registryService.ts'
@@ -8,6 +9,14 @@ import { isTestnetChain } from './registryService.ts'
  * Mainnet is opt-in and off by default. Until a user turns it on, the agent can
  * only settle with testnet funds, so no goal can cost real money by accident —
  * which matters because the agent spends autonomously once a plan is approved.
+ *
+ * Once it is on, though, the user's chosen chain says where they *fund*, not
+ * where they can spend. Gateway holds one balance across every domain it
+ * supports, so USDC deposited on Base settles a Polygon invoice without a
+ * bridge — that is the product. Treating the funding chain as a spending
+ * restriction threw away the whole point of paying through Gateway: BlockRun
+ * publishes 138 endpoints, 124 of them Gateway-payable and 119 Polygon-only,
+ * and every one was unreachable to a wallet funded on Base.
  */
 
 /** Label used in the users table and the API. */
@@ -20,27 +29,55 @@ export const CHAIN_LABEL_TO_KEY: Record<ChainLabel, SupportedChainName> = {
   ARC: 'arc',
 }
 
+/**
+ * Every mainnet chain Gateway settles on and this process can reach.
+ *
+ * Read from the SDK rather than listed here, so a chain Circle adds is
+ * available without a code change. Arc mainnet is excluded for the moment: it
+ * ships no RPC URL, and constructing a client for it throws.
+ */
+export const GATEWAY_MAINNET_CHAINS: SupportedChainName[] = (
+  Object.keys(CHAIN_CONFIGS) as SupportedChainName[]
+).filter((chain) => {
+  if (isTestnetChain(chain)) return false
+  const config = CHAIN_CONFIGS[chain]
+  return Boolean(config.rpcUrl ?? config.chain?.rpcUrls?.default?.http?.[0])
+})
+
 export interface ChainPolicy {
   /** Every chain this user may settle on. */
   allowed: SupportedChainName[]
   /** Testnet chain used for verification and the default demo path. */
   testnet: SupportedChainName
-  /** Mainnet chain, only present when the user has opted in. */
-  mainnet: SupportedChainName | null
+  /**
+   * Where mainnet USDC is deposited and withdrawn, only set once the user has
+   * opted in. Deliberately NOT a limit on settlement — see `allowed`.
+   */
+  fundingChain: SupportedChainName | null
   mainnetEnabled: boolean
 }
 
 export function policyFor(user: Pick<UserRow, 'default_chain' | 'mainnet_enabled' | 'mainnet_chain'>): ChainPolicy {
   const testnet = CHAIN_LABEL_TO_KEY[(user.default_chain as ChainLabel) ?? 'ARC-TESTNET'] ?? 'arcTestnet'
   const mainnetEnabled = user.mainnet_enabled === 1
-  const mainnet = mainnetEnabled
+  const fundingChain = mainnetEnabled
     ? (CHAIN_LABEL_TO_KEY[(user.mainnet_chain as ChainLabel) ?? 'BASE'] ?? 'base')
     : null
 
+  /*
+   * Opting into mainnet opts into all of Gateway's mainnet domains, not one.
+   * The consent that matters is "may this agent spend real money" — which chain
+   * the invoice happens to name is an implementation detail of the seller, and
+   * the funds are drawn from the same balance either way.
+   */
   const allowed: SupportedChainName[] = [testnet]
-  if (mainnet && !allowed.includes(mainnet)) allowed.push(mainnet)
+  if (mainnetEnabled) {
+    for (const chain of GATEWAY_MAINNET_CHAINS) {
+      if (!allowed.includes(chain)) allowed.push(chain)
+    }
+  }
 
-  return { allowed, testnet, mainnet, mainnetEnabled }
+  return { allowed, testnet, fundingChain, mainnetEnabled }
 }
 
 export interface ChainChoice {
@@ -64,12 +101,15 @@ export interface ServiceNetworkLike {
 /**
  * The only scheme GatewayClient.pay() can settle.
  *
- * A service can advertise Base and a price and still be unpayable: Gateway
- * settles batched authorisations, and an endpoint offering only the `exact`
- * scheme has no batching option for the client to use. Of 13,824 services
- * settling on Base mainnet, 51 offer this. Choosing without checking is how a
- * run reaches "No Gateway batching option available for network eip155:8453"
- * after the user has already approved it.
+ * A service can advertise a chain and a price and still be unpayable: Gateway
+ * settles batched authorisations, and an endpoint without the batching marker
+ * has no option for the client to use. Choosing without checking is how a run
+ * reaches "No Gateway batching option available" after the user has already
+ * approved it.
+ *
+ * Note this is the scheme *label*, which is not what the check keys on —
+ * Circle's listings all read `exact` and carry the marker in `extra`. See
+ * `gatewayBatchable`.
  */
 export const GATEWAY_SCHEME = 'batch-settlement'
 
