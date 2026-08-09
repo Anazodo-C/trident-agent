@@ -33,6 +33,33 @@ function isBalanceError(message: string): boolean {
   return /insufficient|balance|not enough funds/i.test(message)
 }
 
+/**
+ * The URL to actually request.
+ *
+ * A POST carries its parameters in the body, but a GET has nowhere to put them
+ * except the query string — and nothing was putting them there. Endpoints with
+ * required query parameters were called with none, so they answered 400 after
+ * the payment had already authorised, surfacing as "Payment failed: Bad
+ * Request" and looking like a wallet problem.
+ *
+ * Array values repeat the key (symbols=ETH&symbols=BTC), which is the form the
+ * published schemas ask for.
+ */
+export function requestUrl(step: PlanStep): string {
+  if (step.httpMethod !== 'GET') return step.endpointUrl
+  const entries = Object.entries(step.params ?? {})
+  if (entries.length === 0) return step.endpointUrl
+
+  const url = new URL(step.endpointUrl)
+  for (const [key, value] of entries) {
+    // The planner joins lists into one comma-separated string; split them back
+    // out so a repeated-key schema gets what it expects.
+    const parts = typeof value === 'string' && value.includes(',') ? value.split(',') : [value]
+    for (const part of parts) url.searchParams.append(key, String(part).trim())
+  }
+  return url.toString()
+}
+
 /** Pull an HTTP status out of an SDK error string, for the failure log. */
 function httpStatusOf(message: string): number | null {
   const match = message.match(/\b(4\d{2}|5\d{2})\b/)
@@ -79,7 +106,7 @@ async function payWithMethodRecovery(
    * how a run got as far as the payment before failing. supports() is the
    * unpaid 402 probe, so this costs a round trip and no money.
    */
-  const support = await client.supports(step.endpointUrl).catch(() => null)
+  const support = await client.supports(requestUrl(step)).catch(() => null)
   if (support && support.supported === false) {
     throw new Error(
       support.error ??
@@ -88,7 +115,7 @@ async function payWithMethodRecovery(
   }
 
   try {
-    return await client.pay(step.endpointUrl, payOptions)
+    return await client.pay(requestUrl(step), payOptions)
   } catch (err) {
     const detail = safeErrorMessage(err)
     if (!isMethodNotAllowed(detail)) throw err
@@ -104,7 +131,7 @@ async function payWithMethodRecovery(
 
     step.httpMethod = flipped
     return await client.pay(
-      step.endpointUrl,
+      requestUrl(step),
       flipped === 'POST' ? ({ method: 'POST', body: step.params } as const) : undefined,
     )
   }

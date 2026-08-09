@@ -126,6 +126,9 @@ function systemPrompt(candidates: Service[]): string {
     // from the endpoint. It is overwritten from the registry after planning
     // regardless — this is here so the plan the user approves is coherent.
     httpMethod: s.httpMethod,
+    // Named so the model fills them in. An endpoint called without its
+    // required parameters answers 400 after the payment has authorised.
+    requiredParams: s.requiredParams,
     trust: s.trust,
     callsLast30Days: s.calls30d,
   }))
@@ -143,6 +146,7 @@ Rules:
 - serviceName MUST match that service's "name" exactly.
 - estimatedCostUsdc MUST equal that service's "priceUsdc".
 - httpMethod MUST equal that service's "httpMethod". Do not infer it from the endpoint's name or purpose.
+- "params" MUST include every name listed in that service's "requiredParams", filled with a value drawn from the goal. A service called without them fails after the user has paid.
 - Prefer trust "curated", then "active". A service with trust "untested" has no recorded usage and may not work — only choose one when nothing else fits the goal.
 - Order steps logically; stepIndex starts at 0 and increases by 1.
 - totalEstimatedCostUsdc must equal the sum of the steps' estimatedCostUsdc.

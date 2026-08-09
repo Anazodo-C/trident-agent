@@ -69,6 +69,8 @@ export interface Service {
   lastCalledAt: string | null
   iconUrl: string | null
   trust: TrustTier
+  /** Parameter names the endpoint requires, from its published schema. */
+  requiredParams: string[]
   /** For free APIs: the paid category an x402 service could upgrade this to. */
   premiumCategory: string | null
 }
@@ -146,6 +148,7 @@ interface DiscoveryMetadata {
   method?: string
   description?: string
   mimeType?: string
+  input?: unknown
   siwx?: boolean
   supportsVanillax402?: boolean
   supportsCircleGateway?: boolean
@@ -284,6 +287,30 @@ function normalise(item: DiscoveryItem): Omit<ServiceRow, 'synced_at'> | null {
     payers_30d: 0,
     last_called_at: null,
     icon_url: null,
+    input_schema: meta.input ? JSON.stringify(meta.input) : null,
+  }
+}
+
+/**
+ * The parameter names an endpoint requires, pulled out of its JSON Schema.
+ *
+ * Only the names, and only the required ones: the planner needs to know what
+ * to fill in, and shipping whole schemas for forty candidates would crowd out
+ * the prompt.
+ */
+export function requiredParamsOf(inputSchema: string | null): string[] {
+  if (!inputSchema) return []
+  try {
+    const schema = JSON.parse(inputSchema) as {
+      queryParams?: { required?: unknown }
+      body?: { required?: unknown }
+    }
+    return [
+      ...(Array.isArray(schema.queryParams?.required) ? schema.queryParams.required : []),
+      ...(Array.isArray(schema.body?.required) ? schema.body.required : []),
+    ].map(String)
+  } catch {
+    return []
   }
 }
 
@@ -329,6 +356,7 @@ function freeApiRows(syncedAt: number): ServiceRow[] {
     payers_30d: 0,
     last_called_at: null,
     icon_url: null,
+    input_schema: null,
     synced_at: syncedAt,
   }))
 }
@@ -394,17 +422,18 @@ async function runSync(): Promise<SyncResult> {
     INSERT INTO services (
       id, resource, source, service_name, description, tags, host, network, chain_key,
       is_testnet, networks_json, asset, price_usdc, scheme, http_method, curated,
-      calls_30d, payers_30d, last_called_at, icon_url, synced_at
+      calls_30d, payers_30d, last_called_at, icon_url, input_schema, synced_at
     ) VALUES (
       @id, @resource, @source, @service_name, @description, @tags, @host, @network, @chain_key,
       @is_testnet, @networks_json, @asset, @price_usdc, @scheme, @http_method, @curated,
-      @calls_30d, @payers_30d, @last_called_at, @icon_url, @synced_at
+      @calls_30d, @payers_30d, @last_called_at, @icon_url, @input_schema, @synced_at
     )
     ON CONFLICT(resource) DO UPDATE SET
       source = excluded.source, service_name = excluded.service_name, description = excluded.description,
       tags = excluded.tags, host = excluded.host, network = excluded.network,
       chain_key = excluded.chain_key, is_testnet = excluded.is_testnet,
       networks_json = excluded.networks_json, asset = excluded.asset,
+      input_schema = excluded.input_schema,
       price_usdc = excluded.price_usdc, scheme = excluded.scheme,
       curated = excluded.curated, calls_30d = excluded.calls_30d,
       payers_30d = excluded.payers_30d, last_called_at = excluded.last_called_at,
@@ -476,11 +505,11 @@ export function syncFreeApis(): number {
     INSERT INTO services (
       id, resource, source, service_name, description, tags, host, network, chain_key,
       is_testnet, networks_json, asset, price_usdc, scheme, http_method, curated,
-      calls_30d, payers_30d, last_called_at, icon_url, synced_at
+      calls_30d, payers_30d, last_called_at, icon_url, input_schema, synced_at
     ) VALUES (
       @id, @resource, @source, @service_name, @description, @tags, @host, @network, @chain_key,
       @is_testnet, @networks_json, @asset, @price_usdc, @scheme, @http_method, @curated,
-      @calls_30d, @payers_30d, @last_called_at, @icon_url, @synced_at
+      @calls_30d, @payers_30d, @last_called_at, @icon_url, @input_schema, @synced_at
     )
     ON CONFLICT(resource) DO UPDATE SET
       source = excluded.source, service_name = excluded.service_name,
@@ -488,6 +517,7 @@ export function syncFreeApis(): number {
       network = excluded.network, chain_key = excluded.chain_key,
       is_testnet = excluded.is_testnet, networks_json = excluded.networks_json,
       asset = excluded.asset, price_usdc = excluded.price_usdc, scheme = excluded.scheme,
+      input_schema = excluded.input_schema,
       curated = excluded.curated, calls_30d = excluded.calls_30d,
       synced_at = excluded.synced_at
   `)
@@ -558,6 +588,7 @@ export function rowToService(row: ServiceRow): Service {
     lastCalledAt: row.last_called_at,
     iconUrl: row.icon_url,
     trust: row.curated === 1 ? 'curated' : row.calls_30d > 0 ? 'active' : 'untested',
+    requiredParams: requiredParamsOf(row.input_schema),
   }
 }
 

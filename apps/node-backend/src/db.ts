@@ -221,6 +221,13 @@ addColumnIfMissing('users', 'kdf_iterations', 'INTEGER DEFAULT 200000')
  * provider. Recording the source means a swap forces a rebuild.
  */
 addColumnIfMissing('registry_sync', 'source_version', 'TEXT')
+/**
+ * JSON Schema for the endpoint's inputs, as published by discovery.
+ *
+ * Without it the planner guesses parameter names, and a service called with
+ * none of its required ones answers 400 — after the payment has authorised.
+ */
+addColumnIfMissing('services', 'input_schema', 'TEXT')
 
 export interface MessageRow {
   id: string
@@ -253,6 +260,7 @@ export interface ServiceRow {
   payers_30d: number
   last_called_at: string | null
   icon_url: string | null
+  input_schema: string | null
   synced_at: number | null
 }
 
