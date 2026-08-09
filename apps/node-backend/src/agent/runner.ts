@@ -62,7 +62,10 @@ export function requestUrl(step: PlanStep): string {
 
 /** Pull an HTTP status out of an SDK error string, for the failure log. */
 function httpStatusOf(message: string): number | null {
-  const match = message.match(/\b(4\d{2}|5\d{2})\b/)
+  // Anchored to how a status is actually written, not any three digits in the
+  // prose — "Resource does not require payment (not 402)" was being logged
+  // with status 402, which is the opposite of what happened.
+  const match = message.match(/\b(?:status|code|HTTP)\D{0,3}(\d{3})\b/i)
   return match ? Number(match[1]) : null
 }
 
@@ -106,12 +109,19 @@ async function payWithMethodRecovery(
    * how a run got as far as the payment before failing. supports() is the
    * unpaid 402 probe, so this costs a round trip and no money.
    */
+  /*
+   * Only trust a "no" that is actually about Gateway.
+   *
+   * supports() probes without a request body, so a POST endpoint that needs
+   * one answers something other than 402 and the check reports "Resource does
+   * not require payment". That says nothing about whether Gateway can settle
+   * it — and blocking on it turned a working endpoint into a failed run. Treat
+   * that reason as inconclusive and let pay() decide; block only when the SDK
+   * names the batching option as the problem.
+   */
   const support = await client.supports(requestUrl(step)).catch(() => null)
-  if (support && support.supported === false) {
-    throw new Error(
-      support.error ??
-        'This endpoint does not offer Gateway batch settlement, so the agent cannot pay it.',
-    )
+  if (support?.supported === false && /gateway|batching/i.test(support.error ?? '')) {
+    throw new Error(support.error ?? 'This endpoint cannot be paid through Gateway.')
   }
 
   try {

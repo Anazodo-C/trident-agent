@@ -124,7 +124,38 @@ export function scrubSecrets(message: string): string {
 
 export function safeErrorMessage(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err)
-  return scrubSecrets(raw)
+
+  /*
+   * SDK errors sometimes carry the real detail in a nested object, and
+   * String() renders that as "[object Object]" — which is what a Goldsky
+   * failure looked like in the logs, saying nothing at all. Serialise the
+   * payload instead, and keep any Error message alongside it.
+   */
+  const detail = objectDetail(err)
+  const combined = detail && !raw.includes(detail) ? `${raw} ${detail}` : raw
+
+  return scrubSecrets(combined).slice(0, 600)
+}
+
+/** JSON for the parts of a thrown value that String() would flatten away. */
+function objectDetail(err: unknown): string {
+  const candidates = [
+    (err as { cause?: unknown })?.cause,
+    (err as { response?: unknown })?.response,
+    (err as { data?: unknown })?.data,
+    (err as { body?: unknown })?.body,
+    err instanceof Error ? null : err,
+  ]
+  for (const candidate of candidates) {
+    if (!candidate || typeof candidate !== 'object') continue
+    try {
+      const json = JSON.stringify(candidate)
+      if (json && json !== '{}') return json
+    } catch {
+      /* circular or unserialisable — try the next candidate */
+    }
+  }
+  return ''
 }
 
 export { CHAIN_CONFIGS }
