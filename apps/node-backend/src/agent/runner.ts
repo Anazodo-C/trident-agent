@@ -71,30 +71,60 @@ async function payOnce(
   client: GatewayClient,
   step: PlanStep,
   payOptions: { method: 'POST'; body: Record<string, unknown> } | undefined,
+  inQuery: boolean,
 ): Promise<Awaited<ReturnType<GatewayClient['pay']>>> {
   try {
-    return await client.pay(requestUrl(step), payOptions)
+    return await client.pay(requestUrl(step, inQuery), payOptions)
   } catch (err) {
     if (!/temporarily unavailable|please retry/i.test(safeErrorMessage(err))) throw err
     await new Promise((resolve) => setTimeout(resolve, 1500))
-    return await client.pay(requestUrl(step), payOptions)
+    return await client.pay(requestUrl(step, inQuery), payOptions)
   }
+}
+
+/**
+ * The required parameters this step has not supplied.
+ *
+ * Checked against the registry's copy of the service, never the plan's — the
+ * plan is model output, and a model that forgot a parameter is equally capable
+ * of forgetting it was required.
+ *
+ * Empty strings count as missing. A blank search term is not a search.
+ */
+export function missingRequiredParams(
+  required: string[],
+  params: Record<string, unknown>,
+): string[] {
+  return required.filter((name) => {
+    const value = params[name]
+    if (value === undefined || value === null) return true
+    if (typeof value === 'string' && value.trim() === '') return true
+    if (Array.isArray(value) && value.length === 0) return true
+    return false
+  })
 }
 
 /**
  * The URL to actually request.
  *
- * A POST carries its parameters in the body, but a GET has nowhere to put them
- * except the query string — and nothing was putting them there. Endpoints with
- * required query parameters were called with none, so they answered 400 after
- * the payment had already authorised, surfacing as "Payment failed: Bad
- * Request" and looking like a wallet problem.
+ * A GET has nowhere to put its parameters except the query string — and
+ * nothing was putting them there. Endpoints with required query parameters
+ * were called with none, so they answered 400 after the payment had already
+ * authorised, surfacing as "Payment failed: Bad Request" and looking like a
+ * wallet problem.
+ *
+ * `inQuery` exists because the verb does not settle the question. A handful of
+ * POST services read their arguments from the query string too, so the caller
+ * passes what the service's schema actually declared.
  *
  * Array values repeat the key (symbols=ETH&symbols=BTC), which is the form the
  * published schemas ask for.
  */
-export function requestUrl(step: PlanStep): string {
-  if (step.httpMethod !== 'GET') return step.endpointUrl
+export function requestUrl(
+  step: PlanStep,
+  inQuery: boolean = step.httpMethod === 'GET',
+): string {
+  if (!inQuery) return step.endpointUrl
   const entries = Object.entries(step.params ?? {})
   if (entries.length === 0) return step.endpointUrl
 
@@ -172,6 +202,7 @@ async function payWithMethodRecovery(
   client: GatewayClient,
   step: PlanStep,
   payOptions: { method: 'POST'; body: Record<string, unknown> } | undefined,
+  inQuery: boolean,
 ): Promise<Awaited<ReturnType<GatewayClient['pay']>>> {
   /**
    * Ask the endpoint, not the catalog, before spending.
@@ -192,13 +223,13 @@ async function payWithMethodRecovery(
    * that reason as inconclusive and let pay() decide; block only when the SDK
    * names the batching option as the problem.
    */
-  const support = await client.supports(requestUrl(step)).catch(() => null)
+  const support = await client.supports(requestUrl(step, inQuery)).catch(() => null)
   if (support?.supported === false && /gateway|batching/i.test(support.error ?? '')) {
     throw new Error(support.error ?? 'This endpoint cannot be paid through Gateway.')
   }
 
   try {
-    return await payOnce(client, step, payOptions)
+    return await payOnce(client, step, payOptions, inQuery)
   } catch (err) {
     const detail = safeErrorMessage(err)
     if (!isMethodNotAllowed(detail)) throw err
@@ -212,9 +243,11 @@ async function payWithMethodRecovery(
       JSON.stringify({ url: step.endpointUrl, was: step.httpMethod, now: flipped }),
     )
 
+    // The published location no longer applies once the verb has changed under
+    // us, so fall back to the convention for the new one.
     step.httpMethod = flipped
     return await client.pay(
-      requestUrl(step),
+      requestUrl(step, flipped === 'GET'),
       flipped === 'POST' ? ({ method: 'POST', body: step.params } as const) : undefined,
     )
   }
@@ -483,6 +516,28 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           )
         }
 
+        /*
+         * Refuse to spend on a call that cannot answer the question.
+         *
+         * Everything below this line moves money — the x402 payment, and on the
+         * free path the Arc Testnet verification transfer. A call missing a
+         * required parameter has two ways to end and both are bad: the endpoint
+         * rejects it and the user has paid for an error, or it accepts it and
+         * answers about something else. A request for the University of Ibadan
+         * that reached the geocoder without a `name` was answered with Lagos,
+         * at 200, and billed.
+         *
+         * The registry's list is the authority here, not the plan's — see
+         * missingRequiredParams.
+         */
+        const missing = missingRequiredParams(service.requiredParams, step.params)
+        if (missing.length > 0) {
+          throw new Error(
+            `${service.serviceName} needs ${missing.join(', ')} to answer this, and the request ` +
+              `did not include ${missing.length === 1 ? 'it' : 'them'}. Nothing was charged.`,
+          )
+        }
+
         let cost: number
         let txRef: string
         let verificationTx: string | null = null
@@ -498,14 +553,22 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           txRef = receipt.txHash
           cost = receipt.amountUsdc
 
-          const response = await callFreeApi(step.endpointUrl, {
+          const response = await callFreeApi(requestUrl(step), {
             method: step.httpMethod,
             ...(step.httpMethod === 'POST' ? { body: step.params } : {}),
           })
           data = response.data
         } else {
+          /*
+           * A POST does not imply a body. Eight of the catalog's POST services
+           * declare `queryParams` instead, and sending them a body left the
+           * query string empty — AIsa's scholar search answered "Field
+           * required" for a field that had been supplied, to the wrong place.
+           * Where no schema was published at all, a body is the safer guess.
+           */
+          const inQuery = step.httpMethod === 'GET' || service.paramLocation === 'query'
           const payOptions =
-            step.httpMethod === 'POST'
+            step.httpMethod === 'POST' && !inQuery
               ? ({ method: 'POST', body: step.params } as const)
               : undefined
 
@@ -513,6 +576,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
             clientFor(choice.chain),
             step,
             payOptions,
+            inQuery,
           )
           const parsed = Number.parseFloat(result.formattedAmount)
           cost = Number.isFinite(parsed) ? parsed : 0

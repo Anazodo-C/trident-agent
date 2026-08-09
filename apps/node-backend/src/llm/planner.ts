@@ -142,9 +142,11 @@ Rules:
 - serviceName MUST match that service's "name" exactly.
 - estimatedCostUsdc MUST equal that service's "priceUsdc".
 - httpMethod MUST equal that service's "httpMethod". Do not infer it from the endpoint's name or purpose.
-- "params" MUST include every name listed in that service's "requiredParams", filled with a value drawn from the goal. A service called without them fails after the user has paid.
+- "params" MUST include every name listed in that service's "requiredParams", filled with a value drawn from the goal. The run is now stopped before any payment when one is missing, so an omission costs the user their answer.
+- Every required value must come from the goal. Never carry over an example from a description or a URL, and never invent a placeholder to fill a slot — if the goal does not supply what a service requires, that service is the wrong choice for it.
 - For a GET, "params" are query parameters and each value must be a string, number, boolean, or an array of those.
 - For a POST, "params" IS the request body. When the service has a "bodyShape", follow it exactly, including nested objects and arrays. A JSON-RPC service needs the full envelope, e.g. {"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]} — not a flattened key/value map.
+- Fill "params" by name in both cases. Whether they travel in the query string or the body is decided from the service's schema after planning, so do not restructure them for it.
 - Prefer trust "curated", then "active". A service with trust "untested" has no recorded usage and may not work — only choose one when nothing else fits the goal.
 - Order steps logically; stepIndex starts at 0 and increases by 1.
 - totalEstimatedCostUsdc must equal the sum of the steps' estimatedCostUsdc.
@@ -160,7 +162,7 @@ Spending limit:
 - If the cheapest route that accomplishes the goal costs MORE than the limit, still return it in "steps", and set minCostUsdc to its total. It will be shown to the user as a quote, not run. Do not substitute a cheaper route that does not actually accomplish the goal.
 
 Respond with exactly this JSON shape:
-{"goal":string,"steps":[{"stepIndex":number,"serviceName":string,"endpointUrl":string,"httpMethod":"GET"|"POST","params":object (values must be strings, numbers or booleans — join a list into one comma-separated string),"purpose":string,"estimatedCostUsdc":number}],"totalEstimatedCostUsdc":number,"reasoning":string,"alternativeSteps":[],"alternativeRoute":{"steps":[...same step shape...],"rationale":string}|null,"minCostUsdc":number}`
+{"goal":string,"steps":[{"stepIndex":number,"serviceName":string,"endpointUrl":string,"httpMethod":"GET"|"POST","params":object (a GET's query parameters, or a POST's full request body — nested objects and arrays allowed),"purpose":string,"estimatedCostUsdc":number}],"totalEstimatedCostUsdc":number,"reasoning":string,"alternativeSteps":[],"alternativeRoute":{"steps":[...same step shape...],"rationale":string}|null,"minCostUsdc":number}`
 }
 
 /**

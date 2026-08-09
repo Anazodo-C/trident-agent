@@ -73,6 +73,8 @@ export interface Service {
   requiredParams: string[]
   /** Compact POST body shape, or null for GET / no published schema. */
   bodyShape: string | null
+  /** Query string or request body, from the schema. Null when none was published. */
+  paramLocation: 'query' | 'body' | null
   /** For free APIs: the paid category an x402 service could upgrade this to. */
   premiumCategory: string | null
 }
@@ -294,12 +296,30 @@ function normalise(item: DiscoveryItem): Omit<ServiceRow, 'synced_at'> | null {
 }
 
 /**
- * The parameter names an endpoint requires, pulled out of its JSON Schema.
+ * Where a service reads its parameters from.
  *
- * Only the names, and only the required ones: the planner needs to know what
- * to fill in, and shipping whole schemas for forty candidates would crowd out
- * the prompt.
+ * Not inferrable from the HTTP method. Of the 337 POST services in the live
+ * catalog, 209 declare a `body` and 8 declare `queryParams` — a POST that reads
+ * its arguments from the query string. Sending those a body leaves the query
+ * empty, which is how a paid call to AIsa's scholar search came back
+ * "Field required" for a field the planner had in fact supplied.
+ *
+ * Null means the service published no schema (120 POSTs, including
+ * Orthogonal). Body is the safer guess there, but the caller should know it is
+ * a guess.
  */
+export function paramLocationOf(inputSchema: string | null): 'query' | 'body' | null {
+  if (!inputSchema) return null
+  try {
+    const schema = JSON.parse(inputSchema) as { queryParams?: unknown; body?: unknown }
+    if (schema.queryParams) return 'query'
+    if (schema.body) return 'body'
+    return null
+  } catch {
+    return null
+  }
+}
+
 /**
  * A one-line sketch of a POST body: property names, their types, and which are
  * required. Enough for the model to build the right envelope without shipping
@@ -327,6 +347,13 @@ export function bodyShapeOf(inputSchema: string | null): string | null {
   }
 }
 
+/**
+ * The parameter names an endpoint requires, pulled out of its JSON Schema.
+ *
+ * Only the names, and only the required ones: the planner needs to know what
+ * to fill in, and shipping whole schemas for forty candidates would crowd out
+ * the prompt. The runner checks the same list before it pays.
+ */
 export function requiredParamsOf(inputSchema: string | null): string[] {
   if (!inputSchema) return []
   try {
@@ -344,6 +371,31 @@ export function requiredParamsOf(inputSchema: string | null): string[] {
 }
 
 /**
+ * Drop the catalogued example values for parameters the planner is expected to
+ * fill.
+ *
+ * The geocoding entry was stored as "?name=lagos&count=3" so that the URL was
+ * demonstrably working when it was added. But a stored example is
+ * indistinguishable from an answer: a request for the University of Ibadan
+ * that arrived without a `name` was served Lagos, with HTTP 200 and no hint
+ * that anything was wrong. Removing the value means the same call now returns
+ * nothing and says so.
+ *
+ * Only the declared parameters go. Fixed parts of the URL — `count=3`,
+ * `format=json`, an API version — are configuration, not answers, and stay.
+ */
+function withoutExampleValues(resource: string, params?: string[]): string {
+  if (!params?.length) return resource
+  try {
+    const url = new URL(resource)
+    for (const name of params) url.searchParams.delete(name)
+    return url.toString()
+  } catch {
+    return resource
+  }
+}
+
+/**
  * Free public APIs, stored in the same table as x402 services so search,
  * retrieval and the runner treat them uniformly.
  *
@@ -351,6 +403,14 @@ export function requiredParamsOf(inputSchema: string | null): string[] {
  * free call still moves value on chain before it runs, so the cost shown is the
  * cost actually incurred.
  */
+/**
+ * Test seam: the free-catalog rows exactly as sync would write them, so a test
+ * can assert no example value survives into the registry.
+ */
+export function __testFreeApiRows(): ServiceRow[] {
+  return freeApiRows(0)
+}
+
 function freeApiRows(syncedAt: number): ServiceRow[] {
   const option: ServiceNetworkOption = {
     network: `eip155:${CHAIN_CONFIGS[VERIFICATION_CHAIN].chain.id}`,
@@ -363,7 +423,7 @@ function freeApiRows(syncedAt: number): ServiceRow[] {
 
   return FREE_API_CATALOG.map((api) => ({
     id: `free-${api.id}`,
-    resource: api.resource,
+    resource: withoutExampleValues(api.resource, api.params),
     source: 'free',
     service_name: api.name,
     description: api.description,
@@ -568,7 +628,26 @@ export function syncFreeApis(): number {
       curated = excluded.curated, calls_30d = excluded.calls_30d,
       synced_at = excluded.synced_at
   `)
+  /*
+   * Drop free rows that are no longer in the catalog before writing it back.
+   *
+   * Not housekeeping — required for correctness. The upsert reconciles on
+   * `resource`, but `id` is the primary key, so an entry whose URL changed
+   * arrives as a new resource carrying an id that is already taken: the insert
+   * hits the primary key, the conflict clause does not cover it, and boot
+   * fails. Stripping the example values from the geocoding URL is exactly that
+   * case. Deleting first also stops the superseded URL lingering as a
+   * selectable endpoint, which for the entry that used to answer "lagos" would
+   * leave the bug in place under a stale row.
+   */
+  const keep = rows.map((row) => row.resource)
   db.transaction(() => {
+    if (keep.length > 0) {
+      db.prepare(
+        `DELETE FROM services
+          WHERE source = 'free' AND resource NOT IN (${keep.map(() => '?').join(',')})`,
+      ).run(...keep)
+    }
     for (const row of rows) upsert.run(row)
   })()
   return rows.length
@@ -637,6 +716,7 @@ export function rowToService(row: ServiceRow): Service {
     trust: row.curated === 1 ? 'curated' : row.calls_30d > 0 ? 'active' : 'untested',
     requiredParams: requiredParamsOf(row.input_schema),
     bodyShape: row.http_method === 'POST' ? bodyShapeOf(row.input_schema) : null,
+    paramLocation: paramLocationOf(row.input_schema),
   }
 }
 

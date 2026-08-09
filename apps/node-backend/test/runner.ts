@@ -11,7 +11,14 @@ import { createHash, randomUUID } from 'node:crypto'
 import { generatePrivateKey } from 'viem/accounts'
 import type { Response } from 'express'
 import db from '../src/db.ts'
-import { runTask } from '../src/agent/runner.ts'
+import { missingRequiredParams, requestUrl, runTask } from '../src/agent/runner.ts'
+import {
+  __testFreeApiRows,
+  bodyShapeOf,
+  paramLocationOf,
+  requiredParamsOf,
+} from '../src/circle/registryService.ts'
+import { FREE_API_CATALOG } from '../src/circle/freeApiCatalog.ts'
 import { __testSyncApprovedSteps } from '../src/routes/agent.ts'
 import type { PlanStep } from '../src/llm/planner.ts'
 import type { ChainPolicy } from '../src/circle/chainPolicy.ts'
@@ -182,9 +189,130 @@ function taskStatus(taskId: string): string {
     .status
 }
 
+/** A PlanStep carrying only what the URL builder reads. */
+function urlStep(url: string, method: 'GET' | 'POST', params: Record<string, unknown>): PlanStep {
+  return {
+    stepIndex: 0,
+    serviceName: 'Demo',
+    endpointUrl: url,
+    httpMethod: method,
+    params,
+    purpose: '',
+    estimatedCostUsdc: 0,
+  }
+}
+
 async function main(): Promise<void> {
   console.log('\x1b[1mTrident runner tests\x1b[0m\n')
   const key = generatePrivateKey()
+
+  /*
+   * These were verified by hand when they were written and had no tests, which
+   * is how a request for the University of Ibadan came back as Lagos twice
+   * across two separate fixes. They are pure functions; there is no excuse.
+   */
+  // ------------------------------------------------- request construction
+  section('Request construction')
+  {
+    const geo = 'https://geocoding-api.open-meteo.com/v1/search?name=lagos&count=3'
+
+    const overridden = new URL(requestUrl(urlStep(geo, 'GET', { name: 'Ibadan' })))
+    check(
+      'a supplied parameter replaces the catalogued example, not appends to it',
+      overridden.searchParams.getAll('name').join('|') === 'Ibadan',
+      overridden.search,
+    )
+    check(
+      'fixed parts of a catalogued URL survive',
+      overridden.searchParams.get('count') === '3',
+    )
+
+    const arr = new URL(requestUrl(urlStep('https://x.dev/p', 'GET', { s: ['BTC', 'ETH'] })))
+    check('an array becomes repeated keys', arr.searchParams.getAll('s').join(',') === 'BTC,ETH')
+
+    const csv = new URL(requestUrl(urlStep('https://x.dev/p', 'GET', { s: 'BTC,ETH' })))
+    check('a comma string becomes repeated keys', csv.searchParams.getAll('s').join(',') === 'BTC,ETH')
+
+    const obj = new URL(requestUrl(urlStep('https://x.dev/p', 'GET', { f: { a: 1 } })))
+    check('a nested object is serialised', obj.searchParams.get('f') === '{"a":1}')
+
+    // A POST defaults to carrying nothing in the query...
+    const postDefault = requestUrl(urlStep('https://x.dev/p', 'POST', { query: 'ml' }))
+    check('a POST leaves the URL alone by default', postDefault === 'https://x.dev/p')
+
+    // ...unless the service declared queryParams, as AIsa's scholar search does.
+    const postQuery = new URL(requestUrl(urlStep('https://x.dev/p', 'POST', { query: 'ml' }), true))
+    check(
+      'a POST that declares queryParams gets a query string',
+      postQuery.searchParams.get('query') === 'ml',
+      postQuery.search,
+    )
+  }
+
+  // -------------------------------------------------- required parameters
+  section('Required parameters')
+  {
+    check(
+      'an absent parameter is missing',
+      missingRequiredParams(['name'], {}).join() === 'name',
+    )
+    check(
+      'a blank string is missing — an empty search is not a search',
+      missingRequiredParams(['q'], { q: '   ' }).join() === 'q',
+    )
+    check('an empty array is missing', missingRequiredParams(['ids'], { ids: [] }).join() === 'ids')
+    check('a supplied value passes', missingRequiredParams(['name'], { name: 'Ibadan' }).length === 0)
+    check(
+      'zero and false are values, not omissions',
+      missingRequiredParams(['a', 'b'], { a: 0, b: false }).length === 0,
+    )
+    check('every missing name is reported', missingRequiredParams(['a', 'b'], {}).join() === 'a,b')
+  }
+
+  // ------------------------------------------------------- schema reading
+  section('Published schema')
+  {
+    const query = JSON.stringify({ queryParams: { required: ['query'], properties: {} } })
+    const body = JSON.stringify({ body: { required: ['method'], properties: { method: { type: 'string' } } } })
+
+    check('a queryParams schema routes to the query string', paramLocationOf(query) === 'query')
+    check('a body schema routes to the body', paramLocationOf(body) === 'body')
+    check('no published schema is null, not a guess', paramLocationOf(null) === null)
+    check('required names are read from either location', requiredParamsOf(query).join() === 'query')
+    check('a body shape is sketched for the planner', bodyShapeOf(body) === '{ method: string }')
+  }
+
+  // ------------------------------------------------------- the free catalog
+  section('Free catalog URLs')
+  {
+    const withExamples = FREE_API_CATALOG.filter((api) => {
+      if (!api.params?.length) return false
+      const url = new URL(api.resource)
+      return api.params.some((p) => url.searchParams.has(p))
+    })
+    check(
+      'every declared parameter still has its example in the source catalog',
+      withExamples.length > 0,
+      'the fixture this test guards has gone',
+    )
+
+    const rows = __testFreeApiRows()
+    const leaked = rows.filter((row) => {
+      const api = FREE_API_CATALOG.find((a) => `free-${a.id}` === row.id)
+      if (!api?.params?.length) return false
+      const url = new URL(row.resource)
+      return api.params.some((p) => url.searchParams.has(p))
+    })
+    check(
+      'no example value reaches the registry as though it were an answer',
+      leaked.length === 0,
+      leaked.map((r) => r.resource).join(' '),
+    )
+
+    const geo = rows.find((r) => r.id === 'free-openmeteo-geocode')
+    check('the geocoding entry no longer carries name=lagos', !geo?.resource.includes('lagos'), geo?.resource)
+    check('its fixed count=3 is kept', geo?.resource.includes('count=3') === true, geo?.resource)
+  }
 
   // ------------------------------------------------------------ budget gate
   section('Budget gate')
