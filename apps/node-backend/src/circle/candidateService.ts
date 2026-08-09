@@ -116,7 +116,9 @@ export function selectCandidates(goal: string, options: CandidateOptions): Candi
       const service = rowToService(row)
       return { service, score: scoreOf(service, terms) }
     })
-    .filter((s) => s.score > 0 && isPayable(s.service, chains))
+    .filter(
+      (s) => s.score > 0 && isPayable(s.service, chains) && !isRecentlyFailed(s.service.resource),
+    )
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((s) => s.service)
@@ -159,4 +161,122 @@ export function selectCandidates(goal: string, options: CandidateOptions): Candi
 function isPayable(service: Service, chains: SupportedChainName[]): boolean {
   if (service.source === 'free') return true
   return service.networks.some((n) => chains.includes(n.chainKey) && n.gatewayBatchable === true)
+}
+
+/* ------------------------------------------------------- endpoint health */
+
+/**
+ * Endpoints that have just failed, so the planner stops picking them.
+ *
+ * Not a health-check subsystem — just a memory of what did not work in the
+ * last few minutes. A provider having a bad hour should not keep being
+ * proposed to every user, and the alternative is usually just as good.
+ */
+const recentFailures = new Map<string, number>()
+/** Distinct endpoints seen failing per host, to tell one bad path from an outage. */
+const hostFailures = new Map<string, Set<string>>()
+const FAILURE_COOLDOWN_MS = 10 * 60 * 1000
+/**
+ * Two different endpoints from the same provider failing is an outage, not a
+ * fussy path. Below that, only the individual endpoint is set aside — one
+ * endpoint rejecting our parameters says nothing about its neighbours.
+ */
+const HOST_OUTAGE_THRESHOLD = 2
+
+function hostOfResource(resource: string): string {
+  try {
+    return new URL(resource).host
+  } catch {
+    return resource
+  }
+}
+
+export function noteEndpointFailure(resource: string): void {
+  const now = Date.now()
+  recentFailures.set(resource, now)
+
+  const host = hostOfResource(resource)
+  const seen = hostFailures.get(host) ?? new Set<string>()
+  seen.add(resource)
+  hostFailures.set(host, seen)
+  if (seen.size >= HOST_OUTAGE_THRESHOLD) recentFailures.set(host, now)
+}
+
+function coolingDown(key: string): boolean {
+  const at = recentFailures.get(key)
+  if (at === undefined) return false
+  if (Date.now() - at > FAILURE_COOLDOWN_MS) {
+    recentFailures.delete(key)
+    hostFailures.delete(key)
+    return false
+  }
+  return true
+}
+
+export function isRecentlyFailed(resource: string): boolean {
+  return coolingDown(resource) || coolingDown(hostOfResource(resource))
+}
+
+/**
+ * Other services that could serve the same step, best first.
+ *
+ * Used when a step fails mid-run: the user asked for an answer, not for a
+ * particular provider, so a working substitute is a better outcome than an
+ * apology. Only ever cheaper or equal — the user approved a price, and
+ * silently spending more than that would be worse than failing.
+ */
+export function findAlternatives(
+  failed: Service,
+  purpose: string,
+  approvedCostUsdc: number,
+  chains: SupportedChainName[],
+  exclude: Set<string>,
+): Service[] {
+  /*
+   * Search on what the step is *for*, never on the failed service's name.
+   *
+   * The name carries the provider ("Orthogonal /tavily/search"), and that term
+   * dominates the match — every substitute came back as another Orthogonal
+   * path, all sharing the outage being worked around. The planner's purpose
+   * line describes the job without naming who does it.
+   */
+  /*
+   * And strip the provider's own words. Their descriptions name themselves
+   * ("tavily endpoint via Orthogonal nanopayment proxy"), so the provider
+   * survives into the terms even when the name is left out, and pulls the
+   * search straight back to its own siblings.
+   */
+  const ownWords = new Set(
+    extractTerms(
+      // Host and provider only. The full service name carries the path, and
+      // stripping that removed the verb the search depends on — "search" is
+      // both Orthogonal's path segment and the whole point of the step.
+      `${failed.host.replace(/[.\-]/g, ' ')} ${failed.serviceName.split(' ')[0] ?? ''}`,
+    ),
+  )
+  const terms = extractTerms(`${purpose} ${failed.description}`).filter((t) => !ownWords.has(t))
+  if (terms.length === 0) return []
+
+  const { services } = selectCandidates(terms.join(' '), { chains, limit: 12 })
+
+  const usable = services.filter(
+    (s) =>
+      s.resource !== failed.resource &&
+      !exclude.has(s.resource) &&
+      s.source === failed.source &&
+      s.priceUsdc <= approvedCostUsdc &&
+      !isRecentlyFailed(s.resource),
+  )
+
+  /*
+   * A different provider first.
+   *
+   * Outages are usually provider-wide, not per-endpoint: when Orthogonal's
+   * search failed, every substitute the scoring liked best was another
+   * Orthogonal path, all sharing the same downtime. Trying a sibling of the
+   * thing that just failed spends attempts learning what we already know.
+   */
+  const otherHost = usable.filter((s) => s.host !== failed.host)
+  const sameHost = usable.filter((s) => s.host === failed.host)
+  return [...otherHost, ...sameHost]
 }

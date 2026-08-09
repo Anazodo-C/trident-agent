@@ -7,6 +7,7 @@ import {
   safeErrorMessage,
 } from '../circle/gatewayService.ts'
 import { findServiceByResource } from '../circle/registryService.ts'
+import { findAlternatives, noteEndpointFailure } from '../circle/candidateService.ts'
 import { chooseChain, unpayableReason, type ChainPolicy } from '../circle/chainPolicy.ts'
 import { callFreeApi, payVerification } from '../circle/testnetVerification.ts'
 import { summariseRun, type StepResult } from '../llm/responder.ts'
@@ -31,6 +32,28 @@ export type SseEvent =
 function emit(res: Response, event: SseEvent, data: object): void {
   if (res.writableEnded) return
   res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`)
+}
+
+/**
+ * How many providers a single step may try before giving up. Three is enough
+ * to ride out one provider being down without turning a failing goal into a
+ * long, expensive search.
+ */
+const MAX_ENDPOINT_ATTEMPTS = 3
+
+/**
+ * A refusal we made, rather than a failure the network handed us. These must
+ * keep their own wording: the user needs to know a rule stopped this, not that
+ * a provider is having a bad day.
+ *
+ * Insufficient balance is treated the same way (see the call site): it is
+ * something the user can fix by funding the wallet, and telling them a service
+ * is down would send them to wait for a provider instead.
+ */
+function isPolicyRefusal(message: string): boolean {
+  return /not in the service registry|batch settlement|settlement network|Enable mainnet/i.test(
+    message,
+  )
 }
 
 function isBalanceError(message: string): boolean {
@@ -401,8 +424,21 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
 
       // Resolved outside the try so the failure path can tell a free-API
       // metering failure apart from an x402 settlement failure.
-      const service = findServiceByResource(step.endpointUrl)
+      let service = findServiceByResource(step.endpointUrl)
 
+      /**
+       * Providers this step has already tried, so a substitute is never one we
+       * just watched fail.
+       */
+      const attempted = new Set<string>([step.endpointUrl])
+      /** The service the user approved, for the message if everything is down. */
+      const approvedService = service
+      let attemptsLeft = MAX_ENDPOINT_ATTEMPTS
+
+      // Re-entered when an endpoint fails and a substitute is available. The
+      // user asked for an answer, not for a particular provider.
+      // eslint-disable-next-line no-constant-condition
+      for (;;) {
       try {
         // Defence in depth: approvedSteps arrive from the client and could be
         // edited, so the endpoint is re-checked against the registry here and
@@ -494,6 +530,41 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
       } catch (err) {
         let detail = safeErrorMessage(err)
 
+        /*
+         * An endpoint being down is our problem, not the user's. Remember it so
+         * the planner stops offering it, then try something equivalent that
+         * costs no more than what was approved. Only when nothing works does
+         * this become something to report.
+         */
+        noteEndpointFailure(step.endpointUrl)
+        attemptsLeft -= 1
+
+        if (service && attemptsLeft > 0) {
+          const [substitute] = findAlternatives(
+            service,
+            step.purpose,
+            step.estimatedCostUsdc,
+            policy.allowed,
+            attempted,
+          )
+          if (substitute) {
+            console.warn(
+              '[trident] endpoint failed, substituting:',
+              JSON.stringify({ from: step.endpointUrl, to: substitute.resource }),
+            )
+            attempted.add(substitute.resource)
+            step.endpointUrl = substitute.resource
+            step.serviceName = substitute.serviceName
+            step.httpMethod = substitute.httpMethod
+            service = substitute
+            db.prepare(
+              `UPDATE task_steps SET service_name = ?, endpoint_url = ?, http_method = ?
+               WHERE task_id = ? AND step_index = ?`,
+            ).run(substitute.serviceName, substitute.resource, substitute.httpMethod, taskId, step.stepIndex)
+            continue
+          }
+        }
+
         // The SDK stringifies structured endpoint errors into "[object
         // Object]". Recover what the endpoint actually said.
         if (detail.includes('[object Object]')) {
@@ -529,6 +600,23 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           }),
         )
 
+        /*
+         * Everything that could serve this step has now been tried. Say which
+         * provider, and that it may work later — the raw SDK text describes a
+         * protocol failure the user cannot act on.
+         */
+        /*
+         * Only reachability gets the reassuring wording. A refusal on policy —
+         * an endpoint outside the registry, a chain the user has not enabled,
+         * a service Gateway cannot settle — is a decision, not an outage, and
+         * calling it "not reachable right now" both misleads the user and
+         * hides a security refusal behind an apology.
+         */
+        const reported = isPolicyRefusal(detail) || isBalanceError(detail)
+          ? detail
+          : `${approvedService?.serviceName ?? step.serviceName} is not reachable right now. ` +
+            `Nothing else in the catalog could do this step, so it is worth trying again later.`
+
         db.prepare(
           `UPDATE task_steps
            SET status = 'failed', response_summary = ?, completed_at = strftime('%s','now')
@@ -537,15 +625,15 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
 
         results.push({
           stepIndex: step.stepIndex,
-          serviceName: step.serviceName,
+          serviceName: approvedService?.serviceName ?? step.serviceName,
           purpose: step.purpose,
           status: 'failed',
-          data: detail,
+          data: reported,
           costUsdc: 0,
           source: service?.source === 'free' ? 'free' : 'x402',
         })
 
-        emit(res, 'step_failed', { stepIndex: step.stepIndex, error: detail, totalSpent })
+        emit(res, 'step_failed', { stepIndex: step.stepIndex, error: reported, totalSpent })
 
         if (isBalanceError(detail)) {
           // A free API fails on the Arc Testnet metering payment, not on
@@ -562,7 +650,10 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           finish('failed')
           return
         }
-        // Other failures are non-fatal: continue to the next step.
+        // Nothing left to try for this step; move on to the next one.
+        break
+      }
+      break
       }
     }
 
