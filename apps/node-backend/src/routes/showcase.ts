@@ -8,12 +8,11 @@ import { findServiceByResource } from '../circle/registryService.ts'
  * Every figure on the marketing page comes from the live registry: the price,
  * the 30-day call volume, whether the service is curated. Only the human
  * phrasing is authored here, and it is keyed to an exact resource URL, so a
- * service that gets delisted from the Bazaar disappears from the landing page
+ * service delisted from Circle's marketplace disappears from the landing page
  * on the next boot rather than advertising something that no longer answers.
  *
- * Ranking is by real call volume across the x402 network, not by Trident's own
- * task history — Trident has run a few dozen tasks, which is not a signal.
- * Revisit once task_steps carries enough volume to rank from.
+ * Order is authored. Circle's marketplace publishes no call volumes, so there
+ * is no usage signal to rank by.
  */
 
 interface ShowcaseCopy {
@@ -28,64 +27,52 @@ interface ShowcaseCopy {
 
 const COPY: ShowcaseCopy[] = [
   {
-    resource: 'https://x402.twit.sh/tweets/search',
-    category: 'Social Search',
-    prompt: 'What are people saying about Arc mainnet this week?',
-    does: 'Scans X for matching posts, pays per search, and comes back with the actual tweets.',
-  },
-  {
-    resource: 'https://x402.tavily.com/search',
-    category: 'Web Search',
-    prompt: 'Summarise the last month of stablecoin regulation news.',
-    does: 'Runs an advanced web search, settles the fee from your wallet, returns sourced findings.',
-  },
-  {
-    resource: 'https://api.exa.ai/search',
-    category: 'Research',
-    prompt: 'Find the top 3 competitors to Stripe and what they raised.',
-    does: 'Searches Exa’s neural index, pays per query, and answers with the sources it used.',
-  },
-  {
-    resource: 'https://api.nansen.ai/api/v1/profiler/address/current-balance',
-    category: 'Onchain Data',
-    prompt: 'What is this wallet holding right now?',
-    does: 'Pulls the address’s live balances from Nansen and reports the positions back in plain text.',
-  },
-  {
-    resource: 'https://x402.ottoai.services/crypto-news',
-    category: 'Market News',
-    prompt: 'What is moving the crypto market this morning?',
-    does: 'Fetches ranked headlines with sentiment, pays a fraction of a cent, and gives you the gist.',
-  },
-  {
-    resource: 'https://stabletravel.dev/api/seats-aero/search',
-    category: 'Travel',
-    prompt: 'Any business award seats London to Tokyo in March?',
-    does: 'Searches cached award availability by route and cabin, then lists what it found.',
-  },
-  {
-    resource: 'https://stableenrich.dev/api/pdl/people-enrich',
-    category: 'Enrichment',
-    prompt: 'Who is the CTO at this company, and how do I reach them?',
-    does: 'Enriches the person from a name or profile URL and returns their role and contact details.',
-  },
-  {
-    resource: 'https://x402engine.app/api/crypto/price',
+    resource: 'https://x402.alchemy.com/prices/v1/tokens/by-symbol',
     category: 'Prices',
-    prompt: 'What is SOL worth in euros right now?',
-    does: 'Quotes any coin in any fiat currency for a tenth of a cent, and converts it exactly.',
+    prompt: 'What are BTC and ETH trading at right now?',
+    does: 'Pulls live token prices from Alchemy and answers with the figures, not a chart.',
   },
   {
-    resource: 'https://x402.agentutility.ai/users-by-username',
-    category: 'Profiles',
-    prompt: 'Pull the profile and follower count for this X handle.',
-    does: 'Resolves the handle to a public profile and hands back the fields, no scraping.',
+    resource: 'https://api.aisa.one/apis/v2/polymarket/events',
+    category: 'Prediction Markets',
+    prompt: 'What odds is Polymarket giving that event?',
+    does: 'Reads current market odds and trades, and tells you where the money actually sits.',
   },
   {
-    resource: 'https://blockrun.ai/api/v1/exa/search',
-    category: 'Deep Search',
-    prompt: 'Find recent research papers on intent-based bridging.',
-    does: 'Runs a filtered search across papers, news and repos, and cites what it returns.',
+    resource: 'https://api.aisa.one/apis/v2/coingecko/simple/price',
+    category: 'Market Data',
+    prompt: 'Price of SOL in euros, and how it moved this week.',
+    does: 'Queries CoinGecko for spot prices in any currency and converts them exactly.',
+  },
+  {
+    resource: 'https://api.aisa.one/apis/v2/twitter/user_about',
+    category: 'Social',
+    prompt: 'Who is behind this X account, and how big is their following?',
+    does: 'Resolves the handle to a real profile with engagement figures, no scraping.',
+  },
+  {
+    resource: 'https://nano.blockrun.ai/api/v1/surf/news/detail',
+    category: 'Market News',
+    prompt: 'What is behind this morning’s move in crypto?',
+    does: 'Fetches the article behind a headline so the answer cites something you can read.',
+  },
+  {
+    resource: 'https://nano.blockrun.ai/api/v1/pm/polymarket/wallet/{address}',
+    category: 'Onchain Data',
+    prompt: 'What has this wallet been betting on?',
+    does: 'Builds a full profile of a trader’s positions and performance from onchain history.',
+  },
+  {
+    resource: 'https://np.orthogonal.com/tomba/v1/domain-search',
+    category: 'Enrichment',
+    prompt: 'Who should I contact at this company?',
+    does: 'Searches a domain for named contacts and returns roles alongside addresses.',
+  },
+  {
+    resource: 'https://np.orthogonal.com/findymail/api/technologies/search',
+    category: 'Research',
+    prompt: 'What is this company’s stack built on?',
+    does: 'Detects the technologies a site runs on, for a tenth of a cent.',
   },
   {
     resource: 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd',
@@ -134,11 +121,13 @@ function buildCards(): ShowcaseCard[] {
       source: service.source === 'free' ? 'free' : 'x402',
     })
   }
-  // Busiest first, but the two free-tier cards stay at the end: they are the
-  // "try it without funding" story, not the headline capability.
+  // Authored order, with the two free-tier cards last: they are the "try it
+  // without funding" story, not the headline capability. Circle publishes no
+  // usage figures, so there is nothing to rank by and inventing an order would
+  // just be a shuffle.
   return cards.sort((a, b) => {
     if (a.source !== b.source) return a.source === 'free' ? 1 : -1
-    return b.calls30d - a.calls30d
+    return 0
   })
 }
 

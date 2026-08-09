@@ -472,6 +472,21 @@ async function main(): Promise<void> {
   // runner's per-step gate still exists for a run that drifts over mid-flight
   // — that path is covered deterministically in test:runner.
   section('Run refused before it starts')
+  /*
+   * Derive the budget from what this plan actually costs, rather than assuming
+   * a figure. Circle's catalog includes $0 endpoints, and if the planner picks
+   * one there is nothing for a limit to refuse — the run proceeds and the
+   * assertions below would be testing an SSE stream instead.
+   */
+  const plannedCost = await json<{ costing: { primaryUsdc: number } }>(
+    `/api/tasks/${planRes.body.taskId}`,
+    { headers: auth },
+  ).then(() => planRes.body as unknown as { costing?: { primaryUsdc?: number } })
+  const stepCost = plannedCost.costing?.primaryUsdc ?? 0
+
+  if (stepCost <= 0) {
+    console.log('  \x1b[33m•\x1b[0m the planned route is free, so no limit can refuse it — skipped')
+  } else {
   const refused = await json<{
     error: string
     budgetGuidance: {
@@ -485,16 +500,15 @@ async function main(): Promise<void> {
       taskId: planRes.body.taskId,
       approvedSteps: steps,
       agentPrivateKey: decrypted,
-      // Deliberately below the cheapest step so the limit must refuse it.
-      // Free-tier steps meter at $0.000001, so this has to sit under that.
-      budgetUsdc: 0.0000001,
+      // Half what the plan costs, so the limit must refuse it.
+      budgetUsdc: stepCost / 2,
     }),
   })
   check('an unaffordable run is refused outright', refused.status === 403, `got ${refused.status}`)
   check('the refusal explains the shortfall', /over your/.test(refused.body?.error ?? ''))
   check(
     'the refusal quotes what it would take',
-    (refused.body?.budgetGuidance?.options?.[0]?.minimumCapUsdc ?? 0) > 0.0000001,
+    (refused.body?.budgetGuidance?.options?.[0]?.minimumCapUsdc ?? 0) > stepCost / 2,
     refused.body?.error,
   )
 
@@ -507,6 +521,7 @@ async function main(): Promise<void> {
     (untouched.body?.task?.totalCostUsdc ?? -1) === 0,
     String(untouched.body?.task?.totalCostUsdc),
   )
+  }
 
   // ------------------------------------------------------------ normal run
   section('Runner — execution + stop')

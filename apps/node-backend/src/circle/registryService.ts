@@ -13,8 +13,17 @@ import { VERIFICATION_AMOUNT_USDC, VERIFICATION_CHAIN } from './testnetVerificat
  * discovery API, which is a superset of Circle's marketplace and carries the
  * `curated` flag identifying it.
  */
-const DISCOVERY_URL = 'https://api.cdp.coinbase.com/platform/v2/x402/discovery/resources'
-const PAGE_SIZE = 1000
+/**
+ * Circle's Agent Marketplace discovery API — public, no key.
+ *
+ * Replaces the Coinbase x402 Bazaar. The Bazaar listed ~14k services of which
+ * zero carried Circle's Gateway marker, so GatewayClient.pay() had no
+ * counterparty and no mainnet call could ever settle. Circle's own marketplace
+ * exposes supportsCircleGateway as a filter, and every listing behind it
+ * carries the GatewayWalletBatched authorisation the SDK requires.
+ */
+const DISCOVERY_URL = 'https://api.circle.com/v2/x402/discovery/resources'
+const PAGE_SIZE = 200 // Circle's documented maximum.
 const MAX_PAGES = 40
 const REQUEST_TIMEOUT_MS = 45_000
 
@@ -115,20 +124,32 @@ interface DiscoveryAccept {
   extra?: Record<string, unknown>
 }
 
+interface DiscoveryProvider {
+  name?: string
+  description?: string
+  category?: string
+  tags?: unknown
+  website?: string
+  docsUrl?: string
+}
+
+interface DiscoveryMetadata {
+  provider?: DiscoveryProvider
+  path?: string
+  /** The real HTTP verb. The Bazaar never published this, so it was guessed. */
+  method?: string
+  description?: string
+  mimeType?: string
+  siwx?: boolean
+  supportsVanillax402?: boolean
+  supportsCircleGateway?: boolean
+}
+
 interface DiscoveryItem {
   resource?: string
-  serviceName?: string
-  description?: string
-  tags?: unknown
   type?: string
-  curated?: boolean
-  iconUrl?: string
   accepts?: DiscoveryAccept[]
-  quality?: {
-    l30DaysTotalCalls?: number
-    l30DaysUniquePayers?: number
-    lastCalledAt?: string
-  }
+  metadata?: DiscoveryMetadata
 }
 
 function toUsdc(amount: string | undefined): number {
@@ -147,7 +168,6 @@ function isGatewayBatchable(accept: {
 }): boolean {
   const extra = accept.extra
   return (
-    accept.scheme === 'batch-settlement' &&
     extra?.['name'] === 'GatewayWalletBatched' &&
     extra?.['version'] === '1' &&
     typeof extra?.['verifyingContract'] === 'string'
@@ -206,16 +226,34 @@ function normalise(item: DiscoveryItem): Omit<ServiceRow, 'synced_at'> | null {
     options.find((o) => !o.isTestnet) ??
     options[0]!
 
-  const tags = Array.isArray(item.tags) ? item.tags.map(String).filter(Boolean) : []
-  const quality = item.quality ?? {}
+  const meta = item.metadata ?? {}
+  const provider = meta.provider ?? {}
   const host = hostOf(resource)
+
+  // Category is a useful retrieval term, so it joins the tags rather than
+  // needing a column of its own.
+  const tags = [
+    ...(Array.isArray(provider.tags) ? provider.tags.map(String) : []),
+    ...(provider.category ? [String(provider.category)] : []),
+  ].filter(Boolean)
+
+  // The endpoint description is the specific one ("Categories with Market
+  // Data"); the provider's is the general one. Both help the planner match.
+  const description = [meta.description?.trim(), provider.description?.trim()]
+    .filter(Boolean)
+    .join(' — ')
+
+  const name = provider.name?.trim()
+  const method = meta.method?.trim().toUpperCase()
 
   return {
     id: createHash('sha1').update(resource).digest('hex').slice(0, 24),
     resource,
     source: 'x402',
-    service_name: item.serviceName?.trim() || host || 'Unnamed service',
-    description: item.description?.trim() || '',
+    // Provider plus path: a provider lists dozens of endpoints, and "Aisa" on
+    // thirty rows tells the planner nothing about which one to pick.
+    service_name: name ? `${name}${meta.path ? ` ${meta.path}` : ''}` : host || 'Unnamed service',
+    description,
     tags: JSON.stringify(tags),
     host,
     network: preferred.network,
@@ -225,13 +263,21 @@ function normalise(item: DiscoveryItem): Omit<ServiceRow, 'synced_at'> | null {
     asset: preferred.asset,
     price_usdc: preferred.priceUsdc,
     scheme: preferred.scheme,
-    // Discovery does not publish the verb; the payment flow retries as needed.
-    http_method: 'GET',
-    curated: item.curated ? 1 : 0,
-    calls_30d: quality.l30DaysTotalCalls ?? 0,
-    payers_30d: quality.l30DaysUniquePayers ?? 0,
-    last_called_at: quality.lastCalledAt ?? null,
-    icon_url: item.iconUrl ?? null,
+    // Published now, so the verb is known rather than guessed — the Bazaar's
+    // silence here is what produced 405s from the planner's guesses.
+    http_method: method === 'POST' ? 'POST' : 'GET',
+    /**
+     * Everything here is Circle-vetted and Gateway-settleable, which is a
+     * stronger signal than the Bazaar's open listing ever was — so the whole
+     * catalog ranks as curated.
+     */
+    curated: 1,
+    // Circle publishes no usage figures. Left at zero rather than invented;
+    // ranking leans on curation and term matching instead.
+    calls_30d: 0,
+    payers_30d: 0,
+    last_called_at: null,
+    icon_url: null,
   }
 }
 
@@ -285,7 +331,13 @@ async function fetchPage(offset: number): Promise<DiscoveryItem[]> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
-    const res = await fetch(`${DISCOVERY_URL}?limit=${PAGE_SIZE}&offset=${offset}`, {
+    // Only what the agent can actually pay. Filtering at the source keeps the
+    // catalog honest — there is no point mirroring listings the wallet cannot
+    // settle and the planner would then have to be stopped from proposing.
+    const url =
+      `${DISCOVERY_URL}?supportsCircleGateway=true&type=http` +
+      `&limit=${PAGE_SIZE}&offset=${offset}`
+    const res = await fetch(url, {
       signal: controller.signal,
       headers: { accept: 'application/json' },
     })
