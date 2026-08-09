@@ -11,10 +11,17 @@ import { createHash, randomUUID } from 'node:crypto'
 import { generatePrivateKey } from 'viem/accounts'
 import type { Response } from 'express'
 import db from '../src/db.ts'
-import { missingRequiredParams, requestUrl, runTask } from '../src/agent/runner.ts'
+import {
+  invalidEnumParams,
+  missingRequiredParams,
+  paramsFit,
+  requestUrl,
+  runTask,
+} from '../src/agent/runner.ts'
 import {
   __testFreeApiRows,
   bodyShapeOf,
+  paramEnumsOf,
   paramLocationOf,
   requiredParamsOf,
 } from '../src/circle/registryService.ts'
@@ -270,6 +277,56 @@ async function main(): Promise<void> {
     check('every missing name is reported', missingRequiredParams(['a', 'b'], {}).join() === 'a,b')
   }
 
+  // -------------------------------------------------- failover compatibility
+  section('Failover compatibility')
+  {
+    // The real pair. /chat/completions serves 40 models; /api/v1/messages
+    // serves 9, all Anthropic, and additionally requires max_tokens.
+    const completions = {
+      requiredParams: ['model', 'messages'],
+      paramEnums: { model: ['openai/gpt-4o-mini', 'anthropic/claude-haiku-4.5'] },
+    }
+    const messages = {
+      requiredParams: ['model', 'messages', 'max_tokens'],
+      paramEnums: { model: ['anthropic/claude-haiku-4.5', 'anthropic/claude-sonnet-5'] },
+    }
+    const openaiCall = { model: 'openai/gpt-4o-mini', messages: [{ role: 'user', content: 'hi' }] }
+
+    check('the original call is valid where it was planned', paramsFit(completions, openaiCall))
+    check(
+      'and is refused as a substitute that cannot serve it',
+      !paramsFit(messages, openaiCall),
+      'this is the 400 the user saw',
+    )
+    check(
+      'the enum violation names the offending field',
+      invalidEnumParams(messages.paramEnums, openaiCall).join() === 'model',
+    )
+    check(
+      'a missing required field is caught on the substitute too',
+      missingRequiredParams(messages.requiredParams, {
+        model: 'anthropic/claude-haiku-4.5',
+        messages: [],
+      }).includes('max_tokens'),
+    )
+    check(
+      'a genuinely compatible substitute is still allowed',
+      paramsFit(messages, {
+        model: 'anthropic/claude-haiku-4.5',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 16,
+      }),
+    )
+    check(
+      'a parameter with no published enum is never blocked',
+      invalidEnumParams({}, { anything: 'goes' }).length === 0,
+    )
+    check(
+      'an absent optional value is not an enum violation',
+      invalidEnumParams({ model: ['a'] }, {}).length === 0,
+    )
+  }
+
   // ------------------------------------------------------- schema reading
   section('Published schema')
   {
@@ -281,6 +338,71 @@ async function main(): Promise<void> {
     check('no published schema is null, not a guess', paramLocationOf(null) === null)
     check('required names are read from either location', requiredParamsOf(query).join() === 'query')
     check('a body shape is sketched for the planner', bodyShapeOf(body) === '{ method: string }')
+
+    /*
+     * The shape that cost two failed runs. "array" alone is not something a
+     * caller can act on, and the planner sent a list of strings where the
+     * endpoint wanted {role, content}.
+     */
+    const chatBody = JSON.stringify({
+      body: {
+        required: ['model', 'messages'],
+        properties: {
+          model: { enum: ['openai/gpt-4o-mini'] },
+          messages: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['role', 'content'],
+              properties: { role: { enum: ['user', 'assistant'] }, content: { type: 'string' } },
+            },
+          },
+          max_tokens: { type: 'integer' },
+        },
+      },
+    })
+    const sketch = bodyShapeOf(chatBody) ?? ''
+    check(
+      'an array carries its item shape, not just the word "array"',
+      sketch.includes('messages: [{ role: "user"|"assistant", content: string }]'),
+      sketch,
+    )
+    check('a closed value set is shown, not just its type', sketch.includes('model: "openai/gpt-4o-mini"'))
+    check('optional stays marked optional', sketch.includes('max_tokens?: integer'))
+
+    // Long enums must not swallow the prompt.
+    const many = JSON.stringify({
+      body: { properties: { m: { enum: Array.from({ length: 40 }, (_, i) => `model-${i}`) } } },
+    })
+    const capped = bodyShapeOf(many) ?? ''
+    check('a long value set is truncated', capped.includes('…') && capped.length < 200, String(capped.length))
+
+    /*
+     * Deeply nested but finite — a JSON schema cannot contain a cycle, so
+     * runaway depth is the real risk, not self-reference.
+     */
+    let nested: Record<string, unknown> = { type: 'string' }
+    for (let i = 0; i < 12; i += 1) {
+      nested = { type: 'object', properties: { deeper: nested } }
+    }
+    const deepSketch = bodyShapeOf(JSON.stringify({ body: { properties: { root: nested } } })) ?? ''
+    check(
+      'deep nesting stops at a bounded depth',
+      deepSketch.length > 0 && deepSketch.length < 200,
+      `${deepSketch.length} chars`,
+    )
+
+    const enumSchema = JSON.stringify({
+      body: { properties: { model: { enum: ['a/one', 'b/two'] }, prompt: { type: 'string' } } },
+    })
+    check(
+      'published enums are read out of the body schema',
+      paramEnumsOf(enumSchema)['model']?.join() === 'a/one,b/two',
+    )
+    check(
+      'a property without an enum is not given an empty one',
+      !('prompt' in paramEnumsOf(enumSchema)),
+    )
   }
 
   // ------------------------------------------------------- the free catalog

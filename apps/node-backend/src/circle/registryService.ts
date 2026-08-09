@@ -75,6 +75,8 @@ export interface Service {
   bodyShape: string | null
   /** Query string or request body, from the schema. Null when none was published. */
   paramLocation: 'query' | 'body' | null
+  /** Closed value sets by parameter name, for the ones that publish them. */
+  paramEnums: Record<string, string[]>
   /** For free APIs: the paid category an x402 service could upgrade this to. */
   premiumCategory: string | null
 }
@@ -321,6 +323,88 @@ export function paramLocationOf(inputSchema: string | null): 'query' | 'body' | 
 }
 
 /**
+ * Closed value sets, by parameter name.
+ *
+ * Needed because a parameter can be present, correctly typed, and still
+ * rejected. BlockRun publishes two chat endpoints: `/chat/completions` takes 40
+ * models, `/api/v1/messages` takes 9, all Anthropic. Failing over between them
+ * carried `model: "openai/gpt-4o-mini"` into the one that has never accepted an
+ * OpenAI model, and the answer was a flat 400.
+ */
+export function paramEnumsOf(inputSchema: string | null): Record<string, string[]> {
+  if (!inputSchema) return {}
+  try {
+    const schema = JSON.parse(inputSchema) as Record<string, { properties?: unknown }>
+    const enums: Record<string, string[]> = {}
+    for (const section of ['queryParams', 'body'] as const) {
+      const properties = schema[section]?.properties as
+        | Record<string, { enum?: unknown }>
+        | undefined
+      if (!properties) continue
+      for (const [name, spec] of Object.entries(properties)) {
+        if (Array.isArray(spec?.enum) && spec.enum.length > 0) {
+          enums[name] = spec.enum.map(String)
+        }
+      }
+    }
+    return enums
+  } catch {
+    return {}
+  }
+}
+
+/** How many values of a closed set to show before trailing off. */
+const MAX_ENUM_SHOWN = 6
+/** How far into nested objects and arrays to descend. */
+const MAX_SHAPE_DEPTH = 3
+
+interface SchemaNode {
+  type?: unknown
+  enum?: unknown
+  items?: SchemaNode
+  properties?: Record<string, SchemaNode>
+  required?: unknown
+}
+
+/**
+ * One parameter's type, as something a model can copy.
+ *
+ * "array" is not a type a caller can act on. BlockRun's chat body declares
+ * `messages` as an array whose items are `{ role, content }`, and rendering
+ * only the word "array" discarded the half that mattered — the planner sent a
+ * list of strings and got a 400, twice, on two different endpoints. 100 of the
+ * catalog's 233 array-typed body parameters publish an item shape.
+ *
+ * Closed value sets are inlined for the same reason: a name alone leaves the
+ * model to invent one.
+ */
+function describeType(spec: SchemaNode | undefined, depth = 0): string {
+  if (!spec) return 'any'
+
+  if (Array.isArray(spec.enum) && spec.enum.length > 0) {
+    const shown = spec.enum.slice(0, MAX_ENUM_SHOWN).map((v) => JSON.stringify(String(v)))
+    return spec.enum.length > MAX_ENUM_SHOWN ? `${shown.join('|')}|…` : shown.join('|')
+  }
+
+  const type = Array.isArray(spec.type) ? spec.type.join('|') : (spec.type ?? 'any')
+
+  if (depth < MAX_SHAPE_DEPTH) {
+    if (type === 'array' && spec.items) return `[${describeType(spec.items, depth + 1)}]`
+    if (type === 'object' && spec.properties) {
+      const required = new Set(
+        Array.isArray(spec.required) ? (spec.required as unknown[]).map(String) : [],
+      )
+      const inner = Object.entries(spec.properties)
+        .slice(0, 8)
+        .map(([k, v]) => `${k}${required.has(k) ? '' : '?'}: ${describeType(v, depth + 1)}`)
+      if (inner.length) return `{ ${inner.join(', ')} }`
+    }
+  }
+
+  return String(type)
+}
+
+/**
  * A one-line sketch of a POST body: property names, their types, and which are
  * required. Enough for the model to build the right envelope without shipping
  * forty full JSON Schemas into the prompt.
@@ -328,19 +412,16 @@ export function paramLocationOf(inputSchema: string | null): 'query' | 'body' | 
 export function bodyShapeOf(inputSchema: string | null): string | null {
   if (!inputSchema) return null
   try {
-    const body = (JSON.parse(inputSchema) as { body?: Record<string, unknown> }).body
-    const properties = body?.['properties'] as Record<string, { type?: unknown }> | undefined
+    const body = (JSON.parse(inputSchema) as { body?: SchemaNode }).body
+    const properties = body?.properties
     if (!properties) return null
 
     const required = new Set(
-      Array.isArray(body?.['required']) ? (body['required'] as unknown[]).map(String) : [],
+      Array.isArray(body?.required) ? (body.required as unknown[]).map(String) : [],
     )
     const parts = Object.entries(properties)
       .slice(0, 12)
-      .map(([name, spec]) => {
-        const type = Array.isArray(spec?.type) ? spec.type.join('|') : (spec?.type ?? 'any')
-        return `${name}${required.has(name) ? '' : '?'}: ${String(type)}`
-      })
+      .map(([name, spec]) => `${name}${required.has(name) ? '' : '?'}: ${describeType(spec)}`)
     return parts.length ? `{ ${parts.join(', ')} }` : null
   } catch {
     return null
@@ -717,6 +798,7 @@ export function rowToService(row: ServiceRow): Service {
     requiredParams: requiredParamsOf(row.input_schema),
     bodyShape: row.http_method === 'POST' ? bodyShapeOf(row.input_schema) : null,
     paramLocation: paramLocationOf(row.input_schema),
+    paramEnums: paramEnumsOf(row.input_schema),
   }
 }
 

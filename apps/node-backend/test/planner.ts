@@ -35,7 +35,7 @@ function svc(resource: string, name = 'Demo'): Service {
     curated: true, calls30d: 10, payers30d: 1, lastCalledAt: null, iconUrl: null,
     trust: 'curated',
   requiredParams: [],
-  bodyShape: null, paramLocation: null,
+  bodyShape: null, paramLocation: null, paramEnums: {},
   }
 }
 const SERVICE_CATALOG: Service[] = [svc(DEMO)]

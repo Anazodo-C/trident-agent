@@ -6,7 +6,7 @@ import {
   lastErrorBodyFor,
   safeErrorMessage,
 } from '../circle/gatewayService.ts'
-import { findServiceByResource } from '../circle/registryService.ts'
+import { findServiceByResource, type Service } from '../circle/registryService.ts'
 import { findAlternatives, noteEndpointFailure } from '../circle/candidateService.ts'
 import { chooseChain, unpayableReason, type ChainPolicy } from '../circle/chainPolicy.ts'
 import { callFreeApi, payVerification } from '../circle/testnetVerification.ts'
@@ -102,6 +102,46 @@ export function missingRequiredParams(
     if (Array.isArray(value) && value.length === 0) return true
     return false
   })
+}
+
+/**
+ * Supplied values that the endpoint's published enum does not allow.
+ *
+ * Presence is not correctness. `model: "openai/gpt-4o-mini"` is a real model,
+ * spelled right, on an endpoint that only serves Anthropic — and the reply is
+ * a 400 with no indication which field was at fault.
+ *
+ * Absent parameters are not reported here; that is the required check's job,
+ * and an optional parameter left out is fine.
+ */
+export function invalidEnumParams(
+  enums: Record<string, string[]>,
+  params: Record<string, unknown>,
+): string[] {
+  return Object.entries(enums)
+    .filter(([name, allowed]) => {
+      const value = params[name]
+      if (value === undefined || value === null) return false
+      return !allowed.includes(String(value))
+    })
+    .map(([name]) => name)
+}
+
+/**
+ * Whether a step's parameters can be used against a different service.
+ *
+ * Failover swaps the endpoint but keeps the parameters, which only holds while
+ * the two agree on what those parameters mean. Two endpoints from the same
+ * provider, with near-identical names, routinely do not.
+ */
+export function paramsFit(
+  service: Pick<Service, 'requiredParams' | 'paramEnums'>,
+  params: Record<string, unknown>,
+): boolean {
+  return (
+    missingRequiredParams(service.requiredParams, params).length === 0 &&
+    invalidEnumParams(service.paramEnums, params).length === 0
+  )
 }
 
 /**
@@ -538,6 +578,15 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           )
         }
 
+        // Present but not permitted — see invalidEnumParams.
+        const invalid = invalidEnumParams(service.paramEnums, step.params)
+        if (invalid.length > 0) {
+          throw new Error(
+            `${service.serviceName} does not accept the requested ${invalid.join(', ')} ` +
+              `(${invalid.map((name) => String(step.params[name])).join(', ')}). Nothing was charged.`,
+          )
+        }
+
         let cost: number
         let txRef: string
         let verificationTx: string | null = null
@@ -629,17 +678,34 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
         attemptsLeft -= 1
 
         if (service && attemptsLeft > 0) {
-          const [substitute] = findAlternatives(
+          /*
+           * Only stand in for an endpoint if the parameters we already have
+           * mean the same thing there.
+           *
+           * Substitution reuses step.params wholesale, which is safe only while
+           * the two services agree on them. BlockRun's /chat/completions and
+           * /api/v1/messages differ by one required field and an entirely
+           * different model list, so the failover produced a request that could
+           * not succeed — and reported it as the substitute being broken.
+           */
+          const substitute = findAlternatives(
             service,
             step.purpose,
             step.estimatedCostUsdc,
             policy.allowed,
             attempted,
-          )
+          ).find((candidate) => paramsFit(candidate, step.params))
+
           if (substitute) {
             console.warn(
               '[trident] endpoint failed, substituting:',
-              JSON.stringify({ from: step.endpointUrl, to: substitute.resource }),
+              // The reason belongs here. Without it the log records only that
+              // something was swapped, which is the one thing already obvious.
+              JSON.stringify({
+                from: step.endpointUrl,
+                to: substitute.resource,
+                reason: detail.slice(0, 200),
+              }),
             )
             attempted.add(substitute.resource)
             step.endpointUrl = substitute.resource
