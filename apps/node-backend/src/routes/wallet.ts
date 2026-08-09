@@ -9,15 +9,52 @@ import { findUserById } from '../auth/users.ts'
 import { publicUser } from './auth.ts'
 import {
   chainConfig,
+  chainLabel,
   gatewayClientFor,
   resolveChain,
   rpcUrlFor,
+  strictChain,
   safeErrorMessage,
 } from '../circle/gatewayService.ts'
 import { bridge, bridgeChainOptions, estimateBridge } from '../circle/bridgeService.ts'
 import { isValidPrivateKey } from '../auth/keySetup.ts'
+import { policyFor } from '../circle/chainPolicy.ts'
+import type { SupportedChainName } from '@circle-fin/x402-batching/client'
+import type { UserRow } from '../db.ts'
 
 const router = Router()
+
+/**
+ * Which chain a wallet operation acts on.
+ *
+ * Was `users.default_chain`, which is set once at signup and never changes —
+ * so enabling mainnet moved where the runner *pays* (it asks the chain policy)
+ * without moving where deposits *land*. Real USDC would have gone into the Arc
+ * Testnet Gateway while every mainnet call failed for want of balance.
+ *
+ * Now the caller says which chain it means, and the answer is checked against
+ * the same policy the runner uses. Omitting it keeps the safe default: testnet.
+ */
+function walletChain(row: UserRow, requested?: string | null): SupportedChainName {
+  const policy = policyFor(row)
+  if (!requested) return policy.testnet
+
+  const chain = strictChain(requested)
+  if (!policy.allowed.includes(chain)) {
+    throw httpError(
+      403,
+      policy.mainnetEnabled
+        ? `${requested} is not a chain this account can use.`
+        : `${requested} is a mainnet chain. Enable mainnet spending in Wallet first.`,
+    )
+  }
+  return chain
+}
+
+/** The chains this account may operate on, for the UI to enumerate. */
+function walletChains(row: UserRow): SupportedChainName[] {
+  return policyFor(row).allowed
+}
 
 const USDC_DECIMALS = 6
 const AmountString = z
@@ -55,7 +92,13 @@ router.all(
     const row = findUserById(user.id)
     if (!row?.eoa_address) throw httpError(409, 'No agent wallet has been set up for this account')
 
-    const chain = resolveChain(row.default_chain)
+    // ?chain= on GET, or { chain } in the POST body.
+    const requestedChain =
+      (typeof req.query['chain'] === 'string' ? req.query['chain'] : null) ??
+      (typeof (req.body as { chain?: unknown } | undefined)?.chain === 'string'
+        ? ((req.body as { chain: string }).chain)
+        : null)
+    const chain = walletChain(row, requestedChain)
     const config = chainConfig(chain)
     const address = row.eoa_address as `0x${string}`
 
@@ -102,8 +145,11 @@ router.all(
 
     res.json({
       eoaAddress: row.eoa_address,
-      chain: row.default_chain,
+      // The chain this balance is FOR — not the stored default, which is set
+      // once at signup and would misreport every explicit request.
+      chain,
       chainId: config.chain.id,
+      isTestnet: config.chain.testnet === true,
       usdcAddress: config.usdc,
       walletUsdc,
       gatewayUsdc,
@@ -128,6 +174,8 @@ function formatUnitsFixed(value: bigint, decimals: number): string {
 const GatewayAmountBody = z.object({
   amount: AmountString,
   agentPrivateKey: KeyString,
+  /** Omit for testnet. Validated against the account's chain policy. */
+  chain: z.string().optional(),
 })
 
 router.post(
@@ -142,7 +190,7 @@ router.post(
     assertKeyMatchesUser(user.id, key)
 
     const row = findUserById(user.id)!
-    const client = gatewayClientFor(key, resolveChain(row.default_chain))
+    const client = gatewayClientFor(key, walletChain(row, parsed.data.chain))
 
     try {
       const result = await client.deposit(parsed.data.amount)
@@ -172,7 +220,7 @@ router.post(
     assertKeyMatchesUser(user.id, key)
 
     const row = findUserById(user.id)!
-    const client = gatewayClientFor(key, resolveChain(row.default_chain))
+    const client = gatewayClientFor(key, walletChain(row, parsed.data.chain))
 
     try {
       // Same-chain withdrawal is instant; no 7-day trustless path involved.
@@ -195,6 +243,7 @@ const CryptoWithdrawBody = z.object({
   toAddress: z.string().refine(isAddress, 'toAddress must be a valid EVM address'),
   amount: AmountString,
   agentPrivateKey: KeyString,
+  chain: z.string().optional(),
 })
 
 router.post(
@@ -209,7 +258,7 @@ router.post(
     assertKeyMatchesUser(user.id, key)
 
     const row = findUserById(user.id)!
-    const chain = resolveChain(row.default_chain)
+    const chain = walletChain(row, parsed.data.chain)
     const config = chainConfig(chain)
     const account = privateKeyToAccount(key)
 
@@ -298,11 +347,25 @@ router.get('/deposit-address', requireAuth, (req, res) => {
     res.status(409).json({ error: 'No agent wallet has been set up for this account' })
     return
   }
-  const chain = resolveChain(row.default_chain)
+  const requested = typeof req.query['chain'] === 'string' ? req.query['chain'] : null
+  const chain = walletChain(row, requested)
   res.json({
     address: row.eoa_address,
-    chain: row.default_chain,
+    chain,
     chainId: chainConfig(chain).chain.id,
+    /**
+     * One key, one address, every EVM chain — but the deposit has to land on
+     * the chain the agent will actually spend from, so the caller needs to
+     * know which ones this account can use.
+     */
+    availableChains: walletChains(row).map((c) => ({
+      chain: c,
+      // Both forms: the bridge options and default_chain speak labels, the
+      // balance and Gateway routes speak SDK keys.
+      label: chainLabel(c),
+      chainId: chainConfig(c).chain.id,
+      isTestnet: chainConfig(c).chain.testnet === true,
+    })),
     bridgeChains: bridgeChainOptions(),
     /**
      * ASSUMPTION #6 resolved: Circle exposes no public API for minting a fiat

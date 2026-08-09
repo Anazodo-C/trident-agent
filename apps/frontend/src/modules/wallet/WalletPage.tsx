@@ -17,16 +17,16 @@ import { copyToClipboard, shortAddress, usdc } from '../../lib/format.ts'
 import { DepositPanel } from './DepositPanel.tsx'
 
 export function WalletPage() {
-  const user = useAuthStore((s) => s.user)
   const refreshUser = useAuthStore((s) => s.refreshUser)
   const unlockedKey = useAgentStore((s) => s.unlockedKey)
   const requestUnlock = useAgentStore((s) => s.requestUnlock)
-  const { balance, depositInfo, loading, error, refresh, loadDepositInfo } = useWalletStore()
+  const { activeChain, depositInfo, loading, error, refreshAll, setActiveChain } = useWalletStore()
 
   useEffect(() => {
-    void refresh(unlockedKey ?? undefined)
-    void loadDepositInfo()
-  }, [refresh, loadDepositInfo, unlockedKey])
+    void refreshAll(unlockedKey ?? undefined)
+  }, [refreshAll, unlockedKey])
+
+  const chains = depositInfo?.availableChains ?? []
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
@@ -34,12 +34,12 @@ export function WalletPage() {
         <div>
           <h1 className="font-mono text-lg uppercase tracking-widest text-slate-100">Wallet</h1>
           <p className="mt-2 text-sm text-slate-400">
-            Your self-custody agent wallet on {balance?.chain ?? user?.defaultChain ?? 'ARC-TESTNET'}.
+            One self-custody address, {chains.length > 1 ? 'usable on every chain below' : 'on testnet'}.
           </p>
         </div>
         <button
           className="btn-ghost"
-          onClick={() => refresh(unlockedKey ?? undefined)}
+          onClick={() => refreshAll(unlockedKey ?? undefined)}
           disabled={loading}
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -53,8 +53,34 @@ export function WalletPage() {
         </div>
       )}
 
+      {/*
+        Which chain an operation lands on used to be implied by a column set at
+        signup, which is how a Gateway deposit could go to a different chain
+        than the agent pays from. It is now a visible, deliberate choice.
+      */}
+      {chains.length > 1 && (
+        <div className="mb-5 flex flex-wrap gap-2">
+          {chains.map((c) => (
+            <button
+              key={c.chain}
+              onClick={() => setActiveChain(c.chain)}
+              className={`badge px-3 py-1.5 transition-colors ${
+                c.chain === activeChain
+                  ? 'bg-[#00D4FF]/15 text-[#00D4FF] ring-1 ring-[#00D4FF]/50'
+                  : 'bg-[#1A7FFF]/10 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {c.chain}
+              <span className={c.isTestnet ? 'ml-2 text-slate-500' : 'ml-2 text-[#FFA040]'}>
+                {c.isTestnet ? 'testnet' : 'mainnet'}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="grid gap-4 lg:grid-cols-2">
-        <BalancePanel onUnlock={() => requestUnlock(() => void refresh(useAgentStore.getState().unlockedKey ?? undefined))} />
+        <BalancePanel onUnlock={() => requestUnlock(() => void refreshAll(useAgentStore.getState().unlockedKey ?? undefined))} />
         <DepositPanel />
         <GatewayPanel />
         <SpendingCapPanel onSaved={refreshUser} />
@@ -78,9 +104,13 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 }
 
 function BalancePanel({ onUnlock }: { onUnlock: () => void }) {
-  const balance = useWalletStore((s) => s.balance)
+  const balances = useWalletStore((s) => s.balances)
+  const activeChain = useWalletStore((s) => s.activeChain)
   const unlockedKey = useAgentStore((s) => s.unlockedKey)
   const [copied, setCopied] = useState(false)
+
+  const entries = Object.values(balances)
+  const balance = (activeChain ? balances[activeChain] : undefined) ?? entries[0]
 
   const explorerUrl =
     balance?.explorerBase && balance.eoaAddress
@@ -117,23 +147,62 @@ function BalancePanel({ onUnlock }: { onUnlock: () => void }) {
         )}
       </div>
 
-      <dl className="flex flex-col gap-3">
-        <Row label="USDC (wallet)" value={usdc(balance?.walletUsdc)} />
-        <Row
-          label="USDC (gateway)"
-          value={balance?.gatewayUsdc !== null && balance?.gatewayUsdc !== undefined ? usdc(balance.gatewayUsdc) : 'locked'}
-          dim={balance?.gatewayUsdc == null}
-        />
-        {/*
-          On Arc the native gas token is also called USDC but is a separate,
-          18-decimal balance from the ERC-20 above — label it so they don't read
-          as the same number.
-        */}
-        <Row
-          label={`${balance?.nativeSymbol ?? 'Native'} (native, for gas)`}
-          value={Number.parseFloat(balance?.native ?? '0').toFixed(5)}
-        />
-      </dl>
+      {/*
+        Every chain, not just the selected one. The agent pays from the Gateway
+        balance of whichever chain a service settles on, so seeing only one of
+        them is how you conclude you are funded when you are not.
+      */}
+      <div className="flex flex-col gap-4">
+        {entries.length === 0 && <p className="text-sm text-slate-500">Loading balances…</p>}
+
+        {entries.map((b) => (
+          <div
+            key={b.chain}
+            className={`rounded-lg border p-3.5 transition-colors ${
+              b.chain === activeChain
+                ? 'border-[#00D4FF]/40 bg-[#00D4FF]/5'
+                : 'border-[#1A7FFF]/20 bg-[#0A0E1A]/40'
+            }`}
+          >
+            <div className="mb-2.5 flex items-center justify-between gap-2">
+              <span className="font-mono text-xs uppercase tracking-widest text-slate-300">
+                {b.chain}
+              </span>
+              <span
+                className={`badge ${
+                  b.isTestnet
+                    ? 'bg-[#1A7FFF]/15 text-slate-400'
+                    : 'bg-[#FFA040]/15 text-[#FFA040]'
+                }`}
+              >
+                {b.isTestnet ? 'testnet' : 'real funds'}
+              </span>
+            </div>
+
+            <dl className="flex flex-col gap-2">
+              <Row label="USDC (wallet)" value={usdc(b.walletUsdc)} />
+              <Row
+                label="USDC (gateway)"
+                value={b.gatewayUsdc != null ? usdc(b.gatewayUsdc) : 'locked'}
+                dim={b.gatewayUsdc == null}
+              />
+              {/*
+                On Arc the native gas token is also called USDC but is a
+                separate, 18-decimal balance from the ERC-20 above — label it
+                so they don't read as the same number.
+              */}
+              <Row
+                label={`${b.nativeSymbol} (native, for gas)`}
+                value={Number.parseFloat(b.native).toFixed(5)}
+              />
+            </dl>
+
+            {b.gatewayWarning && (
+              <p className="mt-2 break-words text-[11px] text-[#FFA040]">{b.gatewayWarning}</p>
+            )}
+          </div>
+        ))}
+      </div>
 
       {!unlockedKey && (
         <button className="btn-ghost mt-5 w-full" onClick={onUnlock}>
@@ -163,7 +232,9 @@ function Row({ label, value, dim }: { label: string; value: string; dim?: boolea
 function GatewayPanel() {
   const unlockedKey = useAgentStore((s) => s.unlockedKey)
   const requestUnlock = useAgentStore((s) => s.requestUnlock)
-  const refresh = useWalletStore((s) => s.refresh)
+  const refreshAll = useWalletStore((s) => s.refreshAll)
+  const activeChain = useWalletStore((s) => s.activeChain)
+  const isTestnet = useWalletStore((s) => (s.activeChain ? s.balances[s.activeChain]?.isTestnet : true))
 
   const [depositAmount, setDepositAmount] = useState('')
   const [withdrawAmount, setWithdrawAmount] = useState('')
@@ -182,17 +253,19 @@ function GatewayPanel() {
     setBusy(kind)
     setMessage(null)
     try {
+      // Explicitly on the selected chain — never on a stored default.
+      const chain = activeChain ?? undefined
       const res =
         kind === 'deposit'
-          ? await api.gatewayDeposit(amount, key)
-          : await api.gatewayWithdraw(amount, key)
+          ? await api.gatewayDeposit(amount, key, chain)
+          : await api.gatewayWithdraw(amount, key, chain)
       setMessage({
         tone: 'ok',
-        text: `${kind === 'deposit' ? 'Deposited' : 'Withdrew'} ${amount} USDC. Gateway balance: ${res.newGatewayBalance}`,
+        text: `${kind === 'deposit' ? 'Deposited' : 'Withdrew'} ${amount} USDC on ${chain}. Gateway balance: ${res.newGatewayBalance}`,
       })
       if (kind === 'deposit') setDepositAmount('')
       else setWithdrawAmount('')
-      void refresh(key)
+      void refreshAll(key)
     } catch (err) {
       setMessage({ tone: 'err', text: err instanceof Error ? err.message : 'Transaction failed' })
     } finally {
@@ -202,8 +275,18 @@ function GatewayPanel() {
 
   return (
     <Panel title="Gateway">
-      <p className="mb-5 text-sm leading-relaxed text-slate-400">
-        Your agent pays x402 services from its Gateway balance. Move USDC in before a run.
+      <p className="mb-4 text-sm leading-relaxed text-slate-400">
+        Your agent pays x402 services from its Gateway balance on the chain the service settles
+        on. Move USDC in before a run.
+      </p>
+
+      {/* The single most expensive mistake here is funding the wrong chain. */}
+      <p className="mb-5 flex flex-wrap items-center gap-2 text-xs">
+        <span className="text-slate-500">Acting on</span>
+        <span className="font-mono text-slate-200">{activeChain ?? '—'}</span>
+        {isTestnet === false && (
+          <span className="badge bg-[#FFA040]/15 text-[#FFA040]">real funds</span>
+        )}
       </p>
 
       <div className="flex flex-col gap-4">

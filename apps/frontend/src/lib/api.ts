@@ -217,32 +217,40 @@ export const api = {
   task: (id: string) =>
     request<{ task: TaskSummary; steps: TaskStepDetail[] }>(`/api/tasks/${id}`),
 
-  balance: (agentPrivateKey?: string) =>
+  // `chain` is optional everywhere and defaults to testnet server-side. It is
+  // validated against the account's policy, so asking for mainnet without
+  // opting in is a 403 rather than a silent testnet operation.
+  balance: (agentPrivateKey?: string, chain?: string) =>
     agentPrivateKey
       ? request<WalletBalance>('/api/wallet/balance', {
           method: 'POST',
-          body: JSON.stringify({ agentPrivateKey }),
+          body: JSON.stringify({ agentPrivateKey, ...(chain ? { chain } : {}) }),
         })
-      : request<WalletBalance>('/api/wallet/balance'),
+      : request<WalletBalance>(
+          `/api/wallet/balance${chain ? `?chain=${encodeURIComponent(chain)}` : ''}`,
+        ),
 
-  depositInfo: () => request<DepositInfo>('/api/wallet/deposit-address'),
+  depositInfo: (chain?: string) =>
+    request<DepositInfo>(
+      `/api/wallet/deposit-address${chain ? `?chain=${encodeURIComponent(chain)}` : ''}`,
+    ),
 
-  gatewayDeposit: (amount: string, agentPrivateKey: string) =>
+  gatewayDeposit: (amount: string, agentPrivateKey: string, chain?: string) =>
     request<{ success: boolean; depositTxHash: string; newGatewayBalance: string }>(
       '/api/wallet/gateway/deposit',
-      { method: 'POST', body: JSON.stringify({ amount, agentPrivateKey }) },
+      { method: 'POST', body: JSON.stringify({ amount, agentPrivateKey, ...(chain ? { chain } : {}) }) },
     ),
 
-  gatewayWithdraw: (amount: string, agentPrivateKey: string) =>
+  gatewayWithdraw: (amount: string, agentPrivateKey: string, chain?: string) =>
     request<{ success: boolean; mintTxHash: string; newGatewayBalance: string }>(
       '/api/wallet/gateway/withdraw',
-      { method: 'POST', body: JSON.stringify({ amount, agentPrivateKey }) },
+      { method: 'POST', body: JSON.stringify({ amount, agentPrivateKey, ...(chain ? { chain } : {}) }) },
     ),
 
-  withdrawCrypto: (toAddress: string, amount: string, agentPrivateKey: string) =>
+  withdrawCrypto: (toAddress: string, amount: string, agentPrivateKey: string, chain?: string) =>
     request<{ txHash: string; explorerBase: string | null }>('/api/wallet/withdraw/crypto', {
       method: 'POST',
-      body: JSON.stringify({ toAddress, amount, agentPrivateKey }),
+      body: JSON.stringify({ toAddress, amount, agentPrivateKey, ...(chain ? { chain } : {}) }),
     }),
 
   bridge: (payload: {

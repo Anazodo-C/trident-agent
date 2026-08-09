@@ -1,22 +1,48 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
-import { ArrowRight, Check, Clipboard, ExternalLink, Loader2 } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Check, Clipboard, ExternalLink, Loader2 } from 'lucide-react'
 import { api } from '../../lib/api.ts'
 import { useAgentStore } from '../../store/agentStore.ts'
 import { useAuthStore } from '../../store/authStore.ts'
 import { useWalletStore } from '../../store/walletStore.ts'
 import { copyToClipboard } from '../../lib/format.ts'
 
-const HOME_CHAIN = 'ARC-TESTNET'
+/**
+ * Fallback only. The destination is whichever chain the Wallet page has
+ * selected — hardcoding it meant this panel told people to "Send USDC on
+ * ARC-TESTNET" while the Gateway panel beside it was operating on Base. Of
+ * every string on this page, this is the one that must not be wrong.
+ */
+const FALLBACK_CHAIN = 'ARC-TESTNET'
 
 export function DepositPanel() {
   const depositInfo = useWalletStore((s) => s.depositInfo)
+  const activeChain = useWalletStore((s) => s.activeChain)
+  const activeIsTestnet = useWalletStore((s) =>
+    s.activeChain ? s.balances[s.activeChain]?.isTestnet : undefined,
+  )
+  /**
+   * Where funds must land: the chain the agent will actually spend from, in
+   * the LABEL form the bridge options use. Comparing a label against an SDK
+   * key never matches, which made the panel offer a bridge for a same-chain
+   * deposit.
+   */
+  const homeChain =
+    depositInfo?.availableChains?.find((c) => c.chain === activeChain)?.label ??
+    activeChain ??
+    FALLBACK_CHAIN
   const refresh = useWalletStore((s) => s.refresh)
   const user = useAuthStore((s) => s.user)
   const requestUnlock = useAgentStore((s) => s.requestUnlock)
 
   const [tab, setTab] = useState<'crypto' | 'fiat'>('crypto')
-  const [sourceChain, setSourceChain] = useState(HOME_CHAIN)
+  const [sourceChain, setSourceChain] = useState(FALLBACK_CHAIN)
+
+  // Switching the destination resets the source to match it, so the default is
+  // always a direct deposit rather than an accidental bridge.
+  useEffect(() => {
+    setSourceChain(homeChain)
+  }, [homeChain])
   const [copied, setCopied] = useState(false)
   const [qr, setQr] = useState<string | null>(null)
 
@@ -27,8 +53,8 @@ export function DepositPanel() {
   )
 
   const address = depositInfo?.address ?? user?.eoaAddress ?? ''
-  const chains = depositInfo?.bridgeChains ?? []
-  const needsBridge = sourceChain !== HOME_CHAIN
+  const bridgeSources = depositInfo?.bridgeChains ?? []
+  const needsBridge = sourceChain !== homeChain
 
   useEffect(() => {
     if (!address) {
@@ -61,7 +87,7 @@ export function DepositPanel() {
     try {
       const res = await api.bridge({
         fromChain: sourceChain,
-        toChain: HOME_CHAIN,
+        toChain: homeChain,
         amount: bridgeAmount,
         agentPrivateKey: key,
       })
@@ -130,11 +156,20 @@ export function DepositPanel() {
                 setBridgeMessage(null)
               }}
             >
-              {chains.length === 0 && <option value={HOME_CHAIN}>{HOME_CHAIN}</option>}
-              {chains.map((c) => (
+              {/*
+                The destination is always a valid source — that is the direct
+                deposit, no bridge. It is not in bridgeChains for every chain,
+                and a <select> whose value has no matching <option> renders the
+                first one instead, which said ARC-TESTNET while the address
+                below it was for Base.
+              */}
+              {!bridgeSources.some((c) => c.label === homeChain) && (
+                <option value={homeChain}>{homeChain} (direct)</option>
+              )}
+              {bridgeSources.map((c) => (
                 <option key={c.label} value={c.label}>
                   {c.label}
-                  {c.label === HOME_CHAIN ? ' (default)' : ''}
+                  {c.label === homeChain ? ' (direct)' : ''}
                 </option>
               ))}
             </select>
@@ -142,10 +177,24 @@ export function DepositPanel() {
 
           {!needsBridge ? (
             <>
+              {/* Sending to the wrong network is the one mistake here that
+                  cannot be undone, so say which network, in the imperative,
+                  right above the address being copied. */}
               <p className="mb-3 text-sm text-slate-400">
-                Send USDC on <span className="font-mono text-slate-200">{HOME_CHAIN}</span> to
+                Send USDC on <span className="font-mono text-slate-200">{homeChain}</span> to
                 your agent wallet:
               </p>
+
+              {activeIsTestnet === false && (
+                <p className="mb-3 flex items-start gap-2 rounded-lg border border-[#FFA040]/40 bg-[#FFA040]/10 p-2.5 text-xs leading-relaxed text-[#FFA040]">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    <strong className="font-semibold">{homeChain} is a mainnet.</strong> Funds
+                    sent here are real. Send on {homeChain} and no other network — anything sent
+                    on the wrong network is unrecoverable.
+                  </span>
+                </p>
+              )}
 
               {qr && (
                 <div className="mb-4 flex justify-center">
@@ -181,11 +230,11 @@ export function DepositPanel() {
                 <ArrowRight className="h-3.5 w-3.5 text-[#00D4FF]" />
                 <span className="text-[#00D4FF]">CCTP</span>
                 <ArrowRight className="h-3.5 w-3.5 text-[#00D4FF]" />
-                <span className="text-slate-300">{HOME_CHAIN}</span>
+                <span className="text-slate-300">{homeChain}</span>
               </div>
 
               <p className="mb-4 text-xs leading-relaxed text-slate-500">
-                USDC on {sourceChain} is burned and re-minted on {HOME_CHAIN} via Circle CCTP.
+                USDC on {sourceChain} is burned and re-minted on {homeChain} via Circle CCTP.
                 Your agent wallet must already hold the USDC and enough gas on {sourceChain}.
               </p>
 

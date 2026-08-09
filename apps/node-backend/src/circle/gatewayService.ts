@@ -15,11 +15,49 @@ export const CHAIN_LABELS: Record<string, SupportedChainName> = {
   'OPTIMISM-SEPOLIA': 'optimismSepolia',
   'POLYGON-AMOY': 'polygonAmoy',
   'UNICHAIN-SEPOLIA': 'unichainSepolia',
+  // Mainnets. Their absence here was a live hazard: resolveChain fell back to
+  // the testnet default, so a request to act on BASE silently acted on Arc
+  // Testnet instead — including Gateway deposits of real USDC.
+  BASE: 'base',
+  ARC: 'arc',
 }
 
+/**
+ * Lenient lookup, for the stored `default_chain` label where an unrecognised
+ * value should not break a page. Falls back to the testnet default.
+ *
+ * Never use this for a chain the caller asked for — see strictChain.
+ */
 export function resolveChain(label?: string | null): SupportedChainName {
   if (!label) return DEFAULT_CHAIN
   return CHAIN_LABELS[label.toUpperCase()] ?? DEFAULT_CHAIN
+}
+
+/**
+ * Resolve a caller-supplied chain, or refuse.
+ *
+ * Accepts either the SDK key ("base") or the label form ("BASE"). Unknown
+ * input is an error, never a fallback: quietly substituting a different chain
+ * than the one asked for is how money ends up on the wrong network.
+ */
+export function strictChain(input: string): SupportedChainName {
+  const raw = input.trim()
+  if (raw in CHAIN_CONFIGS) return raw as SupportedChainName
+
+  const mapped = CHAIN_LABELS[raw.toUpperCase()]
+  if (mapped) return mapped
+
+  throw httpError(400, `Unknown chain: ${input}`)
+}
+
+/**
+ * SDK chain key -> the label form used by the bridge options and stored on
+ * users.default_chain. The two forms coexist, and comparing one against the
+ * other silently fails, so conversions go through here rather than by hand.
+ */
+export function chainLabel(chain: SupportedChainName): string {
+  const found = Object.entries(CHAIN_LABELS).find(([, key]) => key === chain)
+  return found?.[0] ?? chain
 }
 
 export function chainConfig(chain: SupportedChainName = DEFAULT_CHAIN) {

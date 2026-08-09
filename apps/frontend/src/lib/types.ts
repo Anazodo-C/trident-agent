@@ -204,7 +204,9 @@ export interface TaskStepDetail {
 
 export interface WalletBalance {
   eoaAddress: string
+  /** The chain this balance is for — the request's chain, not a stored default. */
   chain: string
+  isTestnet: boolean
   chainId: number
   usdcAddress: string
   walletUsdc: string
@@ -217,10 +219,22 @@ export interface WalletBalance {
   explorerBase: string | null
 }
 
+/** A chain this account is permitted to hold funds on. */
+export interface ChainOption {
+  /** SDK key, e.g. `base` — what the balance and Gateway routes expect. */
+  chain: string
+  /** Label form, e.g. `BASE` — what the bridge options speak. */
+  label: string
+  chainId: number
+  isTestnet: boolean
+}
+
 export interface DepositInfo {
   address: string
   chain: string
   chainId: number
+  /** Every chain the account may use — testnet always, mainnet once opted in. */
+  availableChains: ChainOption[]
   bridgeChains: { label: string; chain: string }[]
   fiatOnramp: { available: boolean; testnetFaucetUrl: string; note: string }
 }
