@@ -45,7 +45,7 @@ router.get(
     })
 
     const services = result.services.map((s) => {
-      const choice = chooseChain(s.networks, policy)
+      const choice = chooseChain(s.networks, policy, { gatewayOnly: s.source === 'x402' })
       return {
         ...s,
         payable: choice !== null,

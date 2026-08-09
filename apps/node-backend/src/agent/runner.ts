@@ -33,6 +33,83 @@ function isBalanceError(message: string): boolean {
   return /insufficient|balance|not enough funds/i.test(message)
 }
 
+/** Pull an HTTP status out of an SDK error string, for the failure log. */
+function httpStatusOf(message: string): number | null {
+  const match = message.match(/\b(4\d{2}|5\d{2})\b/)
+  return match ? Number(match[1]) : null
+}
+
+/**
+ * Whether a failure is the endpoint rejecting the HTTP verb.
+ *
+ * Matches the phrase as well as the number: SDK errors are not consistent
+ * about carrying a status, and one observed failure read "Payment failed: Bad
+ * Request" with no digits in it at all.
+ */
+function isMethodNotAllowed(message: string): boolean {
+  return httpStatusOf(message) === 405 || /method not allowed/i.test(message)
+}
+
+/**
+ * Pay for a step, recovering from a wrong HTTP verb.
+ *
+ * The catalog's recorded method is sometimes wrong — the Bazaar lists at least
+ * one endpoint as GET that answers only POST — and the wrong verb comes back
+ * as 405 with nothing bought.
+ *
+ * Recovery is safe because of what 405 means here. x402 requires an unpaid
+ * request first, which the server answers with 402 and payment requirements;
+ * only then does the client pay. A 405 is that first request being refused, so
+ * no money has moved. Before retrying we prove it: an unpaid probe with the
+ * other verb must answer 402 — still demanding payment, therefore none was
+ * taken. Anything else and we surface the original error rather than risk
+ * paying twice.
+ */
+async function payWithMethodRecovery(
+  client: GatewayClient,
+  step: PlanStep,
+  payOptions: { method: 'POST'; body: Record<string, unknown> } | undefined,
+): Promise<Awaited<ReturnType<GatewayClient['pay']>>> {
+  /**
+   * Ask the endpoint, not the catalog, before spending.
+   *
+   * The registry's scheme list is a snapshot from the last Bazaar sync and can
+   * disagree with what the endpoint advertises right now — the block-height
+   * endpoint is recorded as offering batch settlement and did not, which is
+   * how a run got as far as the payment before failing. supports() is the
+   * unpaid 402 probe, so this costs a round trip and no money.
+   */
+  const support = await client.supports(step.endpointUrl).catch(() => null)
+  if (support && support.supported === false) {
+    throw new Error(
+      support.error ??
+        'This endpoint does not offer Gateway batch settlement, so the agent cannot pay it.',
+    )
+  }
+
+  try {
+    return await client.pay(step.endpointUrl, payOptions)
+  } catch (err) {
+    const detail = safeErrorMessage(err)
+    if (!isMethodNotAllowed(detail)) throw err
+
+    const flipped = step.httpMethod === 'POST' ? 'GET' : 'POST'
+    const probe = await fetch(step.endpointUrl, { method: flipped }).catch(() => null)
+    if (probe?.status !== 402) throw err
+
+    console.warn(
+      '[trident] catalog method wrong, retrying:',
+      JSON.stringify({ url: step.endpointUrl, was: step.httpMethod, now: flipped }),
+    )
+
+    step.httpMethod = flipped
+    return await client.pay(
+      step.endpointUrl,
+      flipped === 'POST' ? ({ method: 'POST', body: step.params } as const) : undefined,
+    )
+  }
+}
+
 /** Round to USDC's 6 decimals so repeated addition doesn't drift. */
 function usdc(n: number): number {
   return Number(n.toFixed(6))
@@ -274,10 +351,12 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
 
         // Chain is decided here, not by the client: a tampered request must not
         // be able to move spending onto mainnet when the user has not opted in.
-        const choice = chooseChain(service.networks, policy)
+        const choice = chooseChain(service.networks, policy, {
+          gatewayOnly: service.source === 'x402',
+        })
         if (!choice) {
           throw new Error(
-            unpayableReason(service.networks, policy) ?? 'No permitted settlement network',
+            unpayableReason(service.networks, policy, { gatewayOnly: service.source === 'x402' }) ?? 'No permitted settlement network',
           )
         }
 
@@ -307,7 +386,11 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
               ? ({ method: 'POST', body: step.params } as const)
               : undefined
 
-          const result = await clientFor(choice.chain).pay(step.endpointUrl, payOptions)
+          const result = await payWithMethodRecovery(
+            clientFor(choice.chain),
+            step,
+            payOptions,
+          )
           const parsed = Number.parseFloat(result.formattedAmount)
           cost = Number.isFinite(parsed) ? parsed : 0
           txRef = result.transaction
@@ -348,6 +431,35 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
         })
       } catch (err) {
         const detail = safeErrorMessage(err)
+
+        /**
+         * The only place a failed endpoint is recorded where an operator can
+         * find it. Everything else about a failure lives in the task row, which
+         * needs the owner's session to read — so a support question about "it
+         * did not work" was previously unanswerable from the server side.
+         *
+         * Deliberately one line, structured, and free of anything sensitive:
+         * no key, no parameters, no response body.
+         */
+        console.error(
+          '[trident] step failed:',
+          JSON.stringify({
+            taskId,
+            step: step.stepIndex,
+            service: step.serviceName,
+            url: step.endpointUrl,
+            method: step.httpMethod,
+            source: service?.source ?? 'unknown',
+            chain: service
+              ? (chooseChain(service.networks, policy, {
+                  gatewayOnly: service.source === 'x402',
+                })?.chain ?? null)
+              : null,
+            status: httpStatusOf(detail),
+            error: detail.slice(0, 300),
+          }),
+        )
+
         db.prepare(
           `UPDATE task_steps
            SET status = 'failed', response_summary = ?, completed_at = strftime('%s','now')

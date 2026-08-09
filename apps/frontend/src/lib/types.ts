@@ -219,6 +219,23 @@ export interface WalletBalance {
   explorerBase: string | null
 }
 
+/**
+ * A deposit that has settled on chain but not yet been credited by Gateway.
+ *
+ * Gateway only counts a deposit once the source chain reaches finality, so the
+ * transfer succeeds and the balance stays flat for many minutes. Without a
+ * record of the wait, that reads as a lost deposit.
+ */
+export interface PendingDeposit {
+  chain: string
+  amount: string
+  txHash: string
+  /** Epoch ms, for showing elapsed time. */
+  at: number
+  /** Gateway total at deposit time — the balance to beat before clearing this. */
+  baselineTotal: string | null
+}
+
 /** A chain this account is permitted to hold funds on. */
 export interface ChainOption {
   /** SDK key, e.g. `base` — what the balance and Gateway routes expect. */

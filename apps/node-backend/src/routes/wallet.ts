@@ -11,6 +11,7 @@ import {
   chainConfig,
   chainLabel,
   gatewayClientFor,
+  readOnlyGatewayClient,
   resolveChain,
   rpcUrlFor,
   strictChain,
@@ -122,17 +123,23 @@ router.all(
 
     const walletUsdc = formatUnitsFixed(usdcRaw, USDC_DECIMALS)
 
-    // Gateway balance requires the SDK client, which requires the key.
+    /*
+     * Read the Gateway balance without the user's key.
+     *
+     * getBalances() takes the address to query, so the client's own signer is
+     * irrelevant for a read. This used to demand an unlocked wallet, which
+     * meant someone could not see their own Gateway balance without typing
+     * their passphrase — and a balance sitting at "locked" is indistinguishable
+     * from a balance sitting at zero, which is exactly the wrong thing to be
+     * ambiguous about while waiting on a deposit.
+     */
     let gatewayUsdc: string | null = null
     let gatewayAvailableUsdc: string | null = null
     let gatewayWarning: string | null = null
-    const keyResult = z.object({ agentPrivateKey: KeyString }).safeParse(req.body ?? {})
 
-    if (keyResult.success) {
-      assertKeyMatchesUser(user.id, keyResult.data.agentPrivateKey as `0x${string}`)
+    {
       try {
-        const client = gatewayClientFor(keyResult.data.agentPrivateKey, chain)
-        const balances = await client.getBalances()
+        const balances = await readOnlyGatewayClient(chain).getBalances(address)
         gatewayUsdc = balances.gateway.formattedTotal
         gatewayAvailableUsdc = balances.gateway.formattedAvailable
       } catch (err) {

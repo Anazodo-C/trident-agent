@@ -122,6 +122,10 @@ function systemPrompt(candidates: Service[]): string {
     description: s.description.slice(0, 220),
     tags: s.tags.slice(0, 6),
     priceUsdc: s.priceUsdc,
+    // Without this the model has to guess the verb, and a wrong guess is a 405
+    // from the endpoint. It is overwritten from the registry after planning
+    // regardless — this is here so the plan the user approves is coherent.
+    httpMethod: s.httpMethod,
     trust: s.trust,
     callsLast30Days: s.calls30d,
   }))
@@ -138,6 +142,7 @@ Rules:
 - endpointUrl MUST be copied exactly from a service's "url". Never invent, modify, or append to a URL.
 - serviceName MUST match that service's "name" exactly.
 - estimatedCostUsdc MUST equal that service's "priceUsdc".
+- httpMethod MUST equal that service's "httpMethod". Do not infer it from the endpoint's name or purpose.
 - Prefer trust "curated", then "active". A service with trust "untested" has no recorded usage and may not work — only choose one when nothing else fits the goal.
 - Order steps logically; stepIndex starts at 0 and increases by 1.
 - totalEstimatedCostUsdc must equal the sum of the steps' estimatedCostUsdc.

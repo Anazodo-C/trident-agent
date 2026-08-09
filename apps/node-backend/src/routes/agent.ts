@@ -129,14 +129,22 @@ router.post(
     for (const step of plan.steps) {
       const service = findServiceByResource(step.endpointUrl)
       if (!service) continue
-      const choice = chooseChain(service.networks, policy)
+
+      // The catalog knows the verb; the model was guessing. A mismatch here
+      // reaches the endpoint as a 405 and burns the run, so the registry wins.
+      if (step.httpMethod !== service.httpMethod) {
+        step.httpMethod = service.httpMethod
+      }
+      const choice = chooseChain(service.networks, policy, {
+        gatewayOnly: service.source === 'x402',
+      })
       annotations[step.stepIndex] = {
         trust: service.trust,
         calls30d: service.calls30d,
         host: service.host,
         chain: choice?.chain ?? null,
         isTestnet: choice?.isTestnet ?? false,
-        ...(choice ? {} : { blockedReason: unpayableReason(service.networks, policy) ?? undefined }),
+        ...(choice ? {} : { blockedReason: unpayableReason(service.networks, policy, { gatewayOnly: service.source === 'x402' }) ?? undefined }),
         ...(service.trust === 'untested'
           ? { warning: 'No recorded usage in the last 30 days — this endpoint may not respond.' }
           : {}),
@@ -329,10 +337,10 @@ router.post(
     const policy = policyFor(fresh)
     for (const step of approvedSteps) {
       const service = findServiceByResource(step.endpointUrl)!
-      if (!chooseChain(service.networks, policy)) {
+      if (!chooseChain(service.networks, policy, { gatewayOnly: service.source === 'x402' })) {
         throw httpError(
           403,
-          `${step.serviceName}: ${unpayableReason(service.networks, policy) ?? 'no permitted settlement network'}`,
+          `${step.serviceName}: ${unpayableReason(service.networks, policy, { gatewayOnly: service.source === 'x402' }) ?? 'no permitted settlement network'}`,
         )
       }
     }

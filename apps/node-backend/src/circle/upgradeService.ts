@@ -92,7 +92,7 @@ function findUpgradesFor(free: Service, policy: ChainPolicy): PremiumUpgrade[] {
     })
     .slice(0, MAX_OPTIONS)
     .map((s) => {
-      const choice = chooseChain(s.networks, policy)
+      const choice = chooseChain(s.networks, policy, { gatewayOnly: s.source === 'x402' })
       return {
         serviceName: s.serviceName,
         resource: s.resource,

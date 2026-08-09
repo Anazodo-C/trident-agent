@@ -4,22 +4,22 @@ import {
   ArrowUpFromLine,
   Check,
   Clipboard,
+  Clock,
   ExternalLink,
   Loader2,
   RefreshCw,
-  ShieldCheck,
 } from 'lucide-react'
 import { api } from '../../lib/api.ts'
 import { useAgentStore } from '../../store/agentStore.ts'
 import { useAuthStore } from '../../store/authStore.ts'
 import { useWalletStore } from '../../store/walletStore.ts'
 import { copyToClipboard, shortAddress, usdc } from '../../lib/format.ts'
+import type { PendingDeposit } from '../../lib/types.ts'
 import { DepositPanel } from './DepositPanel.tsx'
 
 export function WalletPage() {
   const refreshUser = useAuthStore((s) => s.refreshUser)
   const unlockedKey = useAgentStore((s) => s.unlockedKey)
-  const requestUnlock = useAgentStore((s) => s.requestUnlock)
   const { activeChain, depositInfo, loading, error, refreshAll, setActiveChain } = useWalletStore()
 
   useEffect(() => {
@@ -80,7 +80,7 @@ export function WalletPage() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <BalancePanel onUnlock={() => requestUnlock(() => void refreshAll(useAgentStore.getState().unlockedKey ?? undefined))} />
+        <BalancePanel />
         <DepositPanel />
         <GatewayPanel />
         <SpendingCapPanel onSaved={refreshUser} />
@@ -103,10 +103,10 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
   )
 }
 
-function BalancePanel({ onUnlock }: { onUnlock: () => void }) {
+function BalancePanel() {
   const balances = useWalletStore((s) => s.balances)
   const activeChain = useWalletStore((s) => s.activeChain)
-  const unlockedKey = useAgentStore((s) => s.unlockedKey)
+  const pendingDeposits = useWalletStore((s) => s.pendingDeposits)
   const [copied, setCopied] = useState(false)
 
   const entries = Object.values(balances)
@@ -183,9 +183,19 @@ function BalancePanel({ onUnlock }: { onUnlock: () => void }) {
               <Row label="USDC (wallet)" value={usdc(b.walletUsdc)} />
               <Row
                 label="USDC (gateway)"
-                value={b.gatewayUsdc != null ? usdc(b.gatewayUsdc) : 'locked'}
+                value={b.gatewayUsdc != null ? usdc(b.gatewayUsdc) : 'unavailable'}
                 dim={b.gatewayUsdc == null}
               />
+              {/*
+                Only when it differs from the total. Gateway reports both, and
+                a deposit part-way through settling shows up here first — the
+                two being equal is the normal case and not worth a row.
+              */}
+              {b.gatewayAvailableUsdc != null &&
+                b.gatewayUsdc != null &&
+                b.gatewayAvailableUsdc !== b.gatewayUsdc && (
+                  <Row label="USDC (gateway, spendable)" value={usdc(b.gatewayAvailableUsdc)} />
+                )}
               {/*
                 On Arc the native gas token is also called USDC but is a
                 separate, 18-decimal balance from the ERC-20 above — label it
@@ -197,6 +207,8 @@ function BalancePanel({ onUnlock }: { onUnlock: () => void }) {
               />
             </dl>
 
+            {pendingDeposits[b.chain] && <PendingDepositNote deposit={pendingDeposits[b.chain]!} />}
+
             {b.gatewayWarning && (
               <p className="mt-2 break-words text-[11px] text-[#FFA040]">{b.gatewayWarning}</p>
             )}
@@ -204,19 +216,44 @@ function BalancePanel({ onUnlock }: { onUnlock: () => void }) {
         ))}
       </div>
 
-      {!unlockedKey && (
-        <button className="btn-ghost mt-5 w-full" onClick={onUnlock}>
-          <ShieldCheck className="h-4 w-4" />
-          Unlock to see Gateway balance
-        </button>
-      )}
-
       {balance?.gatewayWarning && (
         <p className="mt-4 break-words rounded-lg border border-[#FFA040]/30 bg-[#FFA040]/5 p-2.5 text-[11px] leading-relaxed text-[#FFA040]">
           Gateway balance unavailable: {balance.gatewayWarning}
         </p>
       )}
     </Panel>
+  )
+}
+
+/**
+ * A deposit that has settled on chain but is still waiting on finality.
+ *
+ * Gateway credits nothing until the source chain finalises, so the wallet
+ * shows a successful transfer and an unchanged balance for up to twenty
+ * minutes. Saying so — with the clock running — is the difference between
+ * "waiting" and "my money is gone".
+ */
+function PendingDepositNote({ deposit }: { deposit: PendingDeposit }) {
+  const [now, setNow] = useState(() => Date.now())
+
+  // A minute is fine: this is a ~20 minute wait, not a progress bar.
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  const minutes = Math.max(0, Math.floor((now - deposit.at) / 60_000))
+
+  return (
+    <div className="mt-3 flex items-start gap-2 rounded-lg border border-[#FFA040]/35 bg-[#FFA040]/10 p-2.5 text-[11px] leading-relaxed text-[#FFA040]">
+      <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+      <span>
+        <strong className="font-semibold">{usdc(deposit.amount)} USDC deposited</strong>, waiting
+        on {deposit.chain} finality — {finalityNote(deposit.chain)}.{' '}
+        {minutes === 0 ? 'Just now.' : `${minutes} min ago.`} The transfer is already on chain;
+        Gateway credits it once the chain finalises.
+      </span>
+    </div>
   )
 }
 
@@ -233,6 +270,7 @@ function GatewayPanel() {
   const unlockedKey = useAgentStore((s) => s.unlockedKey)
   const requestUnlock = useAgentStore((s) => s.requestUnlock)
   const refreshAll = useWalletStore((s) => s.refreshAll)
+  const notePendingDeposit = useWalletStore((s) => s.notePendingDeposit)
   const activeChain = useWalletStore((s) => s.activeChain)
   const isTestnet = useWalletStore((s) => (s.activeChain ? s.balances[s.activeChain]?.isTestnet : true))
 
@@ -255,13 +293,34 @@ function GatewayPanel() {
     try {
       // Explicitly on the selected chain — never on a stored default.
       const chain = activeChain ?? undefined
+      const baselineTotal = chain
+        ? (useWalletStore.getState().balances[chain]?.gatewayUsdc ?? null)
+        : null
+
       const res =
         kind === 'deposit'
           ? await api.gatewayDeposit(amount, key, chain)
           : await api.gatewayWithdraw(amount, key, chain)
+
+      if (kind === 'deposit' && chain) {
+        // The transfer is on chain, but Gateway will not count it until the
+        // source chain finalises. Remember it so the flat balance in the
+        // meantime reads as "waiting" rather than "lost".
+        notePendingDeposit({
+          chain,
+          amount,
+          txHash: (res as { depositTxHash?: string }).depositTxHash ?? '',
+          at: Date.now(),
+          baselineTotal,
+        })
+      }
+
       setMessage({
         tone: 'ok',
-        text: `${kind === 'deposit' ? 'Deposited' : 'Withdrew'} ${amount} USDC on ${chain}. Gateway balance: ${res.newGatewayBalance}`,
+        text:
+          kind === 'deposit'
+            ? `Deposited ${amount} USDC on ${chain}. It will show in the Gateway balance once ${chain} finalises — ${finalityNote(chain)}.`
+            : `Withdrew ${amount} USDC on ${chain}. Gateway balance: ${res.newGatewayBalance}`,
       })
       if (kind === 'deposit') setDepositAmount('')
       else setWithdrawAmount('')
@@ -327,6 +386,18 @@ function GatewayPanel() {
       )}
     </Panel>
   )
+}
+
+/**
+ * How long Gateway takes to credit a deposit on a given chain.
+ *
+ * Only Base is stated with a figure, because that is the one measured. Every
+ * other chain gets the honest general answer rather than a number invented to
+ * look precise.
+ */
+function finalityNote(chain?: string): string {
+  if (chain === 'base') return 'about 18-21 minutes on Base'
+  return 'usually a few minutes, depending on the chain'
 }
 
 function AmountRow({

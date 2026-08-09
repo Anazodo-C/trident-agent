@@ -116,7 +116,7 @@ export function selectCandidates(goal: string, options: CandidateOptions): Candi
       const service = rowToService(row)
       return { service, score: scoreOf(service, terms) }
     })
-    .filter((s) => s.score > 0)
+    .filter((s) => s.score > 0 && isPayable(s.service, chains))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((s) => s.service)
@@ -137,8 +137,26 @@ export function selectCandidates(goal: string, options: CandidateOptions): Candi
     .all({ ...chainParams, limit }) as ServiceRow[]
 
   return {
-    services: fallbackRows.map(rowToService),
+    services: fallbackRows.map(rowToService).filter((s) => isPayable(s, chains)),
     fallback: true,
     termsUsed: terms,
   }
+}
+
+/**
+ * Can the agent actually pay this service?
+ *
+ * The chain filter above is necessary but nowhere near sufficient. Gateway
+ * settles only `batch-settlement` authorisations, and of the 13,824 services
+ * advertising Base mainnet, 51 offer one. Handing the planner the other 13,773
+ * means it proposes a plan, the user approves it, and the run dies on "No
+ * Gateway batching option available for network eip155:8453" — after they have
+ * already said yes.
+ *
+ * Free services are exempt: they are metered by a direct Arc Testnet transfer
+ * and carry the `verification` scheme, never touching Gateway.
+ */
+function isPayable(service: Service, chains: SupportedChainName[]): boolean {
+  if (service.source === 'free') return true
+  return service.networks.some((n) => chains.includes(n.chainKey) && n.gatewayBatchable === true)
 }

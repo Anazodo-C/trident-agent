@@ -314,7 +314,13 @@ async function main(): Promise<void> {
   )
   check('balance reads on-chain state', balance.status === 200, JSON.stringify(balance.body))
   check('balance is for the agent EOA', balance.body?.eoaAddress === eoaAddress)
-  check('gateway balance is null without a key', balance.body?.gatewayUsdc === null)
+  // Reading a Gateway balance needs the address, not the key — so it must be
+  // visible without unlocking, the same as the on-chain wallet balance.
+  check(
+    'gateway balance is readable without a key',
+    balance.body?.gatewayUsdc !== null && balance.body?.gatewayUsdc !== undefined,
+    String(balance.body?.gatewayUsdc),
+  )
 
   const depositInfo = await json<{ address: string; bridgeChains: unknown[] }>(
     '/api/wallet/deposit-address',
@@ -397,6 +403,21 @@ async function main(): Promise<void> {
     body: JSON.stringify({ cap: 10 }),
   })
 
+  /*
+   * Enable mainnet, or the x402 path below cannot run at all.
+   *
+   * Gateway settles only batch-settlement options, and no Arc Testnet service
+   * offers one — so with mainnet off every paid service is correctly refused
+   * and the runner's payment path is never exercised. The wallet here is
+   * freshly generated and unfunded, so enabling this risks nothing: the run
+   * still fails on balance, which is exactly what the checks below assert.
+   */
+  await json('/api/wallet/user/mainnet', {
+    method: 'PATCH',
+    headers: auth,
+    body: JSON.stringify({ enabled: true, chain: 'BASE' }),
+  })
+
   // ---------------------------------------------------------------- planner
   section('Planner')
   if (!process.env['ANTHROPIC_API_KEY']) {
@@ -465,14 +486,15 @@ async function main(): Promise<void> {
       approvedSteps: steps,
       agentPrivateKey: decrypted,
       // Deliberately below the cheapest step so the limit must refuse it.
-      budgetUsdc: 0.0001,
+      // Free-tier steps meter at $0.000001, so this has to sit under that.
+      budgetUsdc: 0.0000001,
     }),
   })
   check('an unaffordable run is refused outright', refused.status === 403, `got ${refused.status}`)
   check('the refusal explains the shortfall', /over your/.test(refused.body?.error ?? ''))
   check(
     'the refusal quotes what it would take',
-    (refused.body?.budgetGuidance?.options?.[0]?.minimumCapUsdc ?? 0) > 0.0001,
+    (refused.body?.budgetGuidance?.options?.[0]?.minimumCapUsdc ?? 0) > 0.0000001,
     refused.body?.error,
   )
 

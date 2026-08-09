@@ -28,6 +28,8 @@ export interface ServiceNetworkOption {
   priceUsdc: number
   asset: string | null
   scheme: string
+  /** True only when Circle Gateway can settle it — see isGatewayBatchable. */
+  gatewayBatchable?: boolean
 }
 
 export type ServiceSource = 'x402' | 'free'
@@ -135,6 +137,23 @@ function toUsdc(amount: string | undefined): number {
   return Number.isFinite(n) ? Number((n / 1e6).toFixed(6)) : 0
 }
 
+/**
+ * Mirrors the SDK's own selection test, which is the only thing that decides
+ * whether a payment will go through.
+ */
+function isGatewayBatchable(accept: {
+  scheme?: string
+  extra?: Record<string, unknown>
+}): boolean {
+  const extra = accept.extra
+  return (
+    accept.scheme === 'batch-settlement' &&
+    extra?.['name'] === 'GatewayWalletBatched' &&
+    extra?.['version'] === '1' &&
+    typeof extra?.['verifyingContract'] === 'string'
+  )
+}
+
 function hostOf(url: string): string {
   try {
     return new URL(url).host
@@ -165,6 +184,17 @@ function normalise(item: DiscoveryItem): Omit<ServiceRow, 'synced_at'> | null {
       priceUsdc: toUsdc(accept.amount),
       asset: accept.asset ?? null,
       scheme: accept.scheme ?? 'exact',
+      /**
+       * Whether Circle's Gateway can actually settle this option.
+       *
+       * `scheme: 'batch-settlement'` is not enough — it is a generic label and
+       * other implementations use it too (Tempo, for one). The SDK will only
+       * pay an option carrying Circle's own marker, and refuses anything else
+       * with "No Gateway batching option available". Recording the answer here
+       * is the difference between a plan that can run and one that dies after
+       * the user approves it.
+       */
+      gatewayBatchable: isGatewayBatchable(accept),
     })
   }
   if (options.length === 0) return null

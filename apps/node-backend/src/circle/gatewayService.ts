@@ -1,4 +1,5 @@
 import { GatewayClient, CHAIN_CONFIGS } from '@circle-fin/x402-batching/client'
+import { generatePrivateKey } from 'viem/accounts'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import { httpError } from '../http.ts'
 import { isValidPrivateKey } from '../auth/keySetup.ts'
@@ -92,6 +93,25 @@ export function gatewayClientFor(
     privateKey: agentPrivateKey,
     rpcUrl: rpcUrlFor(chain),
   })
+}
+
+/**
+ * A signer used only to construct a client for reads.
+ *
+ * GatewayClient requires a private key to exist, but `getBalances(address)`
+ * queries whatever address it is given — verified against a direct on-chain
+ * read, where an unrelated signer returned the queried address's true balance.
+ * So reading a Gateway balance needs no access to the user's wallet, and
+ * demanding their passphrase to see their own balance was a self-imposed lock.
+ *
+ * Generated once per process, never used to sign, never funded.
+ */
+let readOnlySigner: `0x${string}` | null = null
+
+/** A client for reads only. Never pass this anywhere that signs or spends. */
+export function readOnlyGatewayClient(chain: SupportedChainName = DEFAULT_CHAIN): GatewayClient {
+  readOnlySigner ??= generatePrivateKey()
+  return new GatewayClient({ chain, privateKey: readOnlySigner, rpcUrl: rpcUrlFor(chain) })
 }
 
 /**
