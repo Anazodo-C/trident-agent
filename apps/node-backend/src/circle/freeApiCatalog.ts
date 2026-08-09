@@ -22,6 +22,16 @@ export interface FreeApi {
   /** Curated = dependable, well-known, good default for its category. */
   curated: boolean
   /**
+   * Query parameters the caller should set, where the stored URL carries an
+   * example value.
+   *
+   * Without this the planner has no idea a parameter exists, so the example
+   * ships as the answer — the geocoding entry is stored as "?name=lagos", and
+   * a request for the University of Georgia was billed and answered as Lagos.
+   * Named here, the planner fills them and they override the example.
+   */
+  params?: string[]
+  /**
    * The kind of paid capability this stands in for, used to suggest an x402
    * upgrade when a premium service would do the job better.
    */
@@ -35,6 +45,7 @@ export const FREE_API_CATALOG: FreeApi[] = [
     name: 'CoinGecko Simple Price',
     description: 'Spot price for any coin in any currency. No key required.',
     resource: 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd',
+    params: ['ids', 'vs_currencies'],
     tags: ['crypto', 'price', 'market', 'token'],
     curated: true,
     premiumCategory: 'crypto market data',
@@ -54,6 +65,7 @@ export const FREE_API_CATALOG: FreeApi[] = [
     name: 'Frankfurter FX Rates',
     description: 'Reference foreign-exchange rates published by the ECB.',
     resource: 'https://api.frankfurter.app/latest?from=USD',
+    params: ['from'],
     tags: ['fx', 'currency', 'exchange', 'finance'],
     curated: true,
     premiumCategory: 'financial data',
@@ -64,6 +76,7 @@ export const FREE_API_CATALOG: FreeApi[] = [
     name: 'Open-Meteo Forecast',
     description: 'Weather forecast by latitude and longitude. No key required.',
     resource: 'https://api.open-meteo.com/v1/forecast?latitude=51.5&longitude=-0.13&current_weather=true',
+    params: ['latitude', 'longitude'],
     tags: ['weather', 'forecast', 'climate'],
     curated: true,
   },
@@ -90,6 +103,7 @@ export const FREE_API_CATALOG: FreeApi[] = [
     name: 'Open Library Search',
     description: 'Book metadata by title, author or subject.',
     resource: 'https://openlibrary.org/search.json?q=the+lean+startup&limit=5',
+    params: ['q'],
     tags: ['books', 'library', 'research', 'metadata'],
     curated: true,
   },
@@ -98,6 +112,7 @@ export const FREE_API_CATALOG: FreeApi[] = [
     name: 'Datamuse',
     description: 'Word suggestions: synonyms, rhymes, related terms.',
     resource: 'https://api.datamuse.com/words?ml=startup&max=20',
+    params: ['ml'],
     tags: ['words', 'language', 'thesaurus', 'naming'],
     curated: false,
   },
@@ -192,6 +207,7 @@ export const FREE_API_CATALOG: FreeApi[] = [
     name: 'CoinGecko Markets',
     description: 'Top coins by market cap with price, volume and 24h change.',
     resource: 'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&per_page=10&page=1',
+    params: ['vs_currency'],
     tags: ['crypto', 'market', 'marketcap', 'ranking'],
     curated: true,
     premiumCategory: 'crypto market data',
@@ -210,6 +226,7 @@ export const FREE_API_CATALOG: FreeApi[] = [
     name: 'Open-Meteo Geocoding',
     description: 'Resolve a place name to coordinates, country and timezone.',
     resource: 'https://geocoding-api.open-meteo.com/v1/search?name=lagos&count=3',
+    params: ['name'],
     tags: ['geocoding', 'geo', 'location', 'coordinates'],
     curated: true,
   },
@@ -218,6 +235,7 @@ export const FREE_API_CATALOG: FreeApi[] = [
     name: 'Wikipedia Search',
     description: 'Full-text search across Wikipedia articles.',
     resource: 'https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=x402&format=json',
+    params: ['srsearch'],
     tags: ['wiki', 'search', 'research', 'reference'],
     curated: true,
     premiumCategory: 'web search and research',
@@ -243,6 +261,7 @@ export const FREE_API_CATALOG: FreeApi[] = [
     name: 'Sunrise / Sunset',
     description: 'Sunrise, sunset and twilight times for a coordinate.',
     resource: 'https://api.sunrise-sunset.org/json?lat=51.5&lng=-0.13',
+    params: ['lat', 'lng'],
     tags: ['sun', 'daylight', 'astronomy', 'time'],
     curated: false,
   },

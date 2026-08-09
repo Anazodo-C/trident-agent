@@ -100,6 +100,17 @@ export function requestUrl(step: PlanStep): string {
 
   const url = new URL(step.endpointUrl)
   for (const [key, value] of entries) {
+    /*
+     * Replace, never add alongside.
+     *
+     * Catalogued URLs can carry example values — the free geocoding entry is
+     * stored as "?name=lagos" — and appending produced "?name=lagos&name=
+     * University of Georgia". The server read the first one, so the user paid
+     * for confident results about the wrong place. A supplied parameter must
+     * win over a catalogued default.
+     */
+    url.searchParams.delete(key)
+
     // The planner joins lists into one comma-separated string; split them back
     // out so a repeated-key schema gets what it expects.
     const parts = typeof value === 'string' && value.includes(',') ? value.split(',') : [value]

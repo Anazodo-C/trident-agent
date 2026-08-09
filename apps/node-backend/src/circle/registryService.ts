@@ -356,7 +356,25 @@ function freeApiRows(syncedAt: number): ServiceRow[] {
     payers_30d: 0,
     last_called_at: null,
     icon_url: null,
-    input_schema: null,
+    /*
+     * Same shape the paid catalog publishes, so requiredParams reaches the
+     * planner by the one path. A free endpoint whose URL carries an example
+     * value is otherwise indistinguishable from one that takes no input, and
+     * the example gets returned as though it were the answer.
+     */
+    input_schema: api.params?.length
+      ? JSON.stringify({
+          type: 'http',
+          method: 'GET',
+          queryParams: {
+            type: 'object',
+            required: api.params,
+            properties: Object.fromEntries(
+              api.params.map((name) => [name, { type: 'string', description: 'query parameter' }]),
+            ),
+          },
+        })
+      : null,
     synced_at: syncedAt,
   }))
 }
