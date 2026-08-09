@@ -264,7 +264,7 @@ section('chain policy (mainnet is opt-in)')
     { network: 'eip155:137', chainKey: 'polygon' as const, isTestnet: false, priceUsdc: 0.003 },
   ]
   check(
-    'a wallet funded on Base can settle a Polygon-only service',
+    'the funding chain does not restrict which chains policy permits',
     chooseChain(polygonOnly, opted)?.chain === 'polygon',
     String(chooseChain(polygonOnly, opted)?.chain),
   )
@@ -287,6 +287,50 @@ section('chain policy (mainnet is opt-in)')
     'Arc mainnet is excluded — it has no RPC and constructing a client throws',
     !GATEWAY_MAINNET_CHAINS.includes('arc'),
   )
+  /*
+   * The BlockRun failure, reduced. 0.063 USDC on Base, nothing on Polygon, and
+   * a Polygon invoice came back SETTLEMENT_FAILED / insufficient_balance: a
+   * Gateway payment draws only from the chain it settles on.
+   */
+  const onBase = new Map([['base' as const, 0.063]])
+  check(
+    'a Polygon-only service is refused when the money is on Base',
+    chooseChain(polygonOnly, opted, { balances: onBase }) === null,
+  )
+  check(
+    'and the refusal says where to deposit rather than blaming settlement',
+    (unpayableReason(polygonOnly, opted, { balances: onBase }) ?? '').includes('polygon') &&
+      (unpayableReason(polygonOnly, opted, { balances: onBase }) ?? '').includes('0.063'),
+    String(unpayableReason(polygonOnly, opted, { balances: onBase })),
+  )
+  check(
+    'a service offering both settles where the funds are, not where it is cheapest',
+    chooseChain(
+      [
+        { network: 'eip155:137', chainKey: 'polygon' as const, isTestnet: false, priceUsdc: 0.001 },
+        { network: 'eip155:8453', chainKey: 'base' as const, isTestnet: false, priceUsdc: 0.01 },
+      ],
+      opted,
+      { balances: onBase },
+    )?.chain === 'base',
+  )
+  check(
+    'a balance too small for the price does not count as funded',
+    chooseChain(
+      [{ network: 'eip155:8453', chainKey: 'base' as const, isTestnet: false, priceUsdc: 0.5 }],
+      opted,
+      { balances: onBase },
+    ) === null,
+  )
+  check(
+    'testnet is exempt — it settles by verification transfer, not Gateway',
+    chooseChain(bothChains, opted, { balances: new Map() })?.chain === 'arcTestnet',
+  )
+  check(
+    'with no balance information the check is skipped entirely',
+    chooseChain(polygonOnly, opted)?.chain === 'polygon',
+  )
+
   check(
     'the cheapest permitted mainnet option still wins across chains',
     chooseChain(

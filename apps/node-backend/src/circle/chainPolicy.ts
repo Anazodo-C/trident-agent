@@ -10,13 +10,15 @@ import { isTestnetChain } from './registryService.ts'
  * only settle with testnet funds, so no goal can cost real money by accident —
  * which matters because the agent spends autonomously once a plan is approved.
  *
- * Once it is on, though, the user's chosen chain says where they *fund*, not
- * where they can spend. Gateway holds one balance across every domain it
- * supports, so USDC deposited on Base settles a Polygon invoice without a
- * bridge — that is the product. Treating the funding chain as a spending
- * restriction threw away the whole point of paying through Gateway: BlockRun
- * publishes 138 endpoints, 124 of them Gateway-payable and 119 Polygon-only,
- * and every one was unreachable to a wallet funded on Base.
+ * Once it is on, though, the user's chosen chain is not a spending allowlist —
+ * every Gateway mainnet domain is permitted, and the per-service choice is made
+ * from what that service accepts. BlockRun publishes 138 endpoints, 124 of them
+ * Gateway-payable and 119 Polygon-only, and treating "funded on Base" as
+ * "may only spend on Base" made all of them unreachable.
+ *
+ * Permitted is not the same as payable. Settlement draws from the chain the
+ * invoice names, so the balance has to be there too — see fundedFor, which is
+ * the check that turns a permitted chain into a usable one.
  */
 
 /** Label used in the users table and the API. */
@@ -120,6 +122,38 @@ export interface ChooseChainOptions {
    * a direct transfer and carry the `verification` scheme instead.
    */
   gatewayOnly?: boolean
+  /**
+   * Gateway balance per mainnet chain, in USDC. Omit to skip the check.
+   *
+   * Settlement draws from the chain the invoice names, and nowhere else. A
+   * balance on the wrong chain is not spendable here — see fundedFor.
+   */
+  balances?: Map<SupportedChainName, number>
+}
+
+/**
+ * Whether a settlement option can actually be paid from what is on hand.
+ *
+ * Gateway pools deposits for its own transfers, but an x402 batched payment is
+ * not one of those. The buyer signs a TransferWithAuthorization against the
+ * GatewayWallet contract deployed on the chain the invoice names, and that
+ * contract can only draw the depositor's balance on that same chain. Circle's
+ * "balance can live on any supported blockchain" describes the burn-intent
+ * transfer API, not a seller redeeming a per-chain authorisation.
+ *
+ * Observed, not inferred: with 0.063 USDC on Base and nothing on Polygon, a
+ * 0.027983 invoice on Polygon came back SETTLEMENT_FAILED, debug
+ * "insufficient_balance".
+ *
+ * Testnet options are exempt. They settle through the verification transfer
+ * rather than Gateway, and that path is already working.
+ */
+function fundedFor(
+  option: ServiceNetworkLike,
+  balances: Map<SupportedChainName, number> | undefined,
+): boolean {
+  if (!balances || option.isTestnet) return true
+  return (balances.get(option.chainKey) ?? 0) >= option.priceUsdc
 }
 
 /**
@@ -131,7 +165,7 @@ export interface ChooseChainOptions {
 export function chooseChain(
   options: ServiceNetworkLike[],
   policy: ChainPolicy,
-  { gatewayOnly = false }: ChooseChainOptions = {},
+  { gatewayOnly = false, balances }: ChooseChainOptions = {},
 ): ChainChoice | null {
   let permitted = options.filter((o) => policy.allowed.includes(o.chainKey))
   if (gatewayOnly) {
@@ -142,7 +176,21 @@ export function chooseChain(
   if (permitted.length === 0) return null
 
   const testnet = permitted.filter((o) => o.isTestnet)
-  const pool = testnet.length > 0 ? testnet : permitted
+  let pool = testnet.length > 0 ? testnet : permitted
+
+  /*
+   * Among mainnet options, only ones the wallet can actually settle on.
+   *
+   * Cheapest-wins alone sent a payment to whichever chain the seller priced
+   * lowest, regardless of where the money was, and the rejection came back as
+   * a generic settlement failure. A service listing both Base and Polygon is
+   * payable today; one listing Polygon alone is not, and saying so up front
+   * beats signing an authorisation that cannot clear.
+   */
+  const funded = pool.filter((o) => fundedFor(o, balances))
+  if (funded.length === 0) return null
+  pool = funded
+
   const best = pool.reduce((a, b) => (b.priceUsdc < a.priceUsdc ? b : a))
 
   return {
@@ -174,6 +222,23 @@ export function unpayableReason(
 
   if (!policy.mainnetEnabled && options.some((o) => !o.isTestnet)) {
     return 'This service settles on mainnet. Enable mainnet spending in Wallet to use it.'
+  }
+
+  /*
+   * Distinguish "cannot be paid" from "cannot be paid from where the money
+   * currently is". The second is the user's to fix in one deposit, and
+   * reporting it as a settlement failure told them nothing.
+   */
+  if (opts.balances && chooseChain(options, policy, { ...opts, balances: undefined })) {
+    const wanted = [...new Set(options.filter((o) => !o.isTestnet).map((o) => o.chainKey))]
+    const held = [...opts.balances.entries()]
+      .filter(([, amount]) => amount > 0)
+      .map(([chain, amount]) => `${amount} USDC on ${chain}`)
+    return (
+      `This service settles on ${wanted.join(', ')}, and a Gateway payment can only draw from ` +
+      `the chain it settles on. ${held.length ? `You hold ${held.join(', ')}.` : 'No Gateway balance was found.'} ` +
+      `Deposit to ${wanted[0]} to use it.`
+    )
   }
 
   return 'No settlement network this wallet supports.'

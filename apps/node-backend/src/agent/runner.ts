@@ -6,10 +6,17 @@ import {
   lastErrorBodyFor,
   quoteFromEndpoint,
   safeErrorMessage,
+  unifiedGatewayBalance,
 } from '../circle/gatewayService.ts'
+import { privateKeyToAccount } from 'viem/accounts'
 import { findServiceByResource, type Service } from '../circle/registryService.ts'
 import { findAlternatives, noteEndpointFailure } from '../circle/candidateService.ts'
-import { chooseChain, unpayableReason, type ChainPolicy } from '../circle/chainPolicy.ts'
+import {
+  GATEWAY_MAINNET_CHAINS,
+  chooseChain,
+  unpayableReason,
+  type ChainPolicy,
+} from '../circle/chainPolicy.ts'
 import { callFreeApi, payVerification } from '../circle/testnetVerification.ts'
 import { summariseRun, type StepResult } from '../llm/responder.ts'
 import { appendMessage } from './conversation.ts'
@@ -360,6 +367,11 @@ async function payWithMethodRecovery(
   }
 }
 
+/** The public address for a signing key, for balance lookups. */
+function addressOf(privateKey: string): string {
+  return privateKeyToAccount(privateKey as `0x${string}`).address
+}
+
 /** Round to USDC's 6 decimals so repeated addition doesn't drift. */
 function usdc(n: number): number {
   return Number(n.toFixed(6))
@@ -447,6 +459,24 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
   // Seeded with what earlier attempts already spent, so the budget and cap are
   // measured against the true cost of the task rather than of this attempt.
   let totalSpent = usdc([...completed.values()].reduce((sum, step) => sum + step.cost, 0))
+
+  /*
+   * Where this wallet's Gateway money actually is, read once for the run.
+   *
+   * Settlement can only draw from the chain the invoice names, so this decides
+   * which of a service's networks are usable. One request covering every
+   * mainnet domain; undefined if it fails, which disables the check rather
+   * than blocking a run on a balance lookup.
+   */
+  const gatewayBalances = policy.mainnetEnabled
+    ? await unifiedGatewayBalance(addressOf(agentPrivateKey), GATEWAY_MAINNET_CHAINS)
+        .then((unified) => {
+          const byChain = new Map<SupportedChainName, number>()
+          for (const entry of unified.byChain) byChain.set(entry.chain, Number(entry.usdc))
+          return byChain
+        })
+        .catch(() => undefined)
+    : undefined
 
   // Kept in memory as the run proceeds so the summary is written from the live
   // payloads rather than re-read from the truncated copies in the database.
@@ -614,12 +644,15 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
 
         // Chain is decided here, not by the client: a tampered request must not
         // be able to move spending onto mainnet when the user has not opted in.
-        const choice = chooseChain(service.networks, policy, {
+        const chainOpts = {
           gatewayOnly: service.source === 'x402',
-        })
+          ...(gatewayBalances ? { balances: gatewayBalances } : {}),
+        }
+        const choice = chooseChain(service.networks, policy, chainOpts)
         if (!choice) {
           throw new Error(
-            unpayableReason(service.networks, policy, { gatewayOnly: service.source === 'x402' }) ?? 'No permitted settlement network',
+            unpayableReason(service.networks, policy, chainOpts) ??
+              'No permitted settlement network',
           )
         }
 
