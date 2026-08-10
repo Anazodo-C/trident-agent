@@ -213,9 +213,11 @@ export interface WalletBalance {
   gatewayUsdc: string | null
   gatewayAvailableUsdc: string | null
   /**
-   * Spendable across every Gateway domain, not just this chain. Gateway pools
-   * deposits, so this is what the agent can actually pay with — a Base deposit
-   * settles a Polygon invoice.
+   * The Gateway ledger summed across every mainnet domain.
+   *
+   * A total, not a spendable figure — an invoice draws the ledger on its own
+   * chain and nowhere else. What makes it usable anywhere is the agent bridging
+   * on demand, which costs a fee and takes minutes.
    */
   gatewaySpendableUsdc: string | null
   /** Set when the on-chain read succeeded but the Gateway API call did not. */
@@ -259,7 +261,8 @@ export interface DepositInfo {
   /** Every chain the account may use — testnet always, mainnet once opted in. */
   availableChains: ChainOption[]
   bridgeChains: { label: string; chain: string }[]
-  fiatOnramp: { available: boolean; testnetFaucetUrl: string; note: string }
+  /** No onramp exists; the faucet and a direct transfer are the ways in. */
+  faucet: { testnetFaucetUrl: string; note: string }
 }
 
 export interface KeyMaterial {

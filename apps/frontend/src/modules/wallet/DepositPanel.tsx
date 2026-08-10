@@ -35,7 +35,7 @@ export function DepositPanel() {
   const user = useAuthStore((s) => s.user)
   const requestUnlock = useAgentStore((s) => s.requestUnlock)
 
-  const [tab, setTab] = useState<'crypto' | 'fiat'>('crypto')
+  const [tab, setTab] = useState<'crypto' | 'faucet'>('crypto')
   const [sourceChain, setSourceChain] = useState(FALLBACK_CHAIN)
 
   // Switching the destination resets the source to match it, so the default is
@@ -54,6 +54,20 @@ export function DepositPanel() {
 
   const address = depositInfo?.address ?? user?.eoaAddress ?? ''
   const bridgeSources = depositInfo?.bridgeChains ?? []
+
+  /*
+   * The networks this account funds, in label form, destination first.
+   *
+   * Drawn from availableChains rather than bridgeChains: the latter is
+   * everything BridgeKit supports, which is a different and much longer
+   * question than "where might my money already be".
+   */
+  const sourceOptions = [
+    homeChain,
+    ...(depositInfo?.availableChains ?? [])
+      .map((c) => c.label)
+      .filter((label) => label !== homeChain && bridgeSources.some((b) => b.label === label)),
+  ]
   const needsBridge = sourceChain !== homeChain
 
   useEffect(() => {
@@ -115,7 +129,7 @@ export function DepositPanel() {
       <h2 className="heading-mono mb-4">Deposit</h2>
 
       <div className="mb-5 flex gap-2">
-        {(['crypto', 'fiat'] as const).map((t) => (
+        {(['crypto', 'faucet'] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -128,14 +142,14 @@ export function DepositPanel() {
         ))}
       </div>
 
-      {tab === 'fiat' ? (
+      {tab === 'faucet' ? (
         <div>
           <p className="mb-4 text-sm leading-relaxed text-slate-400">
-            Direct fiat onramp is not available — it needs Circle Liquidity Services with a
-            separate API key. On testnet, fund this address from the Circle faucet.
+            Fund this address from the Circle faucet on testnet, or send USDC to it from any
+            wallet. Card payments are not supported yet.
           </p>
           <a
-            href={depositInfo?.fiatOnramp.testnetFaucetUrl ?? 'https://faucet.circle.com'}
+            href={depositInfo?.faucet.testnetFaucetUrl ?? 'https://faucet.circle.com'}
             target="_blank"
             rel="noreferrer noopener"
             className="btn-ghost w-full"
@@ -157,19 +171,19 @@ export function DepositPanel() {
               }}
             >
               {/*
-                The destination is always a valid source — that is the direct
-                deposit, no bridge. It is not in bridgeChains for every chain,
-                and a <select> whose value has no matching <option> renders the
-                first one instead, which said ARC-TESTNET while the address
-                below it was for Base.
+                Only the networks this account actually funds.
+
+                This listed every chain BridgeKit can bridge from — ten testnets
+                among them — which is a long menu for a panel whose common case
+                is "send USDC on the network I am already looking at". The
+                destination is always present as the direct option, because a
+                <select> whose value matches no <option> silently renders the
+                first one, and this one sits directly above an address.
               */}
-              {!bridgeSources.some((c) => c.label === homeChain) && (
-                <option value={homeChain}>{homeChain} (direct)</option>
-              )}
-              {bridgeSources.map((c) => (
-                <option key={c.label} value={c.label}>
-                  {c.label}
-                  {c.label === homeChain ? ' (direct)' : ''}
+              {sourceOptions.map((label) => (
+                <option key={label} value={label}>
+                  {label}
+                  {label === homeChain ? ' (direct)' : ''}
                 </option>
               ))}
             </select>

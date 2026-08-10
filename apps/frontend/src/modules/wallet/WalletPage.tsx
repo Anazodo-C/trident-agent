@@ -16,11 +16,13 @@ import { useWalletStore } from '../../store/walletStore.ts'
 import { copyToClipboard, shortAddress, usdc } from '../../lib/format.ts'
 import type { PendingDeposit } from '../../lib/types.ts'
 import { DepositPanel } from './DepositPanel.tsx'
+import { WithdrawPanel } from './WithdrawPanel.tsx'
 
 export function WalletPage() {
   const refreshUser = useAuthStore((s) => s.refreshUser)
   const unlockedKey = useAgentStore((s) => s.unlockedKey)
-  const { activeChain, depositInfo, loading, error, refreshAll, setActiveChain } = useWalletStore()
+  const { activeChain, depositInfo, loading, error, refresh, refreshAll, setActiveChain } =
+    useWalletStore()
 
   useEffect(() => {
     void refreshAll(unlockedKey ?? undefined)
@@ -28,13 +30,27 @@ export function WalletPage() {
 
   const chains = depositInfo?.availableChains ?? []
 
+  /*
+   * Two networks, not a chain list.
+   *
+   * The backend still returns each fundable chain, because deposits and
+   * withdrawals land on a specific one. But a user chooses between testnet and
+   * mainnet — which mainnet chain their money sits on is the agent's business,
+   * and it moves it as needed. Mainnet resolves to the first chain the backend
+   * offers, which it orders with the funding chain leading.
+   */
+  const networks = [
+    ...chains.filter((c) => c.isTestnet).slice(0, 1).map((c) => ({ ...c, name: 'Arc Testnet' })),
+    ...chains.filter((c) => !c.isTestnet).slice(0, 1).map((c) => ({ ...c, name: 'Mainnet' })),
+  ]
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-mono text-lg uppercase tracking-widest text-slate-100">Wallet</h1>
           <p className="mt-2 text-sm text-slate-400">
-            One self-custody address, {chains.length > 1 ? 'usable on every chain below' : 'on testnet'}.
+            One self-custody address, {networks.length > 1 ? 'on testnet and mainnet' : 'on testnet'}.
           </p>
         </div>
         <button
@@ -58,21 +74,26 @@ export function WalletPage() {
         signup, which is how a Gateway deposit could go to a different chain
         than the agent pays from. It is now a visible, deliberate choice.
       */}
-      {chains.length > 1 && (
+      {networks.length > 1 && (
         <div className="mb-5 flex flex-wrap gap-2">
-          {chains.map((c) => (
+          {networks.map((n) => (
             <button
-              key={c.chain}
-              onClick={() => setActiveChain(c.chain)}
+              key={n.chain}
+              onClick={() => {
+                setActiveChain(n.chain)
+                // Read that network now rather than showing a stale figure
+                // until the next refresh.
+                void refresh(unlockedKey ?? undefined, n.chain)
+              }}
               className={`badge px-3 py-1.5 transition-colors ${
-                c.chain === activeChain
+                n.chain === activeChain
                   ? 'bg-[#00D4FF]/15 text-[#00D4FF] ring-1 ring-[#00D4FF]/50'
                   : 'bg-[#1A7FFF]/10 text-slate-400 hover:text-slate-200'
               }`}
             >
-              {c.chain}
-              <span className={c.isTestnet ? 'ml-2 text-slate-500' : 'ml-2 text-[#FFA040]'}>
-                {c.isTestnet ? 'testnet' : 'mainnet'}
+              {n.name}
+              <span className={n.isTestnet ? 'ml-2 text-slate-500' : 'ml-2 text-[#FFA040]'}>
+                {n.isTestnet ? 'testnet' : 'real funds'}
               </span>
             </button>
           ))}
@@ -82,13 +103,14 @@ export function WalletPage() {
       <div className="grid gap-4 lg:grid-cols-2">
         <BalancePanel />
         <DepositPanel />
+        <WithdrawPanel />
         <GatewayPanel />
         <SpendingCapPanel onSaved={refreshUser} />
         <MainnetPanel onSaved={refreshUser} />
       </div>
 
       <p className="mt-6 text-xs leading-relaxed text-slate-600">
-        {depositInfo?.fiatOnramp.note}
+        {depositInfo?.faucet.note}
       </p>
     </div>
   )
@@ -111,6 +133,19 @@ function BalancePanel() {
 
   const entries = Object.values(balances)
   const balance = (activeChain ? balances[activeChain] : undefined) ?? entries[0]
+
+  /*
+   * On mainnet the headline Gateway figure is the cross-chain total, because
+   * the agent bridges on demand — a per-chain number would report zero on a
+   * chain a payment is about to succeed on. `gatewaySpendableUsdc` is that sum;
+   * it falls back to this chain's own ledger when the aggregate read failed.
+   */
+  const gatewayTotal = balance?.gatewaySpendableUsdc ?? balance?.gatewayUsdc ?? null
+
+  // Only chains actually holding something, so the disclosure is a short list.
+  const perChain = entries.filter(
+    (b) => !b.isTestnet && b.gatewayUsdc != null && Number(b.gatewayUsdc) > 0,
+  )
 
   const explorerUrl =
     balance?.explorerBase && balance.eoaAddress
@@ -148,87 +183,90 @@ function BalancePanel() {
       </div>
 
       {/*
-        Every chain, not just the selected one. The agent pays from the Gateway
-        balance of whichever chain a service settles on, so seeing only one of
-        them is how you conclude you are funded when you are not.
+        One card for the selected network, not one per settlement chain.
+        Which chain an invoice names is the agent's problem — it picks per
+        service and bridges when the money is elsewhere — so listing eleven of
+        them asked the user to manage something they do not decide.
       */}
-      <div className="flex flex-col gap-4">
-        {entries.length === 0 && <p className="text-sm text-slate-500">Loading balances…</p>}
-
-        {entries.map((b) => (
-          <div
-            key={b.chain}
-            className={`rounded-lg border p-3.5 transition-colors ${
-              b.chain === activeChain
-                ? 'border-[#00D4FF]/40 bg-[#00D4FF]/5'
-                : 'border-[#1A7FFF]/20 bg-[#0A0E1A]/40'
-            }`}
-          >
-            <div className="mb-2.5 flex items-center justify-between gap-2">
-              <span className="font-mono text-xs uppercase tracking-widest text-slate-300">
-                {b.chain}
-              </span>
-              <span
-                className={`badge ${
-                  b.isTestnet
-                    ? 'bg-[#1A7FFF]/15 text-slate-400'
-                    : 'bg-[#FFA040]/15 text-[#FFA040]'
-                }`}
-              >
-                {b.isTestnet ? 'testnet' : 'real funds'}
-              </span>
-            </div>
-
-            <dl className="flex flex-col gap-2">
-              <Row label="USDC (wallet)" value={usdc(b.walletUsdc)} />
-              <Row
-                label="USDC (gateway)"
-                value={b.gatewayUsdc != null ? usdc(b.gatewayUsdc) : 'unavailable'}
-                dim={b.gatewayUsdc == null}
-              />
-              {/*
-                Only when it differs from the total. Gateway reports both, and
-                a deposit part-way through settling shows up here first — the
-                two being equal is the normal case and not worth a row.
-              */}
-              {b.gatewayAvailableUsdc != null &&
-                b.gatewayUsdc != null &&
-                b.gatewayAvailableUsdc !== b.gatewayUsdc && (
-                  <Row label="USDC (gateway, spendable)" value={usdc(b.gatewayAvailableUsdc)} />
-                )}
-              {/*
-                Gateway pools every chain into one balance, so the row above —
-                what sits on THIS chain — is not what the agent can spend. When
-                the two differ, showing only the per-chain figure would report
-                nothing available on a chain a payment is about to succeed on.
-              */}
-              {!b.isTestnet &&
-                b.gatewaySpendableUsdc != null &&
-                b.gatewaySpendableUsdc !== b.gatewayUsdc && (
-                  <Row
-                    label="USDC (spendable on any chain)"
-                    value={usdc(b.gatewaySpendableUsdc)}
-                  />
-                )}
-              {/*
-                On Arc the native gas token is also called USDC but is a
-                separate, 18-decimal balance from the ERC-20 above — label it
-                so they don't read as the same number.
-              */}
-              <Row
-                label={`${b.nativeSymbol} (native, for gas)`}
-                value={Number.parseFloat(b.native).toFixed(5)}
-              />
-            </dl>
-
-            {pendingDeposits[b.chain] && <PendingDepositNote deposit={pendingDeposits[b.chain]!} />}
-
-            {b.gatewayWarning && (
-              <p className="mt-2 break-words text-[11px] text-[#FFA040]">{b.gatewayWarning}</p>
-            )}
+      {!balance ? (
+        <p className="text-sm text-slate-500">Loading balance…</p>
+      ) : (
+        <div className="rounded-lg border border-[#00D4FF]/40 bg-[#00D4FF]/5 p-3.5">
+          <div className="mb-2.5 flex items-center justify-between gap-2">
+            <span className="font-mono text-xs uppercase tracking-widest text-slate-300">
+              {balance.isTestnet ? 'Arc Testnet' : 'Mainnet'}
+            </span>
+            <span
+              className={`badge ${
+                balance.isTestnet
+                  ? 'bg-[#1A7FFF]/15 text-slate-400'
+                  : 'bg-[#FFA040]/15 text-[#FFA040]'
+              }`}
+            >
+              {balance.isTestnet ? 'testnet' : 'real funds'}
+            </span>
           </div>
-        ))}
-      </div>
+
+          <dl className="flex flex-col gap-2">
+            {/* Funds the plain-x402 rail, and the burn when a bridge is needed. */}
+            <Row label="USDC (wallet)" value={usdc(balance.walletUsdc)} />
+            {/* Funds the Gateway rail. On mainnet this is the cross-chain total. */}
+            <Row
+              label="USDC (gateway)"
+              value={
+                (balance.isTestnet ? balance.gatewayUsdc : gatewayTotal) != null
+                  ? usdc((balance.isTestnet ? balance.gatewayUsdc : gatewayTotal)!)
+                  : 'unavailable'
+              }
+              dim={(balance.isTestnet ? balance.gatewayUsdc : gatewayTotal) == null}
+            />
+            {/*
+              Payments themselves cost no gas — both rails are signature-only and
+              the seller submits. This is still here because four things do spend
+              it: every free-tier call, a Gateway deposit or withdrawal, and the
+              CCTP burn. On Arc the gas token is also called USDC but is a
+              separate 18-decimal balance from the ERC-20 above.
+            */}
+            <Row
+              label={`${balance.nativeSymbol} (native, for gas)`}
+              value={Number.parseFloat(balance.native).toFixed(5)}
+            />
+          </dl>
+
+          {!balance.isTestnet && (
+            <p className="mt-2.5 text-[11px] leading-relaxed text-slate-500">
+              Held across networks. The agent moves it to whichever chain a
+              service settles on.
+            </p>
+          )}
+
+          {/*
+            Where it actually sits, folded away. A cross-chain total is the right
+            headline now the bridge works, but the split still matters when a
+            transfer is mid-flight or a chain is short.
+          */}
+          {!balance.isTestnet && perChain.length > 0 && (
+            <details className="mt-2.5">
+              <summary className="cursor-pointer text-[11px] text-slate-500 transition-colors hover:text-slate-300">
+                Where it sits
+              </summary>
+              <dl className="mt-2 flex flex-col gap-1.5 border-l border-[#1A7FFF]/20 pl-3">
+                {perChain.map((b) => (
+                  <Row key={b.chain} label={b.chain} value={usdc(b.gatewayUsdc ?? '0')} />
+                ))}
+              </dl>
+            </details>
+          )}
+
+          {pendingDeposits[balance.chain] && (
+            <PendingDepositNote deposit={pendingDeposits[balance.chain]!} />
+          )}
+
+          {balance.gatewayWarning && (
+            <p className="mt-2 break-words text-[11px] text-[#FFA040]">{balance.gatewayWarning}</p>
+          )}
+        </div>
+      )}
 
       {balance?.gatewayWarning && (
         <p className="mt-4 break-words rounded-lg border border-[#FFA040]/30 bg-[#FFA040]/5 p-2.5 text-[11px] leading-relaxed text-[#FFA040]">

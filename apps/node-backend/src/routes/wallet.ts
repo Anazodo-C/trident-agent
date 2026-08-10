@@ -21,6 +21,7 @@ import {
 import { bridge, bridgeChainOptions, estimateBridge } from '../circle/bridgeService.ts'
 import { isValidPrivateKey } from '../auth/keySetup.ts'
 import { GATEWAY_MAINNET_CHAINS, policyFor } from '../circle/chainPolicy.ts'
+import { canBridgeTo } from '../circle/deployments.ts'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import type { UserRow } from '../db.ts'
 
@@ -53,9 +54,32 @@ function walletChain(row: UserRow, requested?: string | null): SupportedChainNam
   return chain
 }
 
-/** The chains this account may operate on, for the UI to enumerate. */
+/**
+ * The chains a user actually funds, for the UI to enumerate.
+ *
+ * Deliberately NOT `policy.allowed`. That is the set the agent may *settle* on,
+ * which since mainnet opt-in became every Gateway domain — eleven of them — and
+ * the wallet page rendered a chip and a balance card, with its own RPC call, for
+ * each. Twelve networks to manage, for a product whose whole point is that the
+ * user does not think about chains.
+ *
+ * Settling and funding are different questions. The agent picks the settlement
+ * chain per invoice and bridges when the money is elsewhere; none of that needs
+ * a user-facing list. What a user genuinely chooses between is the testnet and
+ * the mainnet chains we can both deposit to and bridge from, which is exactly
+ * what DEPLOYMENTS records.
+ */
 function walletChains(row: UserRow): SupportedChainName[] {
-  return policyFor(row).allowed
+  const policy = policyFor(row)
+  if (!policy.mainnetEnabled) return [policy.testnet]
+
+  const fundable = GATEWAY_MAINNET_CHAINS.filter((chain) => canBridgeTo(chain))
+  // The funding chain leads, so the UI's default mainnet selection is the one
+  // deposits and withdrawals actually land on.
+  const ordered = policy.fundingChain
+    ? [policy.fundingChain, ...fundable.filter((c) => c !== policy.fundingChain)]
+    : fundable
+  return [policy.testnet, ...ordered]
 }
 
 const USDC_DECIMALS = 6
@@ -396,10 +420,16 @@ router.get('/deposit-address', requireAuth, (req, res) => {
      * onramp URL against an arbitrary destination address. On testnet the
      * faucet is the supported way to fund an address.
      */
-    fiatOnramp: {
-      available: false,
+    /*
+     * Named for what it is. This was `fiatOnramp`, which promised a card-to-
+     * USDC flow the product does not have — Circle exposes no public API for
+     * minting an onramp URL against an arbitrary address, and adding one needs
+     * Liquidity Services and a separate key. What we actually offer is the
+     * faucet, so the field says faucet.
+     */
+    faucet: {
       testnetFaucetUrl: 'https://faucet.circle.com',
-      note: 'Fiat onramp requires Circle Liquidity Services with a separate API key. On testnet, use the Circle faucet or transfer USDC from another wallet.',
+      note: 'Fund this wallet from the Circle faucet on testnet, or send USDC to the address above from any wallet. Card payments are not supported yet.',
     },
   })
 })
