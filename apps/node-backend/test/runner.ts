@@ -18,6 +18,7 @@ import {
   requestUrl,
   runTask,
 } from '../src/agent/runner.ts'
+import { __testAnswersTheSameQuestion } from '../src/circle/candidateService.ts'
 import {
   CATALOG_SOURCE,
   CATALOG_VERSION,
@@ -488,6 +489,56 @@ async function main(): Promise<void> {
     const geo = rows.find((r) => r.id === 'free-openmeteo-geocode')
     check('the geocoding entry no longer carries name=lagos', !geo?.resource.includes('lagos'), geo?.resource)
     check('its fixed count=3 is kept', geo?.resource.includes('count=3') === true, geo?.resource)
+  }
+
+  // ------------------------------------------------- substitution relevance
+  section('Substitution relevance')
+  {
+    /*
+     * The exact pair that cost money. A bridge revert knocked out the
+     * candlesticks endpoint, failover scored an events endpoint highest because
+     * both matched "polymarket", and the user paid for an events list after
+     * asking for OHLCV data.
+     */
+    const svc = (resource: string, tags: string[] = []) => ({
+      resource,
+      host: new URL(resource).host,
+      tags,
+    })
+
+    const candlesticks = svc('https://nano.blockrun.ai/api/v1/pm/polymarket/candlesticks/{hash}')
+    const events = svc('https://nano.blockrun.ai/api/v1/pm/polymarket/events')
+    const otherCandles = svc('https://api.other.io/v1/polymarket/candlesticks')
+    const kalshiMarkets = svc('https://nano.blockrun.ai/api/v1/pm/kalshi/markets')
+    const polyMarkets = svc('https://nano.blockrun.ai/api/v1/pm/polymarket/markets')
+
+    check(
+      'events is not a substitute for candlesticks',
+      !__testAnswersTheSameQuestion(candlesticks, events),
+      'this is the substitution the user was charged for',
+    )
+    check(
+      'another provider’s candlesticks is a substitute',
+      __testAnswersTheSameQuestion(candlesticks, otherCandles),
+    )
+    check(
+      'one markets endpoint substitutes another',
+      __testAnswersTheSameQuestion(kalshiMarkets, polyMarkets),
+    )
+    check(
+      'a shared tag also qualifies when paths differ',
+      __testAnswersTheSameQuestion(
+        svc('https://a.io/v1/quotes', ['ohlcv']),
+        svc('https://b.io/v1/bars', ['ohlcv']),
+      ),
+    )
+    check(
+      'the provider name alone is never enough',
+      !__testAnswersTheSameQuestion(
+        svc('https://blockrun.ai/v1/blockrun/weather'),
+        svc('https://blockrun.ai/v1/blockrun/flights'),
+      ),
+    )
   }
 
   // -------------------------------------------------------- catalog freshness

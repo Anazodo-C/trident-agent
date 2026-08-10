@@ -22,7 +22,13 @@ import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 export interface ChainDeployment {
   /** Derives each user's {TridentGatewayReceiver}. Never redeploy. */
   receiverFactory: `0x${string}`
-  /** {TridentCctpRouter}, the CCTP burn entry point. Safe to redeploy. */
+  /**
+   * {TridentCctpRouter}, the CCTP burn entry point. Safe to redeploy — nothing
+   * is derived from it, unlike the factory. Replaced once already: the first
+   * deployment always called `depositForBurnWithHook`, which rejects the empty
+   * hook data we pass so the keeper can submit the mint, so every cross-chain
+   * settlement reverted with "Hook data is empty".
+   */
   cctpRouter: `0x${string}`
   /** CCTP domain, which matches Gateway's numbering. */
   domain: number
@@ -31,12 +37,12 @@ export interface ChainDeployment {
 export const DEPLOYMENTS: Partial<Record<SupportedChainName, ChainDeployment>> = {
   base: {
     receiverFactory: '0x7922c3D703671E833b3707EA22406ab7bFc04454',
-    cctpRouter: '0xEc8106E86DB58166d42Ceb32f148b9CF980bd6e0',
+    cctpRouter: '0x293ab01dE2C1a23a7c7c8B605383f68D69955967',
     domain: 6,
   },
   polygon: {
     receiverFactory: '0x7922c3D703671E833b3707EA22406ab7bFc04454',
-    cctpRouter: '0xEc8106E86DB58166d42Ceb32f148b9CF980bd6e0',
+    cctpRouter: '0x293ab01dE2C1a23a7c7c8B605383f68D69955967',
     domain: 7,
   },
 }

@@ -7,9 +7,10 @@ import {
   quoteFromEndpoint,
   safeErrorMessage,
   unifiedGatewayBalance,
+  walletUsdcByChain,
 } from '../circle/gatewayService.ts'
 import { privateKeyToAccount } from 'viem/accounts'
-import { bridgeToGatewayBalance } from '../circle/cctpBridge.ts'
+import { BridgeError, bridgeToGatewayBalance } from '../circle/cctpBridge.ts'
 import { canBridgeTo } from '../circle/deployments.ts'
 import { payVanilla } from '../circle/vanillaPayment.ts'
 import { KEEPER_PRIVATE_KEY } from '../env.ts'
@@ -479,7 +480,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
     step: PlanStep,
     service: Service,
     policy: ChainPolicy,
-    balances: Map<SupportedChainName, number>,
+    walletBalances: Map<SupportedChainName, number>,
   ): Promise<{ chain: SupportedChainName; creditedUsdc: number } | null> => {
     // Where the seller will take payment, preferring somewhere we can deliver.
     const target = service.networks.find(
@@ -491,10 +492,16 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
     )
     if (!target || !KEEPER_PRIVATE_KEY) return null
 
-    // The cheapest source that can cover it outright. Splitting across chains
-    // would mean several burns and several fees for one small invoice.
+    /*
+     * Choose the source from the wallet, not the Gateway ledger.
+     *
+     * TridentCctpRouter pulls USDC with `transferFrom` from the caller, so a
+     * bridge spends the EOA's plain balance. Selecting on the Gateway ledger
+     * checked one pot and spent another, and could start a transfer the wallet
+     * had no way to fund.
+     */
     const needed = target.priceUsdc
-    const source = [...balances.entries()]
+    const source = [...walletBalances.entries()]
       .filter(([chain, held]) => chain !== target.chainKey && held >= needed && canBridgeTo(chain))
       .sort((a, b) => a[1] - b[1])[0]
     if (!source) return null
@@ -538,7 +545,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
     )
 
     const creditedUsdc = Number(result.creditedAtomic) / 1_000_000
-    balances.set(source[0], source[1] - amount)
+    walletBalances.set(source[0], source[1] - amount)
     console.warn(
       '[trident] bridged:',
       JSON.stringify({
@@ -568,6 +575,18 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           return byChain
         })
         .catch(() => undefined)
+    : undefined
+
+  /*
+   * The EOA's own USDC per chain — a separate pot from the Gateway ledger.
+   *
+   * It funds the vanilla rail, which signs against the token contract rather
+   * than Gateway, and it funds the CCTP burn, which pulls from the caller. A
+   * wallet can hold Gateway balance on a chain and no wallet USDC there, or the
+   * reverse, so the two are read and spent independently.
+   */
+  const walletBalances = policy.mainnetEnabled
+    ? await walletUsdcByChain(addressOf(agentPrivateKey), GATEWAY_MAINNET_CHAINS)
     : undefined
 
   // Kept in memory as the run proceeds so the summary is written from the live
@@ -739,6 +758,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
         const chainOpts = {
           gatewayOnly: service.source === 'x402',
           ...(gatewayBalances ? { balances: gatewayBalances } : {}),
+          ...(walletBalances ? { walletBalances } : {}),
         }
         let choice = chooseChain(service.networks, policy, chainOpts)
 
@@ -756,16 +776,17 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
          * for a call that might not happen would spend the user's money on a
          * transfer they never asked for.
          */
-        if (!choice && gatewayBalances && service.source === 'x402') {
-          const bridged = await bridgeForStep(step, service, policy, gatewayBalances)
+        if (!choice && walletBalances && service.source === 'x402') {
+          const bridged = await bridgeForStep(step, service, policy, walletBalances)
           if (bridged) {
-            gatewayBalances.set(
-              bridged.chain,
-              (gatewayBalances.get(bridged.chain) ?? 0) + bridged.creditedUsdc,
-            )
+            // The bridge lands in the Gateway ledger, so credit that map — and
+            // re-choose against it rather than assuming the transfer covered it.
+            const ledger = gatewayBalances ?? new Map<SupportedChainName, number>()
+            ledger.set(bridged.chain, (ledger.get(bridged.chain) ?? 0) + bridged.creditedUsdc)
             choice = chooseChain(service.networks, policy, {
               ...chainOpts,
-              balances: gatewayBalances,
+              balances: ledger,
+              walletBalances,
             })
           }
         }
@@ -796,6 +817,24 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           throw new Error(
             `${service.serviceName} needs ${missing.join(', ')} to answer this, and the request ` +
               `did not include ${missing.length === 1 ? 'it' : 'them'}. Nothing was charged.`,
+          )
+        }
+
+        /*
+         * A path template we cannot fill is unusable, and must be caught here
+         * rather than in requestUrl. `pm/polymarket/candlesticks/{hash}` reached
+         * chain selection and a bridge attempt with {hash} still literal,
+         * because requestUrl only runs at request time — after the money has
+         * moved.
+         */
+        const unfilled = pathPlaceholders(step.endpointUrl).filter(
+          (name) => step.params[name] === undefined || step.params[name] === null
+            || step.params[name] === '',
+        )
+        if (unfilled.length > 0) {
+          throw new Error(
+            `${service.serviceName} needs ${unfilled.join(', ')} in its path, and the request did ` +
+              `not supply ${unfilled.length === 1 ? 'it' : 'them'}. Nothing was charged.`,
           )
         }
 
@@ -910,6 +949,28 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
 
         totalSpent = usdc(totalSpent + cost)
 
+        /**
+         * The counterpart to the failure log below.
+         *
+         * Only failures were recorded, so a successful payment left no server-
+         * side trace at all — today's first settled mainnet call had to be
+         * reconstructed from a substitution line plus the user's word plus an
+         * on-chain balance diff. Same shape and same discipline as the failure
+         * line: no parameters, no response body, nothing sensitive.
+         */
+        console.log(
+          '[trident] step done:',
+          JSON.stringify({
+            taskId,
+            step: step.stepIndex,
+            service: step.serviceName,
+            chain: choice.chain,
+            rail: service.source === 'free' ? 'verification' : choice.rail,
+            costUsdc: cost,
+            tx: txRef || verificationTx || null,
+          }),
+        )
+
         db.prepare(
           `UPDATE task_steps
            SET status = 'done', actual_cost_usdc = ?, tx_ref = ?, verification_tx = ?,
@@ -949,10 +1010,19 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
          * costs no more than what was approved. Only when nothing works does
          * this become something to report.
          */
-        noteEndpointFailure(step.endpointUrl)
+        /*
+         * Only blame the endpoint for the endpoint's failures.
+         *
+         * A bridge revert means we never contacted it. Marking it failed and
+         * substituting is how a request for candlestick data became a paid
+         * events lookup: our bug, charged to the user, against a service that
+         * was working the whole time.
+         */
+        const ourFault = err instanceof BridgeError
+        if (!ourFault) noteEndpointFailure(step.endpointUrl)
         attemptsLeft -= 1
 
-        if (service && attemptsLeft > 0) {
+        if (service && attemptsLeft > 0 && !ourFault) {
           /*
            * Only stand in for an endpoint if the parameters we already have
            * mean the same thing there.

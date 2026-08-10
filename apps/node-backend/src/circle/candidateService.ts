@@ -288,6 +288,115 @@ export function reachableClause(): string {
  * apology. Only ever cheaper or equal — the user approved a price, and
  * silently spending more than that would be worse than failing.
  */
+/**
+ * The distinguishing words of a resource path, ignoring the provider.
+ *
+ * `/api/v1/pm/polymarket/candlesticks/{hash}` reduces to
+ * {api, pm, polymarket, candlesticks} — with version segments, numbers and
+ * placeholders dropped, since none of them say what the endpoint does.
+ */
+/**
+ * Path segments that describe structure, not capability.
+ *
+ * Every REST path has some of these, so treating them as evidence makes any two
+ * endpoints look related. `/api/v1/pm/polymarket/candlesticks` and
+ * `/api/v1/pm/polymarket/events` share `api` — which was enough, in the first
+ * draft of this check, to let an events lookup stand in for OHLCV data.
+ */
+const GENERIC_PATH_WORDS = new Set([
+  'api', 'apis', 'rest', 'data', 'get', 'list', 'query', 'endpoint', 'endpoints',
+  'service', 'services', 'public', 'latest', 'current', 'info', 'all',
+])
+
+/** Meaningful path segments, in order. */
+function pathWords(resource: string): string[] {
+  let path: string
+  try {
+    // Decoded, because the URL parser percent-encodes a `{placeholder}` into
+    // `%7B…%7D`, which then survives the placeholder filter and gets mistaken
+    // for the segment that names the capability.
+    path = decodeURIComponent(new URL(resource).pathname)
+  } catch {
+    path = resource
+  }
+  return path
+    .split(/[/_.-]+/)
+    .map((segment) => segment.toLowerCase().replace(/\{.*\}/, ''))
+    .filter(
+      (segment) =>
+        segment.length > 2 &&
+        !/^v\d+$/.test(segment) &&
+        !/^\d+$/.test(segment) &&
+        !GENERIC_PATH_WORDS.has(segment),
+    )
+}
+
+/**
+ * The last meaningful path segment — what the endpoint actually returns.
+ *
+ * `/pm/polymarket/candlesticks/{hash}` is about candlesticks;
+ * `/pm/polymarket/events` is about events. Everything before the final segment
+ * is namespace, and namespaces are shared by endpoints that do entirely
+ * different things.
+ */
+function capabilityOf(resource: string): string | null {
+  const words = pathWords(resource)
+  return words[words.length - 1] ?? null
+}
+
+/**
+ * Whether a substitute does the same *kind* of thing as what it replaces.
+ *
+ * Ranking on term overlap and price alone is not enough. When a bridge revert
+ * knocked out a candlesticks endpoint, the best-scoring substitute was an
+ * events endpoint from the same marketplace: both matched "polymarket", so it
+ * won, and the user paid for an events list after asking for OHLCV data. Price
+ * and payability were both fine. It simply answered a different question.
+ *
+ * The test is a shared capability word in the path beyond the provider's own —
+ * `candlesticks` against `events` shares only `polymarket`, which comes from
+ * the provider and is already excluded, so nothing is left and no substitution
+ * happens. Two Kalshi market endpoints share `markets`, and that is a real
+ * alternative.
+ *
+ * Failing the step honestly is the better outcome when nothing qualifies.
+ */
+function answersTheSameQuestion(
+  failed: Pick<Service, 'resource' | 'host' | 'tags'>,
+  candidate: Pick<Service, 'resource' | 'host' | 'tags'>,
+): boolean {
+  const wanted = capabilityOf(failed.resource)
+  // Nothing distinguishing in the path — fall through to the tag check rather
+  // than blocking a substitute we have no evidence against.
+  if (wanted !== null && wanted === capabilityOf(candidate.resource)) return true
+
+  /*
+   * A shared tag is equally good evidence, and the only evidence for providers
+   * that describe capability in tags rather than in the path. The provider's own
+   * name is excluded so "blockrun" cannot vouch for itself.
+   */
+  const provider = new Set([
+    ...failed.host.toLowerCase().split(/[.\-]/),
+    ...candidate.host.toLowerCase().split(/[.\-]/),
+  ])
+  const failedTags = new Set(failed.tags.map((t) => t.toLowerCase()))
+  if (
+    candidate.tags.some((t) => failedTags.has(t.toLowerCase()) && !provider.has(t.toLowerCase()))
+  ) {
+    return true
+  }
+
+  return wanted === null
+}
+
+/** Test seam for the relevance rule — the check that stops a wrong substitution. */
+export function __testAnswersTheSameQuestion(
+  a: Pick<Service, 'resource' | 'host' | 'tags'>,
+  b: Pick<Service, 'resource' | 'host' | 'tags'>,
+): boolean {
+  return answersTheSameQuestion(a, b)
+}
+
 export function findAlternatives(
   failed: Service,
   purpose: string,
@@ -328,7 +437,8 @@ export function findAlternatives(
       !exclude.has(s.resource) &&
       s.source === failed.source &&
       s.priceUsdc <= approvedCostUsdc &&
-      !isRecentlyFailed(s.resource),
+      !isRecentlyFailed(s.resource) &&
+      answersTheSameQuestion(failed, s),
   )
 
   /*

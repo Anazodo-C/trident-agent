@@ -1,5 +1,6 @@
 import { GatewayClient, CHAIN_CONFIGS } from '@circle-fin/x402-batching/client'
 import { generatePrivateKey } from 'viem/accounts'
+import { createPublicClient, http, erc20Abi } from 'viem'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import { httpError } from '../http.ts'
 import { isValidPrivateKey } from '../auth/keySetup.ts'
@@ -161,6 +162,46 @@ export async function quoteFromEndpoint(
   } finally {
     clearTimeout(timer)
   }
+}
+
+/**
+ * Plain ERC-20 USDC held by an address on each chain.
+ *
+ * Distinct from the Gateway ledger and spent by different things: the vanilla
+ * x402 rail signs against the token contract, and the CCTP burn pulls from the
+ * caller. Neither can touch a Gateway deposit, and Gateway payments cannot
+ * touch this.
+ *
+ * One chain failing must not blank the rest — an RPC hiccup on a chain the user
+ * has never used should not make the chain they are paying on look unfunded.
+ */
+export async function walletUsdcByChain(
+  address: string,
+  chains: SupportedChainName[],
+): Promise<Map<SupportedChainName, number>> {
+  const results = await Promise.allSettled(
+    chains.map(async (chain) => {
+      const config = CHAIN_CONFIGS[chain]
+      if (!config?.usdc) return [chain, 0] as const
+      const client = createPublicClient({
+        chain: config.chain,
+        transport: http(rpcUrlFor(chain)),
+      })
+      const raw = await client.readContract({
+        address: config.usdc,
+        abi: erc20Abi,
+        functionName: 'balanceOf',
+        args: [address as `0x${string}`],
+      })
+      return [chain, Number(fromAtomicUsdc(raw))] as const
+    }),
+  )
+
+  const byChain = new Map<SupportedChainName, number>()
+  for (const result of results) {
+    if (result.status === 'fulfilled') byChain.set(result.value[0], result.value[1])
+  }
+  return byChain
 }
 
 const GATEWAY_API_MAINNET = 'https://gateway-api.circle.com/v1'

@@ -52,6 +52,7 @@ contract MockTokenMessenger is ITokenMessengerV2 {
     uint32 public minFinalityThreshold;
     bytes public hookData;
     uint256 public calls;
+    bool public usedHookVariant;
 
     function depositForBurnWithHook(
         uint256 _amount,
@@ -71,7 +72,31 @@ contract MockTokenMessenger is ITokenMessengerV2 {
         destinationCaller = _destinationCaller;
         maxFee = _maxFee;
         minFinalityThreshold = _minFinalityThreshold;
+        require(_hookData.length > 0, "Hook data is empty");
         hookData = _hookData;
+        usedHookVariant = true;
+        calls++;
+    }
+
+    function depositForBurn(
+        uint256 _amount,
+        uint32 _destinationDomain,
+        bytes32 _mintRecipient,
+        address _burnToken,
+        bytes32 _destinationCaller,
+        uint256 _maxFee,
+        uint32 _minFinalityThreshold
+    ) external override {
+        MockUSDC(_burnToken).transferFrom(msg.sender, address(this), _amount);
+        amount = _amount;
+        destinationDomain = _destinationDomain;
+        mintRecipient = _mintRecipient;
+        burnToken = _burnToken;
+        destinationCaller = _destinationCaller;
+        maxFee = _maxFee;
+        minFinalityThreshold = _minFinalityThreshold;
+        hookData = "";
+        usedHookVariant = false;
         calls++;
     }
 }
@@ -121,6 +146,25 @@ contract TridentCctpRouterTest is Test {
         router.bridge(POLYGON_DOMAIN, RECIPIENT, 1_000, 10, 1000, HOOK);
         vm.stopPrank();
         assertEq(messenger.hookData(), HOOK);
+        assertTrue(messenger.usedHookVariant(), "non-empty hook uses the withHook form");
+    }
+
+    /*
+     * The bug that made every cross-chain settlement revert. We pass empty hook
+     * data on purpose — the keeper submits the mint, not Circle's relayer — and
+     * depositForBurnWithHook rejects that outright with "Hook data is empty".
+     */
+    function test_emptyHookUsesTheHooklessFunction() public {
+        vm.startPrank(user);
+        usdc.approve(address(router), 30_000);
+        router.bridge(POLYGON_DOMAIN, RECIPIENT, 30_000, 300, 1000, "");
+        vm.stopPrank();
+
+        assertEq(messenger.calls(), 1, "the burn happened");
+        assertFalse(messenger.usedHookVariant(), "empty hook must not use the withHook form");
+        assertEq(messenger.amount(), 30_000);
+        assertEq(messenger.destinationDomain(), POLYGON_DOMAIN);
+        assertEq(messenger.mintRecipient(), RECIPIENT);
     }
 
     /// No destination caller, so Circle's relayer can submit the mint and the

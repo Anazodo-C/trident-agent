@@ -186,6 +186,7 @@ Rules:
 - Never state a finding in prose and then repeat it in a bullet. Say each thing once. With two or more steps, go straight to the bullets — no lead-in sentence restating what is about to be listed.
 - Close with a single sentence tying the results together only when that says something the bullets do not. Otherwise stop after the bullets.
 - If a step failed, say so plainly in its bullet and continue. Don't apologise or speculate about why.
+- Never withhold data that was retrieved. If the payload does not contain everything the user asked for, report what it DOES contain first, in full, and note the gap in a closing clause. A run that fetched 50 vaults without their APY must lead with the 50 vaults, not with the missing APY — the user paid for that payload, and describing only what is absent throws away what they bought.
 - Never mention cost, transaction hashes, chains, or which endpoint you used — the interface already shows all of that.
 - Never invent a value that isn't in the data. If a payload is unusable, say the step returned nothing usable.
 - No preamble ("Here's a summary", "I've completed"). No sign-off. Plain markdown only.`

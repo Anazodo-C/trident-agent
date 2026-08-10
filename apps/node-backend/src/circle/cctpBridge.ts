@@ -74,6 +74,20 @@ const MAX_FEE_BPS = 100n
 const ATTESTATION_TIMEOUT_MS = 5 * 60_000
 const ATTESTATION_POLL_MS = 4_000
 
+/**
+ * A failure moving the user's funds, as opposed to a failure of the endpoint.
+ *
+ * The distinction decides what the runner does next. An endpoint that rejects a
+ * call may have a working sibling, so failover is right. A bridge that reverts
+ * means we never contacted the endpoint at all — substituting then blames a
+ * seller for our bug and, worse, buys something else. That is exactly what
+ * happened: a bridge revert sent a request for candlestick data to an events
+ * endpoint, and charged for it.
+ */
+export class BridgeError extends Error {
+  override readonly name = 'BridgeError'
+}
+
 export interface BridgeProgress {
   stage: 'burning' | 'attesting' | 'minting' | 'sweeping' | 'done'
   detail?: string
@@ -89,7 +103,7 @@ export interface BridgeResult {
 
 function keeperAccount() {
   if (!KEEPER_PRIVATE_KEY) {
-    throw new Error(
+    throw new BridgeError(
       'Cross-chain settlement is not configured: KEEPER_PRIVATE_KEY is unset, so nothing can ' +
         'complete the transfer on the destination chain.',
     )
@@ -120,7 +134,7 @@ export async function receiverAddressFor(
   chain: SupportedChainName,
 ): Promise<`0x${string}`> {
   const deployment = DEPLOYMENTS[chain]
-  if (!deployment) throw new Error(`No Trident receiver deployed on ${chain}.`)
+  if (!deployment) throw new BridgeError(`No Trident receiver deployed on ${chain}.`)
 
   const { publicClient } = clientsFor(chain)
   return publicClient.readContract({
@@ -147,8 +161,8 @@ export async function bridgeToGatewayBalance(
 ): Promise<BridgeResult> {
   const source = DEPLOYMENTS[fromChain]
   const destination = DEPLOYMENTS[toChain]
-  if (!source) throw new Error(`Cross-chain settlement is not available from ${fromChain}.`)
-  if (!destination) throw new Error(`Cross-chain settlement is not available to ${toChain}.`)
+  if (!source) throw new BridgeError(`Cross-chain settlement is not available from ${fromChain}.`)
+  if (!destination) throw new BridgeError(`Cross-chain settlement is not available to ${toChain}.`)
 
   const keeper = keeperAccount()
   const user = privateKeyToAccount(agentPrivateKey as `0x${string}`)
@@ -181,7 +195,36 @@ export async function bridgeToGatewayBalance(
       functionName: 'approve',
       args: [source.cctpRouter, amountAtomic],
     })
-    await src.publicClient.waitForTransactionReceipt({ hash: approveTx })
+    const receipt = await src.publicClient.waitForTransactionReceipt({ hash: approveTx })
+
+    /*
+     * A receipt is not a success. `waitForTransactionReceipt` resolves for a
+     * reverted transaction too, so an approve that failed used to pass silently
+     * and the burn then reverted with "ERC20: transfer amount exceeds
+     * allowance" — an error that points at the wrong thing entirely.
+     */
+    if (receipt.status !== 'success') {
+      throw new BridgeError(`Approving USDC for the bridge failed (${approveTx}).`)
+    }
+
+    /*
+     * Then confirm the allowance is actually readable before spending against
+     * it. A mined approve is not immediately visible on every node, and the
+     * first live attempt reverted on exactly that race: the approve had landed,
+     * but the burn was simulated against a node that had not caught up.
+     */
+    const confirmed = await src.publicClient.readContract({
+      address: src.config.usdc,
+      abi: erc20Abi,
+      functionName: 'allowance',
+      args: [user.address, source.cctpRouter],
+    })
+    if (confirmed < amountAtomic) {
+      throw new BridgeError(
+        'The USDC approval for the bridge has not propagated yet. Nothing was charged — retry ' +
+          'in a moment.',
+      )
+    }
   }
 
   const maxFee = (amountAtomic * MAX_FEE_BPS) / 10_000n
@@ -285,7 +328,7 @@ async function waitForAttestation(
     await new Promise((resolve) => setTimeout(resolve, ATTESTATION_POLL_MS))
   }
 
-  throw new Error(
+  throw new BridgeError(
     `Circle did not attest the transfer within ${ATTESTATION_TIMEOUT_MS / 60_000} minutes. ` +
       `The USDC is burned and recoverable — the mint can still be submitted later with burn ` +
       `transaction ${burnTxHash}. Nothing was paid to the seller.`,

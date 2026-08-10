@@ -22,6 +22,18 @@ interface ITokenMessengerV2 {
         uint32 minFinalityThreshold,
         bytes calldata hookData
     ) external;
+
+    /// @dev The hookless form. Selector 0x8e0250ee, present in the same
+    ///      implementation as its withHook sibling.
+    function depositForBurn(
+        uint256 amount,
+        uint32 destinationDomain,
+        bytes32 mintRecipient,
+        address burnToken,
+        bytes32 destinationCaller,
+        uint256 maxFee,
+        uint32 minFinalityThreshold
+    ) external;
 }
 
 /**
@@ -129,19 +141,39 @@ contract TridentCctpRouter {
         token.safeTransferFrom(msg.sender, address(this), amount);
         token.forceApprove(address(messenger), amount);
 
-        messenger.depositForBurnWithHook(
-            amount,
-            destinationDomain,
-            mintRecipient,
-            address(token),
-            // No destination caller. Anyone may submit the mint, which is what
-            // lets Circle's relayer do it and keeps the user off the hook for
-            // gas on a chain they have never used.
-            bytes32(0),
-            maxFee,
-            minFinalityThreshold,
-            hookData
-        );
+        // No destination caller in either branch. Anyone may submit the mint,
+        // which is what lets our keeper do it and keeps the user off the hook
+        // for gas on a chain they have never used.
+        if (hookData.length == 0) {
+            /*
+             * `depositForBurnWithHook` rejects empty hook data outright — it
+             * reverts with "Hook data is empty" before touching the transfer.
+             * Passing "0x" was deliberate here, so the keeper could submit the
+             * mint rather than Circle's forwarding relayer, and it made every
+             * cross-chain settlement fail on the first call. The hookless form
+             * is the correct function for that choice.
+             */
+            messenger.depositForBurn(
+                amount,
+                destinationDomain,
+                mintRecipient,
+                address(token),
+                bytes32(0),
+                maxFee,
+                minFinalityThreshold
+            );
+        } else {
+            messenger.depositForBurnWithHook(
+                amount,
+                destinationDomain,
+                mintRecipient,
+                address(token),
+                bytes32(0),
+                maxFee,
+                minFinalityThreshold,
+                hookData
+            );
+        }
 
         emit BridgeInitiated(msg.sender, destinationDomain, mintRecipient, amount, maxFee);
     }
