@@ -87,6 +87,8 @@ export interface ChainChoice {
   network: string
   priceUsdc: number
   isTestnet: boolean
+  /** Which rail to pay on. The runner routes on this. */
+  rail: 'gateway' | 'vanilla' | 'verification'
 }
 
 export interface ServiceNetworkLike {
@@ -98,6 +100,8 @@ export interface ServiceNetworkLike {
   scheme?: string
   /** True only when Circle Gateway can settle this option. */
   gatewayBatchable?: boolean
+  /** Which rail settles it, and therefore which balance pays. */
+  rail?: 'gateway' | 'vanilla' | 'verification'
 }
 
 /**
@@ -123,12 +127,19 @@ export interface ChooseChainOptions {
    */
   gatewayOnly?: boolean
   /**
-   * Gateway balance per mainnet chain, in USDC. Omit to skip the check.
+   * Gateway ledger balance per mainnet chain, in USDC. Omit to skip the check.
    *
    * Settlement draws from the chain the invoice names, and nowhere else. A
    * balance on the wrong chain is not spendable here — see fundedFor.
    */
   balances?: Map<SupportedChainName, number>
+  /**
+   * Plain ERC-20 USDC held by the EOA per chain, which is what the vanilla rail
+   * spends. Tracked separately because the two are genuinely different pots: a
+   * wallet can hold Gateway balance on Base and no wallet USDC there, or the
+   * reverse, and each pays only its own rail.
+   */
+  walletBalances?: Map<SupportedChainName, number>
 }
 
 /**
@@ -148,12 +159,15 @@ export interface ChooseChainOptions {
  * Testnet options are exempt. They settle through the verification transfer
  * rather than Gateway, and that path is already working.
  */
-function fundedFor(
-  option: ServiceNetworkLike,
-  balances: Map<SupportedChainName, number> | undefined,
-): boolean {
-  if (!balances || option.isTestnet) return true
-  return (balances.get(option.chainKey) ?? 0) >= option.priceUsdc
+function fundedFor(option: ServiceNetworkLike, opts: ChooseChainOptions): boolean {
+  if (option.isTestnet) return true
+
+  // The vanilla rail spends the EOA's own USDC, not the Gateway ledger, so it
+  // must be measured against the wallet balance or it would be judged unfunded
+  // on a chain where it can pay perfectly well.
+  const pot = option.rail === 'vanilla' ? opts.walletBalances : opts.balances
+  if (!pot) return true
+  return (pot.get(option.chainKey) ?? 0) >= option.priceUsdc
 }
 
 /**
@@ -165,13 +179,18 @@ function fundedFor(
 export function chooseChain(
   options: ServiceNetworkLike[],
   policy: ChainPolicy,
-  { gatewayOnly = false, balances }: ChooseChainOptions = {},
+  { gatewayOnly = false, balances, walletBalances }: ChooseChainOptions = {},
 ): ChainChoice | null {
   let permitted = options.filter((o) => policy.allowed.includes(o.chainKey))
   if (gatewayOnly) {
-    // The marker, not the scheme label. `batch-settlement` is generic and
-    // other implementations use it, which the SDK then refuses to pay.
-    permitted = permitted.filter((o) => o.gatewayBatchable === true)
+    /*
+     * "Payable on some rail", not "payable through Gateway".
+     *
+     * This used to keep only options carrying Circle's batching marker, which
+     * was correct while Gateway was the only rail. Applied now it would discard
+     * every plain-x402 option and undo the point of ingesting them.
+     */
+    permitted = permitted.filter((o) => o.gatewayBatchable === true || o.rail === 'vanilla')
   }
   if (permitted.length === 0) return null
 
@@ -187,7 +206,7 @@ export function chooseChain(
    * payable today; one listing Polygon alone is not, and saying so up front
    * beats signing an authorisation that cannot clear.
    */
-  const funded = pool.filter((o) => fundedFor(o, balances))
+  const funded = pool.filter((o) => fundedFor(o, { gatewayOnly, balances, walletBalances }))
   if (funded.length === 0) return null
   pool = funded
 
@@ -198,6 +217,7 @@ export function chooseChain(
     network: best.network,
     priceUsdc: best.priceUsdc,
     isTestnet: best.isTestnet,
+    rail: best.rail ?? (best.gatewayBatchable ? 'gateway' : 'vanilla'),
   }
 }
 

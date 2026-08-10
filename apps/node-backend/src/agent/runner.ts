@@ -11,6 +11,7 @@ import {
 import { privateKeyToAccount } from 'viem/accounts'
 import { bridgeToGatewayBalance } from '../circle/cctpBridge.ts'
 import { canBridgeTo } from '../circle/deployments.ts'
+import { payVanilla } from '../circle/vanillaPayment.ts'
 import { KEEPER_PRIVATE_KEY } from '../env.ts'
 import { findServiceByResource, type Service } from '../circle/registryService.ts'
 import { findAlternatives, noteEndpointFailure } from '../circle/candidateService.ts'
@@ -852,7 +853,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
            * noticing. The quote is exact and is never rounded — it is the
            * number that will be paid.
            */
-          const quote = await quoteFromEndpoint(requestUrl(step, inQuery), choice.chain, {
+          const quote = choice.rail === 'vanilla' ? null : await quoteFromEndpoint(requestUrl(step, inQuery), choice.chain, {
             method: step.httpMethod,
             ...(payOptions ? { body: step.params } : {}),
           })
@@ -871,16 +872,40 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
             return
           }
 
-          const result = await payWithMethodRecovery(
-            clientFor(choice.chain),
-            step,
-            payOptions,
-            inQuery,
-          )
-          const parsed = Number.parseFloat(result.formattedAmount)
-          cost = Number.isFinite(parsed) ? parsed : 0
-          txRef = result.transaction
-          data = result.data
+          if (choice.rail === 'vanilla') {
+            /*
+             * The plain rail: an EIP-3009 authorisation against the USDC token,
+             * submitted by the seller's facilitator and drawn from the EOA's own
+             * balance. No Gateway ledger involved, so none of the batching
+             * machinery above applies — but the cap does, and payVanilla
+             * enforces it against the seller's live price before signing.
+             */
+            const remaining = spendingCapUsdc - totalSpent
+            const paid = await payVanilla(
+              requestUrl(step, step.httpMethod === 'GET'),
+              agentPrivateKey,
+              choice.chain,
+              {
+                method: step.httpMethod,
+                ...(step.httpMethod === 'POST' ? { body: step.params } : {}),
+              },
+              BigInt(Math.max(0, Math.floor(remaining * 1_000_000))),
+            )
+            cost = Number(paid.amountUsdc)
+            txRef = paid.txHash ?? ''
+            data = paid.data
+          } else {
+            const result = await payWithMethodRecovery(
+              clientFor(choice.chain),
+              step,
+              payOptions,
+              inQuery,
+            )
+            const parsed = Number.parseFloat(result.formattedAmount)
+            cost = Number.isFinite(parsed) ? parsed : 0
+            txRef = result.transaction
+            data = result.data
+          }
         }
 
         totalSpent = usdc(totalSpent + cost)

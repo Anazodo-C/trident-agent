@@ -1,6 +1,7 @@
 import db, { type ServiceRow } from '../db.ts'
 import { rowToService, type Service } from './registryService.ts'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
+import { vanillaSupportsChain } from './vanillaPayment.ts'
 
 /**
  * Candidate retrieval for the planner.
@@ -104,7 +105,7 @@ export function selectCandidates(goal: string, options: CandidateOptions): Candi
     pool = db
       .prepare(
         `SELECT * FROM services
-         WHERE (${chainClauses}) AND (${termClauses})
+         WHERE (${chainClauses}) AND (${termClauses}) AND ${reachableClause()}
          ORDER BY curated DESC, calls_30d DESC
          LIMIT 400`,
       )
@@ -132,7 +133,7 @@ export function selectCandidates(goal: string, options: CandidateOptions): Candi
   const fallbackRows = db
     .prepare(
       `SELECT * FROM services
-       WHERE ${chainClauses}
+       WHERE (${chainClauses}) AND ${reachableClause()}
        ORDER BY curated DESC, calls_30d DESC
        LIMIT @limit`,
     )
@@ -146,21 +147,30 @@ export function selectCandidates(goal: string, options: CandidateOptions): Candi
 }
 
 /**
- * Can the agent actually pay this service?
+ * Can the agent actually pay this service, on either rail?
  *
- * The chain filter above is necessary but nowhere near sufficient. Gateway
- * settles only `batch-settlement` authorisations, and of the 13,824 services
- * advertising Base mainnet, 51 offer one. Handing the planner the other 13,773
- * means it proposes a plan, the user approves it, and the run dies on "No
- * Gateway batching option available for network eip155:8453" — after they have
- * already said yes.
+ * The chain filter above is necessary but nowhere near sufficient — a service
+ * can advertise a chain and a price and still be unpayable by us. Handing the
+ * planner one of those means it proposes a plan, the user approves it, and the
+ * run dies after they have already said yes.
  *
- * Free services are exempt: they are metered by a direct Arc Testnet transfer
- * and carry the `verification` scheme, never touching Gateway.
+ * Two rails now qualify. Gateway settles batched authorisations carrying
+ * Circle's marker. Plain x402 signs an EIP-3009 authorisation against the USDC
+ * token instead, which the x402 client can only do on the chains it knows —
+ * narrower than Gateway's list, and notably excluding Solana, which needs a
+ * signer this wallet is not.
+ *
+ * Free services are exempt: metered by a direct Arc Testnet transfer, never
+ * touching either rail.
  */
 function isPayable(service: Service, chains: SupportedChainName[]): boolean {
   if (service.source === 'free') return true
-  return service.networks.some((n) => chains.includes(n.chainKey) && n.gatewayBatchable === true)
+  return service.networks.some((option) => {
+    if (!chains.includes(option.chainKey)) return false
+    return option.rail === 'gateway'
+      ? option.gatewayBatchable === true
+      : vanillaSupportsChain(option.chainKey)
+  })
 }
 
 /* ------------------------------------------------------- endpoint health */
@@ -215,6 +225,59 @@ function coolingDown(key: string): boolean {
 
 export function isRecentlyFailed(resource: string): boolean {
   return coolingDown(resource) || coolingDown(hostOfResource(resource))
+}
+
+/**
+ * How long an endpoint may be continuously unreachable before it stops being
+ * offered at all.
+ *
+ * Seven days. Long enough that a provider's bad afternoon, a certificate lapse
+ * or a regional outage does not cost them their listing, short enough that the
+ * catalog is not padded with services that no longer exist. The ten-minute
+ * in-memory cooldown handles the short case; this handles abandonment.
+ */
+const UNREACHABLE_CUTOFF_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * Record that an endpoint could not be reached at all.
+ *
+ * Only for network-level failure — DNS, connection refused, TLS, timeout. A
+ * 4xx, a rejected payment or a bad parameter all mean the endpoint answered,
+ * which is the opposite of unreachable.
+ *
+ * The distinction is not academic. A bridge bug of ours reverted before two
+ * BlockRun endpoints were ever contacted, and the runner logged both as failed;
+ * had that counted here, a week's blacklist would have followed from a mistake
+ * on our side.
+ *
+ * The first failure is the one that counts — the timestamp is not refreshed on
+ * repeat, so the clock measures how long it has been down rather than how
+ * recently it was tried.
+ */
+export function noteEndpointUnreachable(resource: string): void {
+  db.prepare(
+    `UPDATE services SET unreachable_since = ?
+      WHERE resource = ? AND unreachable_since IS NULL`,
+  ).run(Date.now(), resource)
+}
+
+/** Record that an endpoint answered, whatever it said. Clears any outage. */
+export function noteEndpointReachable(resource: string): void {
+  db.prepare(
+    `UPDATE services SET unreachable_since = NULL
+      WHERE resource = ? AND unreachable_since IS NOT NULL`,
+  ).run(resource)
+}
+
+/** True once an endpoint has been dark for longer than the cutoff. */
+export function isLongDead(unreachableSince: number | null): boolean {
+  if (unreachableSince === null) return false
+  return Date.now() - unreachableSince > UNREACHABLE_CUTOFF_MS
+}
+
+/** SQL fragment excluding endpoints dark beyond the cutoff. */
+export function reachableClause(): string {
+  return `(unreachable_since IS NULL OR unreachable_since > ${Date.now() - UNREACHABLE_CUTOFF_MS})`
 }
 
 /**

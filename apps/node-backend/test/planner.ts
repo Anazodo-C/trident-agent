@@ -331,6 +331,39 @@ section('chain policy (mainnet is opt-in)')
     chooseChain(polygonOnly, opted)?.chain === 'polygon',
   )
 
+  /*
+   * The two rails are funded from different pots, so "can we pay this" depends
+   * on which one settles it. Gateway draws the ledger inside the GatewayWallet;
+   * vanilla draws the EOA's own USDC on the same chain.
+   */
+  const gatewayOnBase = [
+    { network: 'eip155:8453', chainKey: 'base' as const, isTestnet: false, priceUsdc: 0.01,
+      gatewayBatchable: true, rail: 'gateway' as const },
+  ]
+  const vanillaOnBase = [
+    { network: 'eip155:8453', chainKey: 'base' as const, isTestnet: false, priceUsdc: 0.01,
+      gatewayBatchable: false, rail: 'vanilla' as const },
+  ]
+  const ledgerOnly = { balances: new Map([['base' as const, 1]]), walletBalances: new Map() }
+  const walletOnly = { balances: new Map(), walletBalances: new Map([['base' as const, 1]]) }
+
+  check(
+    'a vanilla service is not paid from the Gateway ledger',
+    chooseChain(vanillaOnBase, opted, { gatewayOnly: true, ...ledgerOnly }) === null,
+  )
+  check(
+    'but is paid from the wallet balance',
+    chooseChain(vanillaOnBase, opted, { gatewayOnly: true, ...walletOnly })?.rail === 'vanilla',
+  )
+  check(
+    'a Gateway service is not paid from the wallet balance',
+    chooseChain(gatewayOnBase, opted, { gatewayOnly: true, ...walletOnly }) === null,
+  )
+  check(
+    'gatewayOnly no longer discards the vanilla rail outright',
+    chooseChain(vanillaOnBase, opted, { gatewayOnly: true })?.rail === 'vanilla',
+  )
+
   check(
     'the cheapest permitted mainnet option still wins across chains',
     chooseChain(

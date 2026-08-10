@@ -145,6 +145,9 @@ CREATE TABLE IF NOT EXISTS services (
   payers_30d      INTEGER DEFAULT 0,
   last_called_at  TEXT,
   icon_url        TEXT,
+  -- First moment this endpoint stopped being reachable, cleared on any
+  -- success. Only network-level failures set it; see noteEndpointUnreachable.
+  unreachable_since INTEGER,
   synced_at       INTEGER
 );
 
@@ -228,6 +231,17 @@ addColumnIfMissing('registry_sync', 'source_version', 'TEXT')
  * none of its required ones answers 400 — after the payment has authorised.
  */
 addColumnIfMissing('services', 'input_schema', 'TEXT')
+/**
+ * When an endpoint first stopped answering, or NULL while it is healthy.
+ *
+ * Set only by network-level failures and cleared by any success, so an endpoint
+ * dark for long enough can be dropped from the planner's shortlist without a
+ * human deciding. Deliberately not set by payment or parameter failures: a
+ * bridge bug of ours once marked two working BlockRun endpoints as failed, and
+ * blacklisting a seller for a week over our own mistake is the failure mode
+ * this column would otherwise create.
+ */
+addColumnIfMissing('services', 'unreachable_since', 'INTEGER')
 
 export interface MessageRow {
   id: string

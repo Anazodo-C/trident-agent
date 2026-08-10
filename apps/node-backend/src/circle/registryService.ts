@@ -46,7 +46,7 @@ export const CATALOG_SOURCE = 'circle-agent-marketplace-v1'
  * The upstream identity and our extraction of it are separate things, and both
  * have to invalidate the stored copy.
  */
-const CATALOG_SCHEMA_VERSION = 2
+const CATALOG_SCHEMA_VERSION = 3
 
 /** What gets written to `registry_sync.source_version`. */
 export const CATALOG_VERSION = `${CATALOG_SOURCE}#${CATALOG_SCHEMA_VERSION}`
@@ -65,6 +65,15 @@ export interface ServiceNetworkOption {
   scheme: string
   /** True only when Circle Gateway can settle it — see isGatewayBatchable. */
   gatewayBatchable?: boolean
+  /**
+   * Which rail settles this option, and therefore which balance pays for it.
+   *
+   * `gateway` draws the depositor's ledger inside the GatewayWallet on this
+   * chain. `vanilla` signs an EIP-3009 authorisation against the USDC token and
+   * draws the EOA's plain ERC-20 balance. The two are funded separately, so a
+   * wallet can be able to pay one and not the other on the very same chain.
+   */
+  rail: 'gateway' | 'vanilla' | 'verification'
 }
 
 export type ServiceSource = 'x402' | 'free'
@@ -250,6 +259,7 @@ function normalise(item: DiscoveryItem): Omit<ServiceRow, 'synced_at'> | null {
        * the user approves it.
        */
       gatewayBatchable: isGatewayBatchable(accept),
+      rail: isGatewayBatchable(accept) ? 'gateway' : 'vanilla',
     })
   }
   if (options.length === 0) return null
@@ -520,6 +530,7 @@ function freeApiRows(syncedAt: number): ServiceRow[] {
     priceUsdc: VERIFICATION_AMOUNT_USDC,
     asset: CHAIN_CONFIGS[VERIFICATION_CHAIN].usdc,
     scheme: 'verification',
+    rail: 'verification',
   }
 
   return FREE_API_CATALOG.map((api) => ({
@@ -573,12 +584,21 @@ async function fetchPage(offset: number): Promise<DiscoveryItem[]> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
   try {
-    // Only what the agent can actually pay. Filtering at the source keeps the
-    // catalog honest — there is no point mirroring listings the wallet cannot
-    // settle and the planner would then have to be stopped from proposing.
-    const url =
-      `${DISCOVERY_URL}?supportsCircleGateway=true&type=http` +
-      `&limit=${PAGE_SIZE}&offset=${offset}`
+    /*
+     * Both payment rails, not just Gateway.
+     *
+     * This used to filter on `supportsCircleGateway=true`, which was right when
+     * Gateway was the only way the wallet could pay. It is no longer: 233 of the
+     * catalog's 955 listings settle through plain x402 instead, and filtering
+     * them out at the source meant the planner could not see a third of the
+     * marketplace — AgentMail, Allium, Messari and StableTravel among them.
+     *
+     * Payability is still enforced, just later and more precisely: `normalise`
+     * keeps only listings with an accept on a chain we recognise, and
+     * `chooseChain` then picks an option the wallet can actually fund on the
+     * rail that option settles through.
+     */
+    const url = `${DISCOVERY_URL}?type=http&limit=${PAGE_SIZE}&offset=${offset}`
     const res = await fetch(url, {
       signal: controller.signal,
       headers: { accept: 'application/json' },

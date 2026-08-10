@@ -30,6 +30,25 @@ import { chainConfig, fromAtomicUsdc, safeErrorMessage } from './gatewayService.
  * CAIP-2 identifiers, so the library cannot talk to any of them.
  */
 
+/**
+ * Whether the plain rail can pay on this chain.
+ *
+ * Broader than it once was. An earlier draft delegated to `x402-fetch`, whose
+ * closed network list would have limited us to Base, Polygon and Avalanche;
+ * signing the authorisation here instead means any EVM chain with a USDC
+ * contract works, because EIP-3009 is the token's own interface.
+ *
+ * Solana listings never reach this — `chainForNetwork` does not map them, and
+ * they would need an SVM signer this wallet is not.
+ */
+export function vanillaSupportsChain(chain: SupportedChainName): boolean {
+  try {
+    return Boolean(chainConfig(chain).usdc)
+  } catch {
+    return false
+  }
+}
+
 /** EIP-3009, as USDC and GatewayWalletBatched both implement it. */
 const AUTHORIZATION_TYPES = {
   TransferWithAuthorization: [
