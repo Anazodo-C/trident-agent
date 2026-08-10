@@ -96,6 +96,31 @@ async function payOnce(
 }
 
 /**
+ * Parameters a seller demands but never published, taken from its own refusal.
+ *
+ * BlockRun's Surf endpoints declare no required parameters in the catalog and
+ * then reject the call: `{"error":"Missing required parameters","message":"…
+ * requires: q. Payment was NOT charged.","missing_params":["q"]}`. Nothing in
+ * the published schema could have predicted that, so three steps died on it in
+ * one run.
+ *
+ * Only honoured when the seller states no charge was made. Without that, a
+ * retry could pay twice for a call that already took the money, and a wrong
+ * guess about billing is far worse than a failed step.
+ */
+export function undeclaredParamsFrom(detail: string): string[] {
+  if (!/payment was not charged/i.test(detail)) return []
+
+  const match = detail.match(/"missing_params"\s*:\s*\[([^\]]*)\]/i)
+  if (!match?.[1]) return []
+
+  return match[1]
+    .split(',')
+    .map((name) => name.trim().replace(/^["']|["']$/g, ''))
+    .filter((name) => /^[A-Za-z_][A-Za-z0-9_]{0,39}$/.test(name))
+}
+
+/**
  * The required parameters this step has not supplied.
  *
  * Checked against the registry's copy of the service, never the plan's — the
@@ -740,6 +765,9 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
       /** The service the user approved, for the message if everything is down. */
       const approvedService = service
       let attemptsLeft = MAX_ENDPOINT_ATTEMPTS
+      // One retry per step for a parameter the seller never published. Bounded
+      // so a stubborn endpoint cannot turn into a loop.
+      let undeclaredRetryUsed = false
 
       // Re-entered when an endpoint fails and a substitute is available. The
       // user asked for an answer, not for a particular provider.
@@ -1018,6 +1046,27 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
          * events lookup: our bug, charged to the user, against a service that
          * was working the whole time.
          */
+        /*
+         * The seller named a parameter its own catalog entry omits, and said it
+         * charged nothing. Fill it and try the same endpoint again before
+         * treating it as failed — this is free, and it is the difference
+         * between "BlockRun is broken" and a working search.
+         *
+         * The value comes from the step's purpose, which is what the planner
+         * wrote to describe the job, so a search endpoint gets the thing the
+         * user actually asked about.
+         */
+        const undeclared = undeclaredRetryUsed ? [] : undeclaredParamsFrom(detail)
+        if (undeclared.length > 0 && step.purpose.trim()) {
+          undeclaredRetryUsed = true
+          for (const name of undeclared) step.params[name] = step.purpose.trim()
+          console.warn(
+            '[trident] retrying with undeclared parameters:',
+            JSON.stringify({ taskId, url: step.endpointUrl, filled: undeclared }),
+          )
+          continue
+        }
+
         const ourFault = err instanceof BridgeError
         if (!ourFault) noteEndpointFailure(step.endpointUrl)
         attemptsLeft -= 1

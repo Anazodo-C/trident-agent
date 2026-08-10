@@ -17,6 +17,7 @@ import {
   paramsFit,
   requestUrl,
   runTask,
+  undeclaredParamsFrom,
 } from '../src/agent/runner.ts'
 import { __testAnswersTheSameQuestion } from '../src/circle/candidateService.ts'
 import {
@@ -491,6 +492,44 @@ async function main(): Promise<void> {
     check('its fixed count=3 is kept', geo?.resource.includes('count=3') === true, geo?.resource)
   }
 
+  // ------------------------------------------------ undeclared parameters
+  section('Undeclared parameters')
+  {
+    // The verbatim body from three failed steps in one run.
+    const surf =
+      'Request failed with status 400 — endpoint said: {"error":"Missing required parameters",' +
+      '"message":"Surf endpoint /api/v1/surf/search/news requires: q. Payment was NOT charged.",' +
+      '"missing_params":["q"],"all_required":["q"]}'
+
+    check('the seller names the field it wants', undeclaredParamsFrom(surf).join() === 'q')
+    check(
+      'several names are all read',
+      undeclaredParamsFrom(
+        'Payment was NOT charged. {"missing_params":["q","limit"]}',
+      ).join() === 'q,limit',
+    )
+
+    /*
+     * The guard that matters. Without an explicit "not charged" the retry could
+     * pay a second time for a call that already took the money, and being wrong
+     * about billing is far worse than a failed step.
+     */
+    check(
+      'no retry unless the seller says nothing was charged',
+      undeclaredParamsFrom('{"error":"bad request","missing_params":["q"]}').length === 0,
+    )
+    check(
+      'an unrelated 400 yields nothing',
+      undeclaredParamsFrom('Request failed with status 400').length === 0,
+    )
+    check(
+      'junk in the field list is discarded, not injected',
+      undeclaredParamsFrom(
+        'Payment was NOT charged. {"missing_params":["ok_1","../etc","a b","' + 'x'.repeat(60) + '"]}',
+      ).join() === 'ok_1',
+    )
+  }
+
   // ------------------------------------------------- substitution relevance
   section('Substitution relevance')
   {
@@ -525,13 +564,43 @@ async function main(): Promise<void> {
       'one markets endpoint substitutes another',
       __testAnswersTheSameQuestion(kalshiMarkets, polyMarkets),
     )
+    /*
+     * A deliberate false negative. `quotes` and `bars` are plausibly the same
+     * thing under a shared `ohlcv` tag, and this refuses to substitute them.
+     *
+     * String comparison cannot tell a synonym from a different resource, and
+     * the two failure modes are not symmetric: refusing a good substitute costs
+     * a retry, accepting a bad one charges for an answer to a question nobody
+     * asked. That happened. So when both paths name a capability, they must
+     * agree.
+     */
     check(
-      'a shared tag also qualifies when paths differ',
-      __testAnswersTheSameQuestion(
+      'differing capabilities are refused even under a shared tag',
+      !__testAnswersTheSameQuestion(
         svc('https://a.io/v1/quotes', ['ohlcv']),
         svc('https://b.io/v1/bars', ['ohlcv']),
       ),
     )
+    /*
+     * The substitution the last run still let through. Both paths name what
+     * they return, and they differ — a shared provider tag must not overrule
+     * that, or a people lookup stands in for a posts lookup.
+     */
+    check(
+      'shared tags do not overrule differing capabilities',
+      !__testAnswersTheSameQuestion(
+        svc('https://nano.blockrun.ai/api/v1/surf/search/social/posts', ['surf', 'social']),
+        svc('https://nano.blockrun.ai/api/v1/surf/search/social/people', ['surf', 'social']),
+      ),
+    )
+    check(
+      'but tags still vouch when a path names no capability',
+      __testAnswersTheSameQuestion(
+        svc('https://a.io/', ['ohlcv']),
+        svc('https://b.io/v1/bars', ['ohlcv']),
+      ),
+    )
+
     check(
       'the provider name alone is never enough',
       !__testAnswersTheSameQuestion(

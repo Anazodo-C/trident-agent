@@ -366,14 +366,24 @@ function answersTheSameQuestion(
   candidate: Pick<Service, 'resource' | 'host' | 'tags'>,
 ): boolean {
   const wanted = capabilityOf(failed.resource)
-  // Nothing distinguishing in the path — fall through to the tag check rather
-  // than blocking a substitute we have no evidence against.
-  if (wanted !== null && wanted === capabilityOf(candidate.resource)) return true
+  const offered = capabilityOf(candidate.resource)
+
+  if (wanted !== null && offered !== null) {
+    /*
+     * Both paths say what they return, so believe them. Tags must not overrule
+     * this: `surf/search/social/posts` and `surf/search/social/people` share
+     * their provider's tags, and letting those vouch substituted a people
+     * lookup for a posts lookup — the same class of wrong answer the path check
+     * exists to prevent.
+     */
+    return wanted === offered
+  }
 
   /*
-   * A shared tag is equally good evidence, and the only evidence for providers
-   * that describe capability in tags rather than in the path. The provider's own
-   * name is excluded so "blockrun" cannot vouch for itself.
+   * One side names no capability. Fall back to tags, which is the only evidence
+   * available for providers that describe themselves there rather than in the
+   * path. The provider's own name is excluded so "blockrun" cannot vouch for
+   * itself.
    */
   const provider = new Set([
     ...failed.host.toLowerCase().split(/[.\-]/),

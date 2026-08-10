@@ -17,7 +17,7 @@ import { RunSummary } from './RunSummary.tsx'
 const EXAMPLE_PROMPTS = [
   'Verify my agent wallet can pay an x402 endpoint',
   'Research the top 3 competitors to Stripe and summarise their funding',
-  'Check if the domain trident.ag is available and suggest alternatives',
+  'Analyse social sentiment around the Arc mainnet launch',
   'Find recent onchain activity for the USDC contract on Base',
 ]
 
