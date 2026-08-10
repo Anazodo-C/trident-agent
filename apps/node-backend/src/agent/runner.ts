@@ -9,6 +9,9 @@ import {
   unifiedGatewayBalance,
 } from '../circle/gatewayService.ts'
 import { privateKeyToAccount } from 'viem/accounts'
+import { bridgeToGatewayBalance } from '../circle/cctpBridge.ts'
+import { canBridgeTo } from '../circle/deployments.ts'
+import { KEEPER_PRIVATE_KEY } from '../env.ts'
 import { findServiceByResource, type Service } from '../circle/registryService.ts'
 import { findAlternatives, noteEndpointFailure } from '../circle/candidateService.ts'
 import {
@@ -460,6 +463,94 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
   // measured against the true cost of the task rather than of this attempt.
   let totalSpent = usdc([...completed.values()].reduce((sum, step) => sum + step.cost, 0))
 
+  /**
+   * Move funds to a chain this service can be paid on, when they are elsewhere.
+   *
+   * Returns null when bridging cannot help — no deployment on either side, no
+   * chain with enough to send, or the keeper is not configured. The caller then
+   * reports the ordinary "wrong chain" refusal, which names what to deposit.
+   *
+   * A failure here is surfaced rather than swallowed: it means the user's money
+   * moved, or tried to, and telling them the service was simply unavailable
+   * would be a lie about their balance.
+   */
+  const bridgeForStep = async (
+    step: PlanStep,
+    service: Service,
+    policy: ChainPolicy,
+    balances: Map<SupportedChainName, number>,
+  ): Promise<{ chain: SupportedChainName; creditedUsdc: number } | null> => {
+    // Where the seller will take payment, preferring somewhere we can deliver.
+    const target = service.networks.find(
+      (option) =>
+        !option.isTestnet &&
+        option.gatewayBatchable === true &&
+        policy.allowed.includes(option.chainKey) &&
+        canBridgeTo(option.chainKey),
+    )
+    if (!target || !KEEPER_PRIVATE_KEY) return null
+
+    // The cheapest source that can cover it outright. Splitting across chains
+    // would mean several burns and several fees for one small invoice.
+    const needed = target.priceUsdc
+    const source = [...balances.entries()]
+      .filter(([chain, held]) => chain !== target.chainKey && held >= needed && canBridgeTo(chain))
+      .sort((a, b) => a[1] - b[1])[0]
+    if (!source) return null
+
+    /*
+     * Send more than this one call needs.
+     *
+     * Each bridge costs a CCTP fee and minutes of waiting, so moving exactly
+     * one invoice's worth would repeat that on the next call to the same
+     * seller. Ten times the price, capped by what is actually held, amortises
+     * it without stranding a meaningful balance on a chain the user may never
+     * use again.
+     */
+    const amount = Math.min(source[1], Math.max(needed * 10, needed))
+    const atomic = BigInt(Math.floor(amount * 1_000_000))
+
+    emit(res, 'step_start', {
+      stepIndex: step.stepIndex,
+      serviceName: step.serviceName,
+      endpointUrl: step.endpointUrl,
+      purpose: `Moving ${amount} USDC from ${source[0]} to ${target.chainKey} to pay this`,
+    })
+
+    const result = await bridgeToGatewayBalance(
+      agentPrivateKey,
+      source[0],
+      target.chainKey,
+      atomic,
+      (progress) => {
+        console.warn(
+          '[trident] bridging:',
+          JSON.stringify({
+            taskId,
+            from: source[0],
+            to: target.chainKey,
+            stage: progress.stage,
+            detail: progress.detail,
+          }),
+        )
+      },
+    )
+
+    const creditedUsdc = Number(result.creditedAtomic) / 1_000_000
+    balances.set(source[0], source[1] - amount)
+    console.warn(
+      '[trident] bridged:',
+      JSON.stringify({
+        taskId,
+        to: target.chainKey,
+        creditedUsdc,
+        burnTx: result.burnTxHash,
+        sweepTx: result.sweepTxHash,
+      }),
+    )
+    return { chain: target.chainKey, creditedUsdc }
+  }
+
   /*
    * Where this wallet's Gateway money actually is, read once for the run.
    *
@@ -648,7 +739,36 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           gatewayOnly: service.source === 'x402',
           ...(gatewayBalances ? { balances: gatewayBalances } : {}),
         }
-        const choice = chooseChain(service.networks, policy, chainOpts)
+        let choice = chooseChain(service.networks, policy, chainOpts)
+
+        /*
+         * Nothing settleable where the money is — so move the money.
+         *
+         * Only reached when the wallet holds enough overall but on the wrong
+         * chain, which is the common case for a seller who prices on a single
+         * network. The funds are bridged into the user's Gateway balance on the
+         * chain the invoice names, and the choice is remade against real
+         * balances rather than assumed to have worked.
+         *
+         * Deliberately after the plan is approved and the price is known: this
+         * costs a CCTP fee and minutes of waiting, and doing it speculatively
+         * for a call that might not happen would spend the user's money on a
+         * transfer they never asked for.
+         */
+        if (!choice && gatewayBalances && service.source === 'x402') {
+          const bridged = await bridgeForStep(step, service, policy, gatewayBalances)
+          if (bridged) {
+            gatewayBalances.set(
+              bridged.chain,
+              (gatewayBalances.get(bridged.chain) ?? 0) + bridged.creditedUsdc,
+            )
+            choice = chooseChain(service.networks, policy, {
+              ...chainOpts,
+              balances: gatewayBalances,
+            })
+          }
+        }
+
         if (!choice) {
           throw new Error(
             unpayableReason(service.networks, policy, chainOpts) ??

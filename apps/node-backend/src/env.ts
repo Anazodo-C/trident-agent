@@ -183,3 +183,21 @@ export const DB_PATH = optional('DB_PATH', './trident.db')
  * Keep it in the platform's secret store and out of the repo.
  */
 export const DB_ENCRYPTION_KEY = optional('DB_ENCRYPTION_KEY')
+
+/**
+ * Signs the destination half of a cross-chain settlement.
+ *
+ * A user paying a seller on a chain they have never used has no native token
+ * there, so they cannot submit the CCTP mint or credit their own Gateway
+ * ledger. This key does both on their behalf and pays that gas.
+ *
+ * It is not a custody key and must never hold user funds. The mint is directed
+ * at a receiver contract derived from the user, which can only credit that
+ * user's Gateway balance or refund them — so this key moves other people's
+ * money along a path it cannot redirect. It needs a small native balance on
+ * every chain settlement may land on, and nothing else.
+ *
+ * Unset simply disables cross-chain settlement; single-chain payments are
+ * unaffected.
+ */
+export const KEEPER_PRIVATE_KEY = optional('KEEPER_PRIVATE_KEY')
