@@ -103,15 +103,16 @@ The two platforms build from **different GitHub repositories**, and nothing in
 either dashboard is visible from here — this cost an afternoon to recover from
 the GitHub deployments API, so it is written down.
 
-| Platform | Remote | Repository | Deploys from |
+| Platform | Remote | Repository | Watches |
 |---|---|---|---|
-| Vercel (frontend) | `origin` | `Anazodo-C/trident-agent` | `main` → Production; any other branch → Preview |
-| Railway (backend) | `zach` | `Zach-47/trident-agent` (a fork) | `main` → production |
+| Vercel (frontend) | `origin` | `Anazodo-C/trident-agent` | **`main`** → Production; any other branch → Preview |
+| Railway (backend) | `zach` | `Zach-47/trident-agent` (a fork) | **`v1`** |
 
-`zach` is a fork, so it receives nothing automatically. A deploy is two pushes:
+The two platforms watch **different branch names**, which is the part that is
+easy to get wrong. A deploy is two pushes of the same commit:
 
 ```bash
-git push zach   main   # backend  — push first, so the API exists
+git push zach   v1     # backend  — push first, so the API exists
 git push origin main   # frontend — which is built against it
 ```
 
@@ -119,14 +120,27 @@ Railway first is not cosmetic. Shipping the frontend alone leaves a page calling
 endpoints its backend does not have yet; the status page in that state loads and
 reads "Status unavailable", which looks like a bug rather than a partial deploy.
 
-`v1` is a milestone marker, moved only at a release worth rolling back to. It is
-not a development branch — for a long time it and `main` were kept identical,
-which hid this topology and made a single forgotten push look like a broken
-build. Pushing anything other than `main` produces a Vercel Preview and no
-backend deploy at all.
+`zach` is a fork and receives nothing automatically — every backend deploy is an
+explicit push to it. `zach/main` is unused: Railway never reads it, no build
+input depends on it, and nothing in the repo references it.
 
-Every push to `main` deploys to production immediately. There is no staging
-environment; verify locally first.
+Both branches were kept identical for a long time, which hid all of this. With
+four refs always pushed together, no observation ever distinguished which branch
+either platform was watching, and a single forgotten push looked like a broken
+build.
+
+**Verify the deployment, not the push.** A push can succeed while the platform
+does nothing — a lapsed GitHub token or a paused service is silent from the
+command line. Railway registers a GitHub deployment within seconds of a build it
+intends to run:
+
+```bash
+curl -s https://api.github.com/repos/Zach-47/trident-agent/deployments?per_page=1
+curl -s -o /dev/null -w '%{http_code}\n' https://trident-agent-production.up.railway.app/health
+```
+
+Every push to a watched branch deploys to production immediately. There is no
+staging environment; verify locally first.
 
 Both configs live at the repo root and use explicit paths, so neither platform
 needs a Root Directory set in its dashboard. Each scopes its install to one
