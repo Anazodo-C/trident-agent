@@ -25,6 +25,8 @@ interface TaskState {
   plan: ExecutionPlan | null
   /** Registry facts per step index — drives the approval-card warnings. */
   annotations: Record<number, StepAnnotation>
+  /** Path values the goal never supplied, per step index. The card asks for these. */
+  needsInput: Record<number, string[]>
   /** Advisory paid alternatives for free steps. */
   upgrades: StepUpgrade[]
   budgetUsdc: number | null
@@ -58,6 +60,7 @@ interface TaskState {
     taskId: string,
     plan: ExecutionPlan,
     annotations: Record<number, StepAnnotation>,
+    needsInput: Record<number, string[]>,
     upgrades: StepUpgrade[],
     budgetGuidance: BudgetGuidance | null,
   ) => void
@@ -82,6 +85,7 @@ const initial = {
   taskId: null,
   plan: null,
   annotations: {} as Record<number, StepAnnotation>,
+  needsInput: {} as Record<number, string[]>,
   upgrades: [] as StepUpgrade[],
   budgetUsdc: null,
   budgetGuidance: null as BudgetGuidance | null,
@@ -124,11 +128,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       ],
     }),
 
-  planReady: (taskId, plan, annotations, upgrades, budgetGuidance) =>
+  planReady: (taskId, plan, annotations, needsInput, upgrades, budgetGuidance) =>
     set({
       taskId,
       plan,
       annotations,
+      needsInput,
       upgrades,
       budgetGuidance,
       phase: 'awaiting-approval',

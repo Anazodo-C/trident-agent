@@ -50,7 +50,33 @@ export interface CandidateOptions {
  * better answer to a domain question than one that merely mentions domains in
  * prose. Usage and curation act as tie-breakers, not gates.
  */
-function scoreOf(service: Service, terms: string[]): number {
+/**
+ * What we know about an endpoint's health, as a ranking input rather than a gate.
+ *
+ * The distinction is the point of this change. Health is a reason to prefer one
+ * endpoint over another, not a reason to pretend it does not exist — the user
+ * asked for an answer, and an endpoint that is merely suspect may still be the
+ * only one that can give it.
+ */
+interface HealthSignal {
+  probeState: string | null
+  recentlyFailed: boolean
+}
+
+/** Rank penalties, all well under the weight of matching the goal at all. */
+const PENALTY: Record<string, number> = {
+  // Answered, but not with terms we could confirm — usually a body validated
+  // ahead of the payment gate. Worth preferring a clean 402 over.
+  answering: 4,
+  // Our own request rate, not their outage.
+  throttled: 2,
+  // Confirmed dead but not yet twice in a row, so still offered, last.
+  gone: 20,
+  erroring: 20,
+  down: 20,
+}
+
+function scoreOf(service: Service, terms: string[], health?: HealthSignal): number {
   const name = service.serviceName.toLowerCase()
   const host = service.host.toLowerCase()
   const description = service.description.toLowerCase()
@@ -71,7 +97,18 @@ function scoreOf(service: Service, terms: string[]): number {
   score += Math.min(10, Math.log10(service.calls30d + 1) * 3)
   if (service.trust === 'untested') score -= 2
 
-  return score
+  if (health) {
+    score -= PENALTY[health.probeState ?? ''] ?? 0
+    // A failure inside the last ten minutes used to remove the endpoint from
+    // the shortlist entirely. It is first-hand evidence and worth a lot, but
+    // the endpoint stays on offer — the runner will fail over if it fails again.
+    if (health.recentlyFailed) score -= 15
+  }
+
+  // Never below the zero that means "did not match the goal at all", or a
+  // penalty would silently turn a relevant endpoint into an excluded one and
+  // reintroduce exactly the hiding this replaced.
+  return Math.max(score, 0.01)
 }
 
 export interface CandidateSet {
@@ -115,11 +152,22 @@ export function selectCandidates(goal: string, options: CandidateOptions): Candi
   const scored = pool
     .map((row) => {
       const service = rowToService(row)
-      return { service, score: scoreOf(service, terms) }
+      return {
+        service,
+        score: scoreOf(service, terms, {
+          probeState: row.probe_state,
+          recentlyFailed: isRecentlyFailed(service.resource),
+        }),
+      }
     })
-    .filter(
-      (s) => s.score > 0 && isPayable(s.service, chains) && !isRecentlyFailed(s.service.resource),
-    )
+    /*
+     * Payability is the only remaining exclusion, and it is not a judgement
+     * about the endpoint — a service we cannot settle is not a candidate on any
+     * reading. Everything else that used to remove a service from the shortlist
+     * now costs it rank instead. An endpoint that failed ten minutes ago, or
+     * that answers 4xx, is still offered; it just sorts behind the alternatives.
+     */
+    .filter((s) => s.score > 0 && isPayable(s.service, chains))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
     .map((s) => s.service)
@@ -228,15 +276,13 @@ export function isRecentlyFailed(resource: string): boolean {
 }
 
 /**
- * How long an endpoint may be continuously unreachable before it stops being
- * offered at all.
+ * Probe states that mean the endpoint genuinely did not answer.
  *
- * Seven days. Long enough that a provider's bad afternoon, a certificate lapse
- * or a regional outage does not cost them their listing, short enough that the
- * catalog is not padded with services that no longer exist. The ten-minute
- * in-memory cooldown handles the short case; this handles abandonment.
+ * Deliberately short. A 4xx is an answer, and being rate-limited is our
+ * impatience rather than their outage — neither belongs here. Only silence, a
+ * server error, or a path that is definitively absent.
  */
-const UNREACHABLE_CUTOFF_MS = 7 * 24 * 60 * 60 * 1000
+const DEAD_STATES = "('gone','erroring','down')"
 
 /**
  * Record that an endpoint could not be reached at all.
@@ -269,15 +315,27 @@ export function noteEndpointReachable(resource: string): void {
   ).run(resource)
 }
 
-/** True once an endpoint has been dark for longer than the cutoff. */
-export function isLongDead(unreachableSince: number | null): boolean {
-  if (unreachableSince === null) return false
-  return Date.now() - unreachableSince > UNREACHABLE_CUTOFF_MS
-}
-
-/** SQL fragment excluding endpoints dark beyond the cutoff. */
+/**
+ * SQL fragment excluding only endpoints the prober has confirmed dead.
+ *
+ * This used to be a seven-day cutoff on `unreachable_since`, and it was the
+ * mechanism by which a defect in our own probe nearly removed twelve working
+ * endpoints from the catalog for a week: the prober sent `{symbol}` literally,
+ * read the 404 as death, and wrote the column this clause reads.
+ *
+ * Two changes follow from that. The verdict now comes from the prober's live
+ * state, which is refreshed every five minutes, so a week-long memory is both
+ * redundant and dangerous. And the default is inclusion — a row that has never
+ * been probed, because it was added by the last sync, is not evidence of
+ * anything and is never withheld.
+ *
+ * `probe_fail_streak` is the same hysteresis the prober applies before it
+ * condemns anything: one bad reading is a blip, not a verdict.
+ */
 export function reachableClause(): string {
-  return `(unreachable_since IS NULL OR unreachable_since > ${Date.now() - UNREACHABLE_CUTOFF_MS})`
+  return `(probe_state IS NULL
+           OR probe_state NOT IN ${DEAD_STATES}
+           OR COALESCE(probe_fail_streak, 0) < 2)`
 }
 
 /**

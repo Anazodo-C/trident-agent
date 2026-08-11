@@ -175,6 +175,8 @@ export const api = {
       taskId: string
       plan: ExecutionPlan
       annotations: Record<number, StepAnnotation>
+      /** Path values the goal never supplied, per step index — the card asks for these. */
+      needsInput: Record<number, string[]>
       upgrades: StepUpgrade[]
       costing: PlanCosting
       affordable: boolean

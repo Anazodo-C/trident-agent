@@ -11,14 +11,13 @@
 import db from '../src/db.ts'
 import {
   classifyProbe,
-  fillTemplate,
   hostOf,
   isReachableState,
-  isTemplated,
   statusSnapshot,
   __testPersist,
   type ProbeState,
 } from '../src/circle/statusProber.ts'
+import { fillTemplate, isTemplated } from '../src/circle/pathParams.ts'
 
 let failures = 0
 

@@ -16,6 +16,7 @@ import { payVanilla } from '../circle/vanillaPayment.ts'
 import { KEEPER_PRIVATE_KEY } from '../env.ts'
 import { findServiceByResource, type Service } from '../circle/registryService.ts'
 import { findAlternatives, noteEndpointFailure } from '../circle/candidateService.ts'
+import { applyPathParams, missingPathParams, pathPlaceholders } from '../circle/pathParams.ts'
 import {
   GATEWAY_MAINNET_CHAINS,
   chooseChain,
@@ -178,9 +179,7 @@ export function paramsFit(
 ): boolean {
   // A template we cannot fill is as unusable as a missing required field, and
   // it is how `/videos/generations/{id}` came to be requested literally.
-  const unfillable = pathPlaceholders(service.resource).some(
-    (name) => params[name] === undefined || params[name] === null || params[name] === '',
-  )
+  const unfillable = missingPathParams(service.resource, params).length > 0
   return (
     !unfillable &&
     missingRequiredParams(service.requiredParams, params).length === 0 &&
@@ -204,39 +203,6 @@ export function paramsFit(
  * Array values repeat the key (symbols=ETH&symbols=BTC), which is the form the
  * published schemas ask for.
  */
-/** Placeholder segments in a catalogued URL, e.g. `{id}` in `/coins/{id}`. */
-const PATH_PLACEHOLDER = /\{([^{}]+)\}/g
-
-/** The placeholder names a URL still expects to have filled. */
-export function pathPlaceholders(url: string): string[] {
-  return [...url.matchAll(PATH_PLACEHOLDER)].map((m) => m[1] as string)
-}
-
-/**
- * Fill `{id}`-style segments from the step's parameters.
- *
- * 117 of the catalog's 955 resources are templates. Sent as published they are
- * requested with the braces still in them — a failover once called
- * `/api/v1/videos/generations/{id}` verbatim and read the 400 as the endpoint
- * being broken.
- *
- * A parameter spent on the path is returned so the caller does not also append
- * it to the query string, where it would be a duplicate the server ignores.
- */
-export function applyPathParams(
-  url: string,
-  params: Record<string, unknown>,
-): { url: string; consumed: Set<string> } {
-  const consumed = new Set<string>()
-  const filled = url.replace(PATH_PLACEHOLDER, (whole, name: string) => {
-    const value = params[name]
-    if (value === undefined || value === null || value === '') return whole
-    consumed.add(name)
-    return encodeURIComponent(String(value))
-  })
-  return { url: filled, consumed }
-}
-
 export function requestUrl(
   step: PlanStep,
   inQuery: boolean = step.httpMethod === 'GET',
@@ -855,10 +821,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
          * because requestUrl only runs at request time — after the money has
          * moved.
          */
-        const unfilled = pathPlaceholders(step.endpointUrl).filter(
-          (name) => step.params[name] === undefined || step.params[name] === null
-            || step.params[name] === '',
-        )
+        const unfilled = missingPathParams(step.endpointUrl, step.params)
         if (unfilled.length > 0) {
           throw new Error(
             `${service.serviceName} needs ${unfilled.join(', ')} in its path, and the request did ` +

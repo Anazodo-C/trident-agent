@@ -122,6 +122,10 @@ function systemPrompt(candidates: Service[]): string {
     // Named so the model fills them in. An endpoint called without its
     // required parameters answers 400 after the payment has authorised.
     requiredParams: s.requiredParams,
+    // Which of those go into the URL itself. Called out separately because the
+    // request cannot be formed at all without them, and because a value the
+    // path wants cannot be passed as a query parameter instead.
+    ...(s.pathParams.length > 0 ? { pathParams: s.pathParams } : {}),
     // POST bodies are structured, and the shape cannot be guessed from a list
     // of names — 210 of the 215 POST services publish one.
     ...(s.bodyShape ? { bodyShape: s.bodyShape } : {}),
@@ -143,7 +147,8 @@ Rules:
 - estimatedCostUsdc MUST equal that service's "priceUsdc".
 - httpMethod MUST equal that service's "httpMethod". Do not infer it from the endpoint's name or purpose.
 - "params" MUST include every name listed in that service's "requiredParams", filled with a value drawn from the goal. The run is now stopped before any payment when one is missing, so an omission costs the user their answer.
-- Every required value must come from the goal. Never carry over an example from a description or a URL, and never invent a placeholder to fill a slot — if the goal does not supply what a service requires, that service is the wrong choice for it.
+- Every value you supply must come from the goal. Never carry over an example from a description or a URL, and never invent one to fill a slot.
+- "pathParams" are the {braces} in the URL. Fill them from the goal by name — a goal asking for Apple's stock price fills {symbol} with "AAPL". If the goal genuinely does not say, still choose the service if it is the right one, and simply leave that name out of "params": the user is asked for it before anything is paid. Omitting it is correct; guessing it is not.
 - For a GET, "params" are query parameters and each value must be a string, number, boolean, or an array of those.
 - For a POST, "params" IS the request body. When the service has a "bodyShape", follow it exactly, including nested objects and arrays. A JSON-RPC service needs the full envelope, e.g. {"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]} — not a flattened key/value map.
 - Fill "params" by name in both cases. Whether they travel in the query string or the body is decided from the service's schema after planning, so do not restructure them for it.

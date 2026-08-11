@@ -5,6 +5,7 @@ import db, { type TaskRow, type TaskStepRow } from '../db.ts'
 import { asyncRoute, httpError } from '../http.ts'
 import { currentUser, requireAuth } from '../auth/jwt.ts'
 import { buildPlan, StepSchema, type PlanStep, type StepAnnotation } from '../llm/planner.ts'
+import { missingPathParams } from '../circle/pathParams.ts'
 import { findServiceByResource } from '../circle/registryService.ts'
 import { selectCandidates } from '../circle/candidateService.ts'
 import { chooseChain, policyFor, unpayableReason } from '../circle/chainPolicy.ts'
@@ -126,9 +127,22 @@ router.post(
     // Annotate from the registry rather than trusting the model's claims, so
     // the approval card can warn about endpoints with no recorded usage.
     const annotations: Record<number, StepAnnotation> = {}
+    /**
+     * Path values the goal never supplied, per step.
+     *
+     * A `{symbol}` the user did not state is not a reason to drop the endpoint
+     * or to guess — it is a question, and the approval card is where it gets
+     * asked. The user is already there reading the price, and answering costs
+     * nothing extra; previously the run simply failed at request time, or the
+     * endpoint was quietly judged unfillable and never offered.
+     */
+    const needsInput: Record<number, string[]> = {}
     for (const step of plan.steps) {
       const service = findServiceByResource(step.endpointUrl)
       if (!service) continue
+
+      const missing = missingPathParams(step.endpointUrl, step.params ?? {})
+      if (missing.length > 0) needsInput[step.stepIndex] = missing
 
       // The catalog knows the verb; the model was guessing. A mismatch here
       // reaches the endpoint as a 405 and burns the run, so the registry wins.
@@ -189,6 +203,7 @@ router.post(
       taskId,
       plan: { ...plan, steps: approvableSteps },
       annotations,
+      needsInput,
       upgrades,
       // Registry-priced totals, so the card never quotes the model's estimate.
       costing: {
@@ -328,6 +343,25 @@ router.post(
 
     const rogue = approvedSteps.find((s) => findServiceByResource(s.endpointUrl) === null)
     if (rogue) throw httpError(400, `Endpoint is not in the service catalog: ${rogue.endpointUrl}`)
+
+    /*
+     * A path value the approval card asked for and did not get.
+     *
+     * The card blocks on this, so reaching here means the request did not come
+     * from it. Refused before any payment rather than at request time, which is
+     * after the money has authorised — the same reason the chain check below
+     * runs here instead of inside the runner.
+     */
+    for (const step of approvedSteps) {
+      const missing = missingPathParams(step.endpointUrl, step.params ?? {})
+      if (missing.length > 0) {
+        throw httpError(
+          400,
+          `${step.serviceName} needs ${missing.join(', ')} to build its request. ` +
+            'Nothing was charged.',
+        )
+      }
+    }
 
     const fresh = findUserById(user.id)
     if (!fresh?.eoa_address) throw httpError(409, 'No agent wallet has been set up for this account')

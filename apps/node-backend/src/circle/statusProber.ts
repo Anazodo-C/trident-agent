@@ -1,6 +1,7 @@
 import db from '../db.ts'
 import { noteEndpointReachable, noteEndpointUnreachable } from './candidateService.ts'
 import { STATUS_PROBER_ENABLED } from '../env.ts'
+import { fillTemplate, isTemplated } from './pathParams.ts'
 
 /**
  * Continuous reachability checks over the whole catalog.
@@ -59,26 +60,6 @@ const USER_AGENT = 'TridentStatus/1.0 (+https://status.tridentagent.xyz)'
  */
 const FAIL_STREAK_TO_CONDEMN = 2
 
-const PLACEHOLDER = /\{[^}]+\}/g
-
-/**
- * Substitute a neutral token for {symbol}, {agentId}, {chainNetwork}.
- *
- * Sending the braces literally is a malformed request, and it lies twice: a dry
- * run over the real catalog reported 12 working endpoints as gone because of
- * it. `/usstock/price/{symbol}` answers 404 with the braces and 402 with a real
- * symbol. Left uncorrected, and with the planner reading these results, two
- * sweeps would have pulled those endpoints out of the agent's shortlist for a
- * week over a defect in the probe.
- */
-export function fillTemplate(resource: string): string {
-  return resource.replace(PLACEHOLDER, 'probe')
-}
-
-export function isTemplated(resource: string): boolean {
-  PLACEHOLDER.lastIndex = 0
-  return PLACEHOLDER.test(resource)
-}
 
 /**
  * Turn one response into a state.

@@ -1,26 +1,70 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, ArrowRight, Ban, Play, ShieldCheck, Sparkles, TrendingUp } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowRight,
+  Ban,
+  HelpCircle,
+  Play,
+  ShieldCheck,
+  Sparkles,
+  TrendingUp,
+} from 'lucide-react'
 import type { ExecutionPlan, PlanStep, StepAnnotation, StepUpgrade } from '../../lib/types.ts'
 import { usdc } from '../../lib/format.ts'
 
 interface Props {
   plan: ExecutionPlan
   annotations: Record<number, StepAnnotation>
+  /** Path values the goal never supplied, by original step index. */
+  needsInput: Record<number, string[]>
   upgrades: StepUpgrade[]
   onApprove: (steps: PlanStep[], budgetUsdc: number | null) => void
   onCancel: () => void
 }
 
-export function ApprovalCard({ plan, annotations, upgrades, onApprove, onCancel }: Props) {
+export function ApprovalCard({
+  plan,
+  annotations,
+  needsInput,
+  upgrades,
+  onApprove,
+  onCancel,
+}: Props) {
   const [excluded, setExcluded] = useState<Set<number>>(new Set())
   const [budgetInput, setBudgetInput] = useState('')
+  /**
+   * Values the user types for the {placeholders} the goal did not answer,
+   * keyed by original step index then parameter name.
+   *
+   * The agent used to fail the run at request time, or never offer the endpoint
+   * at all. Asking here costs nothing: the user is already reading the plan and
+   * its price, and the value is merged into the step before it is approved.
+   */
+  const [filled, setFilled] = useState<Record<number, Record<string, string>>>({})
+
+  const valueFor = (stepIndex: number, name: string) =>
+    (filled[stepIndex]?.[name] ?? '').trim()
+
+  /** Steps still missing a value, among the ones actually being run. */
+  const unanswered = plan.steps.filter(
+    (s) =>
+      !excluded.has(s.stepIndex) &&
+      (needsInput[s.stepIndex] ?? []).some((name) => valueFor(s.stepIndex, name) === ''),
+  )
 
   const approvedSteps = useMemo(
     () =>
       plan.steps
         .filter((s) => !excluded.has(s.stepIndex))
-        .map((s, i) => ({ ...s, stepIndex: i })),
-    [plan.steps, excluded],
+        .map((s, i) => ({
+          ...s,
+          stepIndex: i,
+          // Typed values join the params the planner produced. The backend
+          // refuses any step that still has an unfilled placeholder, so this is
+          // the only way one of these steps can run.
+          params: { ...s.params, ...(filled[s.stepIndex] ?? {}) },
+        })),
+    [plan.steps, excluded, filled],
   )
 
   const estimatedTotal = approvedSteps.reduce((sum, s) => sum + s.estimatedCostUsdc, 0)
@@ -87,6 +131,17 @@ export function ApprovalCard({ plan, annotations, upgrades, onApprove, onCancel 
                 <p className="mt-1.5 truncate font-mono text-[11px] text-slate-600">
                   {step.httpMethod} {step.endpointUrl}
                 </p>
+                <MissingValues
+                  names={needsInput[step.stepIndex] ?? []}
+                  values={filled[step.stepIndex] ?? {}}
+                  disabled={isExcluded}
+                  onChange={(name, value) =>
+                    setFilled((prev) => ({
+                      ...prev,
+                      [step.stepIndex]: { ...(prev[step.stepIndex] ?? {}), [name]: value },
+                    }))
+                  }
+                />
                 <StepProvenance annotation={annotations[step.stepIndex]} />
                 <PremiumHint upgrade={upgrades.find((u) => u.stepIndex === step.stepIndex)} />
               </div>
@@ -135,7 +190,7 @@ export function ApprovalCard({ plan, annotations, upgrades, onApprove, onCancel 
         <div className="mt-5 flex flex-col gap-2 sm:flex-row">
           <button
             className="btn-primary flex-1"
-            disabled={approvedSteps.length === 0 || budgetInvalid}
+            disabled={approvedSteps.length === 0 || budgetInvalid || unanswered.length > 0}
             onClick={() => onApprove(approvedSteps, budget)}
           >
             <Play className="h-4 w-4" />
@@ -148,6 +203,59 @@ export function ApprovalCard({ plan, annotations, upgrades, onApprove, onCancel 
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * The values an endpoint's URL needs that the goal never said.
+ *
+ * `/usstock/price/{symbol}` cannot be called without a symbol. Asking for it
+ * here is the whole fix: previously the planner was never told the value
+ * existed, so the call went out with the braces still in it and came back 404 —
+ * and the endpoint was then judged broken and withheld from future plans.
+ *
+ * One input per placeholder, labelled with the name the endpoint uses, so the
+ * user can see exactly what is being asked for and why.
+ */
+function MissingValues({
+  names,
+  values,
+  disabled,
+  onChange,
+}: {
+  names: string[]
+  values: Record<string, string>
+  disabled: boolean
+  onChange: (name: string, value: string) => void
+}) {
+  if (names.length === 0) return null
+
+  return (
+    <div className="mt-2.5 rounded-lg border border-[#00D4FF]/30 bg-[#00D4FF]/5 p-2.5">
+      <p className="mb-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-[#00D4FF]">
+        <HelpCircle className="h-3 w-3" />
+        {names.length === 1 ? 'One detail needed' : `${names.length} details needed`}
+      </p>
+      <div className="flex flex-col gap-2">
+        {names.map((name) => (
+          <label key={name} className="flex flex-col gap-1">
+            <span className="font-mono text-[10px] text-slate-400">{name}</span>
+            <input
+              className="field py-1.5 font-mono text-xs"
+              value={values[name] ?? ''}
+              disabled={disabled}
+              placeholder={`Value for ${name}`}
+              aria-label={`Value for ${name}`}
+              onChange={(e) => onChange(name, e.target.value)}
+            />
+          </label>
+        ))}
+      </div>
+      <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
+        This endpoint takes {names.length === 1 ? 'this' : 'these'} in its address, so the request
+        cannot be built without {names.length === 1 ? 'it' : 'them'}.
+      </p>
     </div>
   )
 }

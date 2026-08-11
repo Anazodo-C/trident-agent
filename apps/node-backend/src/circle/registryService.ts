@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { pathPlaceholders } from './pathParams.ts'
 import { CHAIN_CONFIGS } from '@circle-fin/x402-batching/client'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import db, { type ServiceRow } from '../db.ts'
@@ -46,7 +47,7 @@ export const CATALOG_SOURCE = 'circle-agent-marketplace-v1'
  * The upstream identity and our extraction of it are separate things, and both
  * have to invalidate the stored copy.
  */
-const CATALOG_SCHEMA_VERSION = 3
+const CATALOG_SCHEMA_VERSION = 4
 
 /** What gets written to `registry_sync.source_version`. */
 export const CATALOG_VERSION = `${CATALOG_SOURCE}#${CATALOG_SCHEMA_VERSION}`
@@ -98,8 +99,19 @@ export interface Service {
   lastCalledAt: string | null
   iconUrl: string | null
   trust: TrustTier
-  /** Parameter names the endpoint requires, from its published schema. */
+  /**
+   * Every parameter name the endpoint requires: its schema's required fields
+   * and the `{placeholder}` segments in its own URL. See requiredParamsFor.
+   */
   requiredParams: string[]
+  /**
+   * The subset that goes into the URL rather than the query string or body.
+   *
+   * Worth naming separately because it is not interchangeable: a value the path
+   * expects cannot be supplied as a query parameter, and the request cannot be
+   * formed at all until it is known.
+   */
+  pathParams: string[]
   /** Compact POST body shape, or null for GET / no published schema. */
   bodyShape: string | null
   /** Query string or request body, from the schema. Null when none was published. */
@@ -230,7 +242,26 @@ function hostOf(url: string): string {
  * Reduce a discovery item to the shape we store. Returns null when nothing
  * about it is settleable through Gateway, which is the only way we can pay.
  */
-function normalise(item: DiscoveryItem): Omit<ServiceRow, 'synced_at'> | null {
+/**
+ * A row as the sync writes it.
+ *
+ * The probe columns are excluded deliberately: they are the prober's record of
+ * what an endpoint did, not the catalog's description of what it is, and a
+ * resync must not erase them. Every sync writes the listing and leaves the
+ * health history alone.
+ */
+type SyncedServiceRow = Omit<
+  ServiceRow,
+  | 'synced_at'
+  | 'unreachable_since'
+  | 'probe_state'
+  | 'probe_status'
+  | 'probe_latency_ms'
+  | 'probe_checked_at'
+  | 'probe_fail_streak'
+>
+
+function normalise(item: DiscoveryItem): SyncedServiceRow | null {
   const resource = item.resource?.trim()
   if (!resource || !/^https?:\/\//i.test(resource)) return null
   if (item.type && item.type !== 'http') return null
@@ -482,6 +513,28 @@ export function requiredParamsOf(inputSchema: string | null): string[] {
 }
 
 /**
+ * Everything an endpoint needs supplied: its schema's required fields, plus the
+ * `{placeholder}` segments in its own URL.
+ *
+ * The placeholders were the gap. 117 of the catalogued resources are templates,
+ * and a placeholder is every bit as required as a schema field — but it lives
+ * in the URL, so `requiredParamsOf` never saw it and the planner was never told
+ * to fill it. `/usstock/price/{symbol}` was offered to the model with no
+ * required parameters at all, so the model supplied none, and the call went out
+ * with the braces still in it and came back 404. Failover then judged the
+ * endpoint unfillable and dropped it, and the status prober read the same 404
+ * as the path being dead.
+ *
+ * Merging them here fixes all of those at once, because every consumer —
+ * the planner prompt, paramsFit, the Endpoints UI — reads this one list.
+ */
+export function requiredParamsFor(resource: string, inputSchema: string | null): string[] {
+  // Deduped: a well-described endpoint may declare the same name in both its
+  // schema and its path, and asking the model for it twice invites two answers.
+  return [...new Set([...requiredParamsOf(inputSchema), ...pathPlaceholders(resource)])]
+}
+
+/**
  * Drop the catalogued example values for parameters the planner is expected to
  * fill.
  *
@@ -518,11 +571,11 @@ function withoutExampleValues(resource: string, params?: string[]): string {
  * Test seam: the free-catalog rows exactly as sync would write them, so a test
  * can assert no example value survives into the registry.
  */
-export function __testFreeApiRows(): ServiceRow[] {
+export function __testFreeApiRows(): (SyncedServiceRow & { synced_at: number })[] {
   return freeApiRows(0)
 }
 
-function freeApiRows(syncedAt: number): ServiceRow[] {
+function freeApiRows(syncedAt: number): (SyncedServiceRow & { synced_at: number })[] {
   const option: ServiceNetworkOption = {
     network: `eip155:${CHAIN_CONFIGS[VERIFICATION_CHAIN].chain.id}`,
     chainKey: VERIFICATION_CHAIN,
@@ -656,6 +709,9 @@ async function runSync(): Promise<SyncResult> {
       @is_testnet, @networks_json, @asset, @price_usdc, @scheme, @http_method, @curated,
       @calls_30d, @payers_30d, @last_called_at, @icon_url, @input_schema, @synced_at
     )
+    -- The probe columns are absent from this list on purpose: a resync updates
+    -- the listing and must leave the prober's health history intact, or every
+    -- catalog refresh would blank what the planner reads to avoid dead endpoints.
     ON CONFLICT(resource) DO UPDATE SET
       source = excluded.source, service_name = excluded.service_name, description = excluded.description,
       tags = excluded.tags, host = excluded.host, network = excluded.network,
@@ -680,7 +736,7 @@ async function runSync(): Promise<SyncResult> {
 
       const rows = items
         .map(normalise)
-        .filter((r): r is Omit<ServiceRow, 'synced_at'> => r !== null)
+        .filter((r): r is SyncedServiceRow => r !== null)
         .map((r) => ({ ...r, synced_at: syncedAt }))
 
       db.transaction(() => {
@@ -864,7 +920,8 @@ export function rowToService(row: ServiceRow): Service {
     lastCalledAt: row.last_called_at,
     iconUrl: row.icon_url,
     trust: row.curated === 1 ? 'curated' : row.calls_30d > 0 ? 'active' : 'untested',
-    requiredParams: requiredParamsOf(row.input_schema),
+    requiredParams: requiredParamsFor(row.resource, row.input_schema),
+    pathParams: pathPlaceholders(row.resource),
     bodyShape: row.http_method === 'POST' ? bodyShapeOf(row.input_schema) : null,
     paramLocation: paramLocationOf(row.input_schema),
     paramEnums: paramEnumsOf(row.input_schema),

@@ -295,6 +295,13 @@ export interface ServiceRow {
   last_called_at: string | null
   icon_url: string | null
   input_schema: string | null
+  unreachable_since: number | null
+  /** Last reachability observation; see statusProber.ts. */
+  probe_state: string | null
+  probe_status: number | null
+  probe_latency_ms: number | null
+  probe_checked_at: number | null
+  probe_fail_streak: number | null
   synced_at: number | null
 }
 
