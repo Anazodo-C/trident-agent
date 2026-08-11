@@ -97,6 +97,37 @@ is what proves the server and browser key derivations actually agree.
 - Backend → Railway via the root `nixpacks.toml`.
 - Frontend → Vercel via the root `vercel.json`.
 
+### Which remote feeds which platform
+
+The two platforms build from **different GitHub repositories**, and nothing in
+either dashboard is visible from here — this cost an afternoon to recover from
+the GitHub deployments API, so it is written down.
+
+| Platform | Remote | Repository | Deploys from |
+|---|---|---|---|
+| Vercel (frontend) | `origin` | `Anazodo-C/trident-agent` | `main` → Production; any other branch → Preview |
+| Railway (backend) | `zach` | `Zach-47/trident-agent` (a fork) | `main` → production |
+
+`zach` is a fork, so it receives nothing automatically. A deploy is two pushes:
+
+```bash
+git push zach   main   # backend  — push first, so the API exists
+git push origin main   # frontend — which is built against it
+```
+
+Railway first is not cosmetic. Shipping the frontend alone leaves a page calling
+endpoints its backend does not have yet; the status page in that state loads and
+reads "Status unavailable", which looks like a bug rather than a partial deploy.
+
+`v1` is a milestone marker, moved only at a release worth rolling back to. It is
+not a development branch — for a long time it and `main` were kept identical,
+which hid this topology and made a single forgotten push look like a broken
+build. Pushing anything other than `main` produces a Vercel Preview and no
+backend deploy at all.
+
+Every push to `main` deploys to production immediately. There is no staging
+environment; verify locally first.
+
 Both configs live at the repo root and use explicit paths, so neither platform
 needs a Root Directory set in its dashboard. Each scopes its install to one
 workspace: Vercel never compiles `better-sqlite3`, and Railway never installs

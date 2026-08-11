@@ -22,7 +22,7 @@ import {
 } from '../src/circle/pathParams.ts'
 import { requiredParamsFor } from '../src/circle/registryService.ts'
 import { paramsFit } from '../src/agent/runner.ts'
-import { reachableClause } from '../src/circle/candidateService.ts'
+import { reachableClause, selectCandidates } from '../src/circle/candidateService.ts'
 
 let failures = 0
 
@@ -175,6 +175,81 @@ for (const [label, row, expected] of CASES) {
   check(`${label} → ${expected ? 'offered' : 'withheld'}`, visible, expected)
 }
 db.prepare(`DELETE FROM services WHERE resource = 'https://vis.invalid/x'`).run()
+
+// ─────────────────────────────────── health reorders, it never evicts
+
+console.log('\nranking')
+
+/*
+ * The shortlist is capped at 40 for prompt size, and that cap binds constantly —
+ * "price" matches 73 rows in the live catalog, "market" 302, "data" 816.
+ *
+ * Health penalties used to be folded into the score before the cut, so a −15
+ * for a recent failure could push a relevant endpoint past position 40 and out
+ * of the planner's view. That looked like demotion and was still hiding. This
+ * builds a pool comfortably larger than the cap, makes the single best-matching
+ * row unhealthy, and asserts it is still in the shortlist — last, but present.
+ */
+const CHAIN = 'base'
+const TERM = 'zzrank'
+const POOL = 60
+
+db.prepare(`DELETE FROM services WHERE resource LIKE 'https://rank.invalid/%'`).run()
+const insertRank = db.prepare(
+  `INSERT INTO services (id, resource, source, service_name, description, tags, host,
+                         network, chain_key, is_testnet, networks_json, asset, price_usdc,
+                         scheme, http_method, curated, calls_30d, payers_30d, probe_state,
+                         probe_fail_streak)
+   VALUES (?, ?, 'x402', ?, ?, '[]', 'rank.invalid', 'eip155:8453', ?, 0, ?, NULL, 0.001,
+           'exact', 'GET', 0, 0, 0, ?, 0)`,
+)
+const networks = JSON.stringify([
+  {
+    network: 'eip155:8453',
+    chainKey: CHAIN,
+    isTestnet: false,
+    priceUsdc: 0.001,
+    asset: null,
+    scheme: 'exact',
+    gatewayBatchable: true,
+    rail: 'gateway',
+  },
+])
+
+for (let i = 0; i < POOL; i++) {
+  // The first row matches the term in its name (+10) as well as its description
+  // (+3), so on relevance alone it ranks above every other row.
+  const name = i === 0 ? `${TERM} best match` : `filler ${i}`
+  insertRank.run(
+    `rank-${i}`,
+    `https://rank.invalid/${i}`,
+    name,
+    `a ${TERM} service`,
+    CHAIN,
+    networks,
+    // Only the top row is unhealthy, and by the heaviest penalty there is.
+    i === 0 ? 'down' : 'live',
+  )
+}
+
+const shortlist = selectCandidates(TERM, { chains: [CHAIN] }).services
+const top = shortlist.find((s) => s.resource === 'https://rank.invalid/0')
+
+check('the cap actually binds for this pool', shortlist.length, 40)
+check('the unhealthy best match is still offered', top !== undefined, true)
+check(
+  'and it is ranked last, not removed',
+  shortlist[shortlist.length - 1]?.resource,
+  'https://rank.invalid/0',
+)
+
+// The same row, healthy, must lead — proving the penalty is what moved it and
+// that relevance still decides the order when health is equal.
+db.prepare(`UPDATE services SET probe_state = 'live' WHERE resource = 'https://rank.invalid/0'`).run()
+const healthy = selectCandidates(TERM, { chains: [CHAIN] }).services
+check('healthy, the same row leads on relevance', healthy[0]?.resource, 'https://rank.invalid/0')
+
+db.prepare(`DELETE FROM services WHERE resource LIKE 'https://rank.invalid/%'`).run()
 
 console.log(failures === 0 ? '\nall path-parameter tests passed\n' : `\n${failures} FAILED\n`)
 process.exit(failures === 0 ? 0 : 1)

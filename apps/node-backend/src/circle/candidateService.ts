@@ -50,20 +50,7 @@ export interface CandidateOptions {
  * better answer to a domain question than one that merely mentions domains in
  * prose. Usage and curation act as tie-breakers, not gates.
  */
-/**
- * What we know about an endpoint's health, as a ranking input rather than a gate.
- *
- * The distinction is the point of this change. Health is a reason to prefer one
- * endpoint over another, not a reason to pretend it does not exist — the user
- * asked for an answer, and an endpoint that is merely suspect may still be the
- * only one that can give it.
- */
-interface HealthSignal {
-  probeState: string | null
-  recentlyFailed: boolean
-}
-
-/** Rank penalties, all well under the weight of matching the goal at all. */
+/** Rank penalties, applied only after the shortlist has been chosen. */
 const PENALTY: Record<string, number> = {
   // Answered, but not with terms we could confirm — usually a body validated
   // ahead of the payment gate. Worth preferring a clean 402 over.
@@ -76,7 +63,7 @@ const PENALTY: Record<string, number> = {
   down: 20,
 }
 
-function scoreOf(service: Service, terms: string[], health?: HealthSignal): number {
+function scoreOf(service: Service, terms: string[]): number {
   const name = service.serviceName.toLowerCase()
   const host = service.host.toLowerCase()
   const description = service.description.toLowerCase()
@@ -97,18 +84,21 @@ function scoreOf(service: Service, terms: string[], health?: HealthSignal): numb
   score += Math.min(10, Math.log10(service.calls30d + 1) * 3)
   if (service.trust === 'untested') score -= 2
 
-  if (health) {
-    score -= PENALTY[health.probeState ?? ''] ?? 0
-    // A failure inside the last ten minutes used to remove the endpoint from
-    // the shortlist entirely. It is first-hand evidence and worth a lot, but
-    // the endpoint stays on offer — the runner will fail over if it fails again.
-    if (health.recentlyFailed) score -= 15
-  }
+  return score
+}
 
-  // Never below the zero that means "did not match the goal at all", or a
-  // penalty would silently turn a relevant endpoint into an excluded one and
-  // reintroduce exactly the hiding this replaced.
-  return Math.max(score, 0.01)
+/**
+ * How far an endpoint's health should push it down the list.
+ *
+ * Never consulted until the shortlist has been chosen, so it can only reorder.
+ * Health is a reason to prefer one endpoint over another, not a reason to
+ * pretend it does not exist — the user asked for an answer, and a suspect
+ * endpoint may be the only one that can give it.
+ */
+function healthPenalty(probeState: string | null, recentlyFailed: boolean): number {
+  // A failure inside the last ten minutes is first-hand evidence and outweighs
+  // anything the prober saw, but the runner will fail over if it happens again.
+  return (PENALTY[probeState ?? ''] ?? 0) + (recentlyFailed ? 15 : 0)
 }
 
 export interface CandidateSet {
@@ -149,27 +139,40 @@ export function selectCandidates(goal: string, options: CandidateOptions): Candi
       .all({ ...chainParams, ...termParams }) as ServiceRow[]
   }
 
-  const scored = pool
+  /*
+   * Two passes, and the order of them is the point.
+   *
+   * Membership of the shortlist is decided by relevance and quality alone.
+   * Health only decides the order of what was already chosen.
+   *
+   * Folding the health penalty into the score before the cut looked like
+   * demotion but was still hiding: the shortlist is capped at 40 for prompt
+   * size, and the cap binds constantly — "price" matches 73 rows in the live
+   * catalog, "market" 302, "data" 816. A −15 for a recent failure was enough
+   * to push a relevant endpoint past position 40 and out of the planner's view
+   * entirely, which is exactly what this was meant to stop.
+   */
+  const chosen = pool
     .map((row) => {
       const service = rowToService(row)
-      return {
-        service,
-        score: scoreOf(service, terms, {
-          probeState: row.probe_state,
-          recentlyFailed: isRecentlyFailed(service.resource),
-        }),
-      }
+      return { probeState: row.probe_state, service, score: scoreOf(service, terms) }
     })
     /*
-     * Payability is the only remaining exclusion, and it is not a judgement
-     * about the endpoint — a service we cannot settle is not a candidate on any
-     * reading. Everything else that used to remove a service from the shortlist
-     * now costs it rank instead. An endpoint that failed ten minutes ago, or
-     * that answers 4xx, is still offered; it just sorts behind the alternatives.
+     * Payability is the only exclusion here, and it is not a judgement about
+     * the endpoint — a service we cannot settle is not a candidate on any
+     * reading. Nothing about an endpoint's health removes it from this list.
      */
     .filter((s) => s.score > 0 && isPayable(s.service, chains))
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
+
+  const scored = chosen
+    .map((s) => ({
+      service: s.service,
+      // Applied after the cut, so it can reorder but never evict.
+      rank: s.score - healthPenalty(s.probeState, isRecentlyFailed(s.service.resource)),
+    }))
+    .sort((a, b) => b.rank - a.rank)
     .map((s) => s.service)
 
   if (scored.length > 0) {
