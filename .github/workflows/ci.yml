@@ -52,3 +52,22 @@ jobs:
           DB_PATH: ${{ runner.temp }}/ci-runner.db
           JWT_SECRET: ci-only-not-a-real-secret
         run: npm run test:runner -w @trident/node-backend
+
+      # `{placeholder}` handling and the rule that decides what the agent may be
+      # offered. Worth a merge gate: the invariant here is that nothing is
+      # withheld from the planner except an endpoint the prober confirmed dead,
+      # and a regression in it silently shrinks the catalog rather than erroring.
+      - name: Path parameter and visibility tests
+        env:
+          DB_PATH: ${{ runner.temp }}/ci-pathparams.db
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: npm run test:pathparams -w @trident/node-backend
+
+      # The reachability classifier, and the hysteresis that stops one bad
+      # reading from writing an endpoint off. No network: probeOnce is pure over
+      # a status code, and the streak logic drives the database directly.
+      - name: Status prober tests
+        env:
+          DB_PATH: ${{ runner.temp }}/ci-status.db
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: npm run test:status -w @trident/node-backend

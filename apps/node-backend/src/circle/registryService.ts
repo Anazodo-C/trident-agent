@@ -853,12 +853,37 @@ export function catalogSourceChanged(): boolean {
  * version marker says current but not one row carries a schema. It is a cheap
  * indexed count, and it can only fire when the column is empty catalog-wide.
  */
+/**
+ * The rebuild decision, as a function of what was found rather than of a
+ * database.
+ *
+ * Split out so it can be tested exhaustively. The second rule below counts
+ * every x402 row in the table, which means it cannot be exercised through the
+ * database without owning the whole catalog — a test that inserted one
+ * schema-less row proved the rule on an empty database and the opposite on a
+ * developer's populated one. Neither result meant anything about the rule.
+ *
+ * `undefined` is "no sync has ever run", which is not a stale catalog — there
+ * is nothing to rebuild. A row holding a NULL version is stale, because some
+ * build wrote it without saying which.
+ */
+export function needsRebuild(
+  storedVersion: string | null | undefined,
+  counts: { x402: number; withSchema: number },
+): boolean {
+  if (storedVersion === undefined) return false
+  if (storedVersion !== CATALOG_VERSION) return true
+  // The marker matching is not proof the rows were written by this build: the
+  // upstream source can be unchanged while what we extract from it changes.
+  // Rows that carry no schema at all are the signature of that.
+  return counts.x402 > 0 && counts.withSchema === 0
+}
+
 export function catalogNeedsRebuild(): boolean {
   const row = db.prepare('SELECT source_version FROM registry_sync WHERE id = 1').get() as
     | { source_version: string | null }
     | undefined
-  if (!row) return false
-  if (row.source_version !== CATALOG_VERSION) return true
+  if (!row) return needsRebuild(undefined, { x402: 0, withSchema: 0 })
 
   const withSchema = db
     .prepare(`SELECT COUNT(*) AS n FROM services WHERE source = 'x402' AND input_schema IS NOT NULL`)
@@ -866,7 +891,7 @@ export function catalogNeedsRebuild(): boolean {
   const total = db
     .prepare(`SELECT COUNT(*) AS n FROM services WHERE source = 'x402'`)
     .get() as { n: number }
-  return total.n > 0 && withSchema.n === 0
+  return needsRebuild(row.source_version, { x402: total.n, withSchema: withSchema.n })
 }
 
 export function syncStatus(): {

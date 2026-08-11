@@ -26,6 +26,7 @@ import {
   __testFreeApiRows,
   bodyShapeOf,
   catalogNeedsRebuild,
+  needsRebuild,
   catalogSourceChanged,
   paramEnumsOf,
   paramLocationOf,
@@ -624,6 +625,34 @@ async function main(): Promise<void> {
         | undefined
     )?.source_version
 
+    /*
+     * catalogNeedsRebuild() reads two things, and this block used to set only
+     * one of them.
+     *
+     * The other is whether any x402 row carries an input_schema — the self-heal
+     * for rows written before this build extracted schemas. The only x402 row
+     * these tests insert has none, so on a clean database that row IS the whole
+     * catalog and the heuristic fires: the assertion below then failed while
+     * passing on any developer machine holding a real synced catalog of ~930
+     * schema-bearing rows.
+     *
+     * CI is always clean, so it failed on every run for two days. Owning both
+     * inputs here is what makes the result the same everywhere.
+     *
+     * Driven through the seeded fixture by name, never whichever x402 row comes
+     * back first: on a developer machine that would be a real synced service,
+     * and blanking its schema would corrupt the local catalog.
+     */
+    const FIXTURE = 'https://x402.org/protected'
+    const savedSchema = (
+      db.prepare('SELECT input_schema FROM services WHERE resource = ?').get(FIXTURE) as
+        | { input_schema: string | null }
+        | undefined
+    )?.input_schema
+    const withSchema = (schema: string | null) => {
+      db.prepare('UPDATE services SET input_schema = ? WHERE resource = ?').run(schema, FIXTURE)
+    }
+
     db.prepare(
       `INSERT INTO registry_sync (id, started_at, status, source_version) VALUES (1, 0, 'done', ?)
        ON CONFLICT(id) DO UPDATE SET source_version = excluded.source_version`,
@@ -640,7 +669,35 @@ async function main(): Promise<void> {
     )
 
     db.prepare('UPDATE registry_sync SET source_version = ? WHERE id = 1').run(CATALOG_VERSION)
+    withSchema('{"queryParams":{"required":[]}}')
     check('a current catalog is left alone', !catalogNeedsRebuild())
+
+    /*
+     * The rule itself, asserted directly rather than through the table.
+     *
+     * The second clause counts every x402 row, so it cannot be driven from a
+     * test that owns one fixture: blanking that fixture proves the rule on an
+     * empty database and disproves it on a developer's populated one. Both
+     * results are about the environment, not the rule — which is exactly how
+     * the assertion above came to fail in CI for two days.
+     */
+    const CURRENT = CATALOG_VERSION
+    check('no sync has ever run, so there is nothing to rebuild',
+      !needsRebuild(undefined, { x402: 0, withSchema: 0 }))
+    check('a version from another build is rebuilt',
+      needsRebuild('circle-agent-marketplace-v1#3', { x402: 900, withSchema: 900 }))
+    check('a NULL version is rebuilt, since no build claimed it',
+      needsRebuild(null, { x402: 900, withSchema: 900 }))
+    check('the current version over schema-bearing rows is left alone',
+      !needsRebuild(CURRENT, { x402: 900, withSchema: 900 }))
+    // The case four inert fixes shipped through: the source really had not
+    // changed, so the marker matched, but nothing had read a schema.
+    check('the current version over schema-less rows is still rebuilt',
+      needsRebuild(CURRENT, { x402: 900, withSchema: 0 }))
+    check('one schema-bearing row is enough to trust the rest',
+      !needsRebuild(CURRENT, { x402: 900, withSchema: 1 }))
+    check('an empty catalog at the current version is not stale',
+      !needsRebuild(CURRENT, { x402: 0, withSchema: 0 }))
 
     db.prepare('UPDATE registry_sync SET source_version = ? WHERE id = 1').run(
       'coinbase-bazaar-v1#2',
@@ -648,6 +705,9 @@ async function main(): Promise<void> {
     check('a genuine source change is still caught', catalogSourceChanged() && catalogNeedsRebuild())
 
     db.prepare('UPDATE registry_sync SET source_version = ? WHERE id = 1').run(saved ?? CATALOG_VERSION)
+    // Both inputs restored, not just the version — the fixture is a real row on
+    // a developer machine, and a test must hand the database back as it found it.
+    withSchema(savedSchema ?? null)
   }
 
   // --------------------------------------------------- unified balance math
