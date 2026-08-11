@@ -242,6 +242,26 @@ addColumnIfMissing('services', 'input_schema', 'TEXT')
  * this column would otherwise create.
  */
 addColumnIfMissing('services', 'unreachable_since', 'INTEGER')
+/**
+ * What the reachability prober last saw.
+ *
+ * Separate from `unreachable_since`, which is a verdict the planner acts on.
+ * These are the observation behind it: the state, the code, how long it took
+ * and when. Keeping both means the status page can show that an endpoint
+ * answered 400 in 700ms without that having any bearing on whether the agent
+ * is still allowed to offer it.
+ */
+addColumnIfMissing('services', 'probe_state', 'TEXT')
+addColumnIfMissing('services', 'probe_status', 'INTEGER')
+addColumnIfMissing('services', 'probe_latency_ms', 'INTEGER')
+addColumnIfMissing('services', 'probe_checked_at', 'INTEGER')
+/**
+ * Consecutive hard failures, reset by any success.
+ *
+ * The hysteresis that stops one dropped connection from blacklisting a working
+ * seller for a week. See FAIL_STREAK_TO_CONDEMN in statusProber.ts.
+ */
+addColumnIfMissing('services', 'probe_fail_streak', 'INTEGER DEFAULT 0')
 
 export interface MessageRow {
   id: string

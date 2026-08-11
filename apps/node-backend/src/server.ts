@@ -26,6 +26,8 @@ import walletRoutes, { userRoutes } from './routes/wallet.ts'
 import taskRoutes from './routes/tasks.ts'
 import statsRoutes from './routes/stats.ts'
 import showcaseRoutes from './routes/showcase.ts'
+import statusRoutes from './routes/status.ts'
+import { startProber } from './circle/statusProber.ts'
 
 const app = express()
 
@@ -64,6 +66,8 @@ app.use('/api/tasks', taskRoutes)
 app.use('/api/stats', statsRoutes)
 // Public: read by anonymous visitors on the landing page, before any sign-in.
 app.use('/api/showcase', showcaseRoutes)
+// Public: the status subdomain, which must answer without an account.
+app.use('/api/status', statusRoutes)
 
 app.use((_req, res) => {
   res.status(404).json({ error: 'Not found' })
@@ -167,5 +171,12 @@ function refreshRegistry(force = false): void {
 
 setTimeout(() => refreshRegistry(), 2_000).unref()
 setInterval(() => refreshRegistry(true), REGISTRY_REFRESH_MS).unref()
+
+/*
+ * Reachability probing starts after the first registry sync has had time to
+ * land. Starting it alongside would have it walking whatever the catalog looked
+ * like before the sync, and on a cold boot that is an empty table.
+ */
+setTimeout(() => startProber(), 30_000).unref()
 
 export default app

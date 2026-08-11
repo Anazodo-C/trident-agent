@@ -3,6 +3,7 @@ import type {
   ChatMessage,
   PlanCosting,
   ShowcaseCard,
+  StatusSnapshot,
   DepositInfo,
   ExecutionPlan,
   KeyMaterial,
@@ -202,6 +203,9 @@ export const api = {
 
   /** Public — the landing page calls this before anyone has signed in. */
   showcase: () => request<{ cards: ShowcaseCard[] }>('/api/showcase'),
+
+  /** Public reachability data. No auth — the status page is read by anyone. */
+  status: () => request<StatusSnapshot>('/api/status'),
 
   chat: (taskId: string, message: string) =>
     request<{

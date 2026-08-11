@@ -168,6 +168,18 @@ export const ANTHROPIC_HOST = anthropicHost(ANTHROPIC_BASE_URL)
 export const ANTHROPIC_KEY_MISDIRECTED =
   ANTHROPIC_HOST !== 'api.anthropic.com' && ANTHROPIC_API_KEY.startsWith('sk-ant-')
 
+/**
+ * Whether to run continuous reachability probes over the catalog.
+ *
+ * On in production, off in development by default. The prober makes real
+ * outbound requests to third-party providers around the clock; having every
+ * developer's laptop add its own stream of them to the sellers the agent
+ * depends on is the wrong default. Set STATUS_PROBER=on to run it locally,
+ * or =off to silence it in production.
+ */
+export const STATUS_PROBER_ENABLED =
+  optional('STATUS_PROBER', IS_PROD ? 'on' : 'off').toLowerCase() === 'on'
+
 export const DB_PATH = optional('DB_PATH', './trident.db')
 
 /**

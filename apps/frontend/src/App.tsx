@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { Navigate, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { api, setAuthToken } from './lib/api.ts'
@@ -14,6 +14,15 @@ import { WalletPage } from './modules/wallet/WalletPage.tsx'
 import { DashboardPage } from './modules/dashboard/DashboardPage.tsx'
 import { ErrorBoundary } from './modules/layout/ErrorBoundary.tsx'
 
+/**
+ * The same page the status subdomain serves, reachable at /status on the main
+ * domain too. Lazy so the app's own users never pay for a page they are not on;
+ * the subdomain mounts it from main.tsx instead, above the wallet providers.
+ */
+const StatusPage = lazy(() =>
+  import('./modules/status/StatusPage.tsx').then((m) => ({ default: m.StatusPage })),
+)
+
 export default function App() {
   const hydrate = useAuthStore((s) => s.hydrate)
   const loading = useAuthStore((s) => s.loading)
@@ -28,6 +37,14 @@ export default function App() {
     <ErrorBoundary>
       <Routes>
         <Route path="/" element={<LandingPage />} />
+        <Route
+          path="/status"
+          element={
+            <Suspense fallback={<FullscreenSpinner label="Loading status" />}>
+              <StatusPage />
+            </Suspense>
+          }
+        />
         <Route path="/signin" element={<AuthPage />} />
         <Route path="/setup-passphrase" element={<SetupPassphrasePage />} />
         <Route

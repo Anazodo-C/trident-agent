@@ -11,8 +11,10 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test:e2e": "node --experimental-strip-types test/e2e.ts",
     "test:runner": "node --experimental-strip-types test/runner.ts",
-    "test": "npm run test:planner && npm run test:runner && npm run test:e2e",
-    "test:planner": "node --experimental-strip-types test/planner.ts"
+    "test:status": "node --experimental-strip-types test/status.ts",
+    "test": "npm run test:planner && npm run test:runner && npm run test:status && npm run test:e2e",
+    "test:planner": "node --experimental-strip-types test/planner.ts",
+    "dev:probe": "STATUS_PROBER=on node --watch --experimental-strip-types src/server.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.72.0",

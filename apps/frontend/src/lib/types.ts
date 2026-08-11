@@ -314,3 +314,29 @@ export interface Stats {
   daily: StatTimePoint[]
   registry: { total: number; free: number; x402: number; curated: number }
 }
+
+/** One endpoint's last reachability result, as shown on the status page. */
+export type ProbeState = 'live' | 'answering' | 'throttled' | 'gone' | 'erroring' | 'down'
+
+export interface StatusEndpoint {
+  path: string
+  host: string
+  method: string
+  priceUsdc: number
+  free: boolean
+  state: ProbeState
+  status: number | null
+  latencyMs: number | null
+  checkedAt: number | null
+  reachable: boolean
+}
+
+export interface StatusSnapshot {
+  sweptAt: number | null
+  total: number
+  reachable: number
+  confirmedSelling: number
+  providers: number
+  byState: Record<string, number>
+  endpoints: StatusEndpoint[]
+}
