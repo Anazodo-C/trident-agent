@@ -3,8 +3,8 @@ import type { ReactNode } from 'react'
 /**
  * A deliberately small markdown renderer for agent replies.
  *
- * The responder is prompted to emit one narrow subset — paragraphs, "- "
- * bullets, **bold** and `code` — so a full markdown library would be several
+ * The responder is prompted to emit one narrow subset: paragraphs, "- "
+ * bullets, **bold** and `code`, so a full markdown library would be several
  * hundred kilobytes to parse four constructs.
  *
  * It builds React elements directly and never touches innerHTML, so a payload

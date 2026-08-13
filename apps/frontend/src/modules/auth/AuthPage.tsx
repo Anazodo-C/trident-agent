@@ -27,7 +27,7 @@ export function AuthPage() {
     api
       .authProviders()
       .then((p) => {
-        // Never let a malformed payload replace the defaults — the render path
+        // Never let a malformed payload replace the defaults, the render path
         // dereferences this object.
         if (p && typeof p === 'object') setProviders(p)
       })
@@ -146,7 +146,7 @@ export function AuthPage() {
  * RainbowKit's own button, rebuilt with our markup.
  *
  * The stock ConnectButton renders its own internal layout, which left-aligns
- * the label and leaves no slot for an icon — both only reachable by fighting
+ * the label and leaves no slot for an icon, both only reachable by fighting
  * its internals with `!important` overrides. ConnectButton.Custom hands over
  * the rendering and keeps the connection logic, so this is just our button
  * classes with RainbowKit's behaviour behind them.

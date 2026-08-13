@@ -94,7 +94,7 @@ export function AgentTab() {
   /**
    * A follow-up about the run that just finished. This never spends anything:
    * the backend answers from the data already fetched, or hands back a goal to
-   * plan — which still goes through the approval card like any other run.
+   * plan, which still goes through the approval card like any other run.
    */
   const submitFollowUp = useCallback(async (message: string) => {
     const trimmed = message.trim()
@@ -148,7 +148,7 @@ export function AgentTab() {
   /**
    * Lift whichever limit is actually blocking a quoted route, then re-plan.
    *
-   * Only ever reached by the user clicking the amount on the guidance card — no
+   * Only ever reached by the user clicking the amount on the guidance card, so no
    * code path adjusts a limit on its own. Raising the account cap is a lasting
    * change and is only done when the cap is the blocker; a tighter per-run
    * budget is loosened for this attempt alone. Either way the re-plan lands on
@@ -210,7 +210,7 @@ export function AgentTab() {
         const guidance = (err as { budgetGuidance?: unknown })?.budgetGuidance
         if (guidance) {
           // The cap refused this plan before anything ran, so there is no run
-          // to report on — go back to the quote.
+          // to report on, so go back to the quote.
           useTaskStore.getState().setBudgetGuidance(guidance as never)
           useTaskStore.setState({ phase: 'awaiting-approval' })
           return
@@ -269,7 +269,7 @@ export function AgentTab() {
       case 'summary': {
         // From the store, not the closure: runApproved is memoised on [token,
         // requestUnlock], so the handleEvent it captured can hold a taskId from
-        // before the plan existed — and the summary would be dropped.
+        // before the plan existed, and the summary would be dropped.
         const id = s.taskId
         if (typeof data['summary'] === 'string' && id) s.addSummary(id, data['summary'])
         break
@@ -393,7 +393,7 @@ export function AgentTab() {
                   <PlanOffer goal={suggestedGoal} onPlan={submitGoal} />
                 )}
 
-                {/* A clean finish needs no banner — the write-up is the result,
+                {/* A clean finish needs no banner, the write-up is the result,
                     and the cost sits in the trace header. Anything else did not
                     go to plan and has to be stated outright. */}
                 {outcome && outcome.kind !== 'complete' && (

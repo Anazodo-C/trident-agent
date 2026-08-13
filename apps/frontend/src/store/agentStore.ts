@@ -4,7 +4,7 @@ interface AgentState {
   /**
    * Decrypted EOA private key.
    *
-   * Deliberately in memory only — never localStorage, sessionStorage, cookies,
+   * Deliberately in memory only, never localStorage, sessionStorage, cookies,
    * or a URL. A page refresh loses it and the user re-enters their passphrase.
    */
   unlockedKey: string | null

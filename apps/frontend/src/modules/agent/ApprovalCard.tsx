@@ -182,7 +182,7 @@ export function ApprovalCard({
           )}
           {budgetTooLow && (
             <span className="text-xs text-[#FFA040]">
-              Below the estimate — the run will stop partway through.
+              Below the estimate. The run will stop partway through.
             </span>
           )}
         </label>
@@ -212,7 +212,7 @@ export function ApprovalCard({
  *
  * `/usstock/price/{symbol}` cannot be called without a symbol. Asking for it
  * here is the whole fix: previously the planner was never told the value
- * existed, so the call went out with the braces still in it and came back 404 —
+ * existed, so the call went out with the braces still in it and came back 404
  * and the endpoint was then judged broken and withheld from future plans.
  *
  * One input per placeholder, labelled with the name the endpoint uses, so the
@@ -309,7 +309,7 @@ function StepProvenance({ annotation }: { annotation: StepAnnotation | undefined
 /**
  * What paying would buy for a step currently using a free API.
  *
- * Advisory only — nothing here is selected, and approving the plan runs the
+ * Advisory only, nothing here is selected, and approving the plan runs the
  * free service as planned. It exists so the choice is visible at the moment
  * cost is being considered, rather than discovered later.
  */
@@ -320,7 +320,7 @@ function PremiumHint({ upgrade }: { upgrade: StepUpgrade | undefined }) {
     <div className="mt-2 rounded-lg border border-[#1A7FFF]/25 bg-[#1A7FFF]/5 p-2.5">
       <p className="mb-2 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-wider text-[#1A7FFF]">
         <Sparkles className="h-3 w-3" />
-        Premium alternative — {upgrade.category}
+        Premium alternative: {upgrade.category}
       </p>
       <ul className="flex flex-col gap-1.5">
         {upgrade.options.map((option) => (

@@ -23,7 +23,7 @@ interface TaskState {
   goal: string
   taskId: string | null
   plan: ExecutionPlan | null
-  /** Registry facts per step index — drives the approval-card warnings. */
+  /** Registry facts per step index, drives the approval-card warnings. */
   annotations: Record<number, StepAnnotation>
   /** Path values the goal never supplied, per step index. The card asks for these. */
   needsInput: Record<number, string[]>
@@ -42,7 +42,7 @@ interface TaskState {
 
   /**
    * The chat transcript for the current task. The goal, the agent's write-up
-   * of the run, and every follow-up since — this is what the user reads, and
+   * of the run, and every follow-up since, this is what the user reads, and
    * the step cards are supporting detail underneath it.
    */
   messages: ChatMessage[]
@@ -182,7 +182,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   addMessage: (message) => set((state) => ({ messages: [...state.messages, message] })),
 
   /**
-   * The summary arrives over SSE, so it has no server-issued message id yet —
+   * The summary arrives over SSE, so it has no server-issued message id yet
    * the backend persisted its own copy in the same moment. A local id keeps the
    * list keyed correctly until the transcript is next loaded from the server.
    */

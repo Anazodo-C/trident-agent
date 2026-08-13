@@ -10,8 +10,8 @@ import { usdc } from '../../lib/format.ts'
  * Sends USDC out of the agent wallet to an address the user names.
  *
  * The only way funds left before this was spending them. Deposit had a panel,
- * the Gateway panel moved money between the wallet and the Gateway ledger —
- * both inside the user's own address — and nothing carried a balance off the
+ * the Gateway panel moved money between the wallet and the Gateway ledger
+ * both inside the user's own address, and nothing carried a balance off the
  * platform. For a self-custody product that was the wrong gap to have.
  *
  * It is also the one irreversible action here. A wrong address cannot be

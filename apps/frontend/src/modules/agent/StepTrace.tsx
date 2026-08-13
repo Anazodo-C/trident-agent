@@ -7,7 +7,7 @@ import { LiveStepCard } from './LiveStepCard.tsx'
 /**
  * The step-by-step execution detail.
  *
- * Open while the run is in progress — watching the agent work is the point,
+ * Open while the run is in progress, watching the agent work is the point,
  * and a collapsed spinner would hide it. Collapsed once it finishes, because
  * from then on the answer is the summary above and this is the receipt: what
  * was called, what it cost, and the raw payload if anyone wants to check.
@@ -17,7 +17,7 @@ export function StepTrace({ steps, running }: { steps: LiveStep[]; running: bool
   const wasRunning = useRef(running)
 
   // Fold the trace away the moment the run ends, so the summary below it is
-  // what the user is left looking at. Only on that transition — reopening it
+  // what the user is left looking at. Only on that transition, reopening it
   // by hand has to stick.
   useEffect(() => {
     if (wasRunning.current && !running) setOpen(false)

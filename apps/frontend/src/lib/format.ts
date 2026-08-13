@@ -5,13 +5,13 @@ export function shortAddress(address: string | null | undefined, size = 4): stri
 }
 
 /**
- * A USDC amount as shown in the interface — a cost paid, a quote, a cap, a
+ * A USDC amount as shown in the interface: a cost paid, a quote, a cap, a
  * balance. Every one of these is real money, so it is shown exactly: two
  * decimals as a floor because that is how money reads, more when the amount
  * has more, never rounded in either direction.
  *
  * Mirrors formatUsdc in the backend's money.ts. The backend's other formatter,
- * formatMoney, rounds to two decimals — that one is for figures the agent
+ * formatMoney, rounds to two decimals; that one is for figures the agent
  * derives in conversation, which are calculations rather than charges, and it
  * never reaches this layer.
  */

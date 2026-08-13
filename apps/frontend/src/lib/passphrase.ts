@@ -2,7 +2,7 @@
  * Browser half of the passphrase rules.
  *
  * `passphraseProblem` MUST stay identical to
- * `apps/node-backend/src/auth/passphrase.ts` — the server enforces it and will
+ * `apps/node-backend/src/auth/passphrase.ts`; the server enforces it and will
  * reject anything this misses, so drift shows up as a form that submits and
  * then fails.
  *
@@ -86,7 +86,7 @@ export interface Strength {
  * A conservative estimate of guessing difficulty, in bits.
  *
  * Deliberately pessimistic. A character-pool calculation says "correct horse
- * battery staple" is worth 130-odd bits, which is nonsense — nobody guesses it
+ * battery staple" is worth 130-odd bits, which is nonsense; nobody guesses it
  * character by character. So anything that looks like words is also costed as
  * words, at roughly 11 bits each (a generous view of how unpredictable a
  * human-chosen word is), and the lower of the two estimates wins.
@@ -118,7 +118,7 @@ export function estimateStrength(passphrase: string): Strength {
 }
 
 /**
- * The shortest string that, repeated, produces the whole input — or the input
+ * The shortest string that, repeated, produces the whole input, or the input
  * itself when it does not repeat.
  */
 function repeatingUnit(passphrase: string): string {
@@ -142,10 +142,10 @@ function poolSize(passphrase: string): number {
 
 /**
  * Banded against what an offline attacker can actually do here. At PBKDF2
- * guess rates of roughly 10^4–10^5 per second per GPU, 40 bits falls to a
+ * guess rates of roughly 10^4-10^5 per second per GPU, 40 bits falls to a
  * determined attacker, 55 is uncomfortable, and 70 is out of reach even for a
  * large cluster. The old thresholds called a solid four-word passphrase "weak",
- * which pushed people back towards short clever strings — the opposite of the
+ * which pushed people back towards short clever strings, the opposite of the
  * point.
  */
 function levelFor(bits: number): StrengthLevel {
@@ -160,6 +160,6 @@ function hintFor(passphrase: string, wordCount: number, bits: number): string {
   if (passphrase.length < MIN_PASSPHRASE_LENGTH) {
     return `${MIN_PASSPHRASE_LENGTH - passphrase.length} more characters needed.`
   }
-  if (wordCount >= 3) return 'Add another word — each one roughly doubles the work twice over.'
+  if (wordCount >= 3) return 'Add another word. Each one roughly doubles the work twice over.'
   return 'Four or five unrelated words beat a short complicated string, and are easier to remember.'
 }

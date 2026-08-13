@@ -74,7 +74,7 @@ async function request<T>(
   }
 
   // A 2xx that isn't JSON is not a valid response, and must not be handed back
-  // as `null` — callers dereference these objects, so a silent null becomes a
+  // as `null`: callers dereference these objects, so a silent null becomes a
   // render crash far from the cause.
   //
   // The common case: API_BASE is empty in a deployed build, so the request goes
@@ -85,7 +85,7 @@ async function request<T>(
       API_BASE
         ? `Expected JSON from ${path} but received ${contentType}.`
         : `Expected JSON from ${path} but received ${contentType}. ` +
-          'The frontend has no backend URL configured — set VITE_API_BASE_URL and rebuild.',
+          'The frontend has no backend URL configured. Set VITE_API_BASE_URL and rebuild.',
       res.status,
     )
   }
@@ -175,7 +175,7 @@ export const api = {
       taskId: string
       plan: ExecutionPlan
       annotations: Record<number, StepAnnotation>
-      /** Path values the goal never supplied, per step index — the card asks for these. */
+      /** Path values the goal never supplied, per step index, the card asks for these. */
       needsInput: Record<number, string[]>
       upgrades: StepUpgrade[]
       costing: PlanCosting
@@ -203,10 +203,10 @@ export const api = {
 
   tasks: () => request<{ tasks: TaskSummary[] }>('/api/tasks'),
 
-  /** Public — the landing page calls this before anyone has signed in. */
+  /** Public, the landing page calls this before anyone has signed in. */
   showcase: () => request<{ cards: ShowcaseCard[] }>('/api/showcase'),
 
-  /** Public reachability data. No auth — the status page is read by anyone. */
+  /** Public reachability data. No auth, the status page is read by anyone. */
   status: () => request<StatusSnapshot>('/api/status'),
 
   chat: (taskId: string, message: string) =>

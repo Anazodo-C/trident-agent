@@ -53,7 +53,7 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 /**
- * Decrypt the agent wallet private key. Throws on a wrong passphrase — AES-GCM
+ * Decrypt the agent wallet private key. Throws on a wrong passphrase, because AES-GCM
  * authentication fails rather than returning garbage.
  */
 export async function decryptEoaKey(
@@ -92,7 +92,7 @@ export async function decryptEoaKey(
  * fresh salt and IV.
  *
  * Only ever called with a key the browser just decrypted successfully, so the
- * passphrase is known-correct — re-encrypting under a wrong one would replace
+ * passphrase is known-correct: re-encrypting under a wrong one would replace
  * the stored blob with something nobody can open.
  */
 export async function encryptEoaKey(

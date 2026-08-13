@@ -3,20 +3,20 @@ import { useEffect, useState } from 'react'
 /**
  * The hero's ambient loop: one goal going out and one answer coming back.
  *
- * Five beats on a 6s cycle — the goal types, endpoints are scanned, the match
+ * Five beats on a 6s cycle: the goal types, endpoints are scanned, the match
  * is paid for, the answer returns, then it holds and repeats. The timing lives
  * in index.css so every element shares one timeline and the beats cannot drift.
  *
  * Drawn as inline SVG rather than a video or a Lottie payload: it is a dozen
  * shapes, it costs nothing to ship, and it stays crisp at any size. It occupies
- * the hero's second column rather than sitting behind the copy — the headline
+ * the hero's second column rather than sitting behind the copy, because the headline
  * and CTA lead, and nothing here is ever allowed to overlap them.
  */
 export function HeroLoop({ className = '' }: { className?: string }) {
   const [hidden, setHidden] = useState(false)
 
   /**
-   * Stop burning frames once the tab goes to the background — browsers throttle
+   * Stop burning frames once the tab goes to the background. Browsers throttle
    * timers, but not CSS animations.
    *
    * Driven by the visibilitychange event only, and deliberately not by reading
@@ -50,7 +50,7 @@ export function HeroLoop({ className = '' }: { className?: string }) {
         </radialGradient>
       </defs>
 
-      {/* Beat 1 — the goal, typed out and settling. */}
+      {/* Beat 1: the goal, typed out and settling. */}
       <g className="hero-bubble">
         <rect
           x="8"
@@ -72,7 +72,7 @@ export function HeroLoop({ className = '' }: { className?: string }) {
         <rect className="hero-caret-b" x="112" y="40" width="6" height="11" fill="#00D4FF" />
       </g>
 
-      {/* Beat 2 — candidate endpoints, dim until evaluated. */}
+      {/* Beat 2: candidate endpoints, dim until evaluated. */}
       <g>
         {CANDIDATES.map((node, i) => (
           <circle
@@ -87,7 +87,7 @@ export function HeroLoop({ className = '' }: { className?: string }) {
           />
         ))}
 
-        {/* Beat 2 end — the endpoint that matches the goal. */}
+        {/* Beat 2 end: the endpoint that matches the goal. */}
         <circle className="hero-lock-glow" cx="330" cy="120" r="16" fill="url(#lockGlow)" />
         <circle className="hero-lock" cx="330" cy="120" r="4" fill="#00D4FF" />
       </g>
@@ -103,7 +103,7 @@ export function HeroLoop({ className = '' }: { className?: string }) {
         strokeLinecap="round"
       />
 
-      {/* Beat 3 — the x402 payment settling. */}
+      {/* Beat 3: the x402 payment settling. */}
       <g className="hero-pay">
         <rect
           x="286"
@@ -120,7 +120,7 @@ export function HeroLoop({ className = '' }: { className?: string }) {
         </text>
       </g>
 
-      {/* Beat 4 — the answer, back in the thread. */}
+      {/* Beat 4: the answer, back in the thread. */}
       <g className="hero-result">
         <rect
           x="8"

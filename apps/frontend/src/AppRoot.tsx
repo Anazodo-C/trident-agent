@@ -11,7 +11,7 @@ import { wagmiConfig } from './lib/wagmi.ts'
  *
  * The import itself is the reason. `wagmiConfig` builds a RainbowKit config at
  * module scope, which initialises WalletConnect the moment the module is
- * evaluated — before any component renders. Keeping these imports out of
+ * evaluated, before any component renders. Keeping these imports out of
  * main.tsx is what actually stops a public status page from calling
  * pulse.walletconnect.org; rendering the providers conditionally does not,
  * because by then the damage is done.

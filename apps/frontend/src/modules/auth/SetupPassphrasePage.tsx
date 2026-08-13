@@ -143,7 +143,7 @@ const METER: Record<StrengthLevel, { bars: number; tone: string; label: string }
 }
 
 /**
- * Advisory only — the length and denylist rules decide what is accepted, and
+ * Advisory only, the length and denylist rules decide what is accepted, and
  * they are enforced on the server. This exists to move people off short clever
  * strings and onto long ordinary ones, which is the change that actually
  * matters against offline guessing.

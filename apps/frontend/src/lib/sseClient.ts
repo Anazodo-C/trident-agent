@@ -4,7 +4,7 @@ import type { PlanStep } from './types.ts'
 export interface RunPayload {
   taskId: string
   approvedSteps: PlanStep[]
-  /** EOA key — sent in the POST body only. Never place this in a URL. */
+  /** EOA key, sent in the POST body only. Never place this in a URL. */
   agentPrivateKey: string
   budgetUsdc: number | null
 }

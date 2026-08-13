@@ -9,7 +9,7 @@ import './index.css'
  * dependencies.
  *
  * Both are dynamic on purpose. `AppRoot` pulls in wagmi and RainbowKit, and
- * `wagmiConfig` initialises WalletConnect at module scope — so a static import
+ * `wagmiConfig` initialises WalletConnect at module scope, so a static import
  * here would have a public status page calling pulse.walletconnect.org and
  * api.web3modal.org for every anonymous visitor, no matter which branch
  * rendered. Splitting at the import is what keeps the wallet stack off the

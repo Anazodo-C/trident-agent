@@ -73,7 +73,7 @@ export function DashboardPage() {
       ) : stats ? (
         <div className={loading ? 'opacity-60' : ''}>
           <div className="mb-4 grid grid-cols-2 gap-3 md:grid-cols-4">
-            {/* Unique users is a platform figure — showing it under "Me" would
+            {/* Unique users is a platform figure, showing it under "Me" would
                 imply it described this user's activity. Swap it for something
                 that actually does. */}
             {scope === 'global' ? (
@@ -273,7 +273,7 @@ function BarList({
   )
 }
 
-/** Runs per day. Deliberately a plain bar chart — no charting dependency. */
+/** Runs per day. Deliberately a plain bar chart, no charting dependency. */
 function DailyChart({ points }: { points: { day: string; runs: number; spentUsdc: number }[] }) {
   if (points.length === 0) return <p className="text-sm text-slate-600">No activity in this period.</p>
   const max = Math.max(...points.map((p) => p.runs), 1)

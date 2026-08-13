@@ -6,7 +6,7 @@ import { usdc } from '../../lib/format.ts'
 /**
  * Shown when the goal costs more than the user's limit.
  *
- * The cap is theirs and is never adjusted for them — not by the planner, not by
+ * The cap is theirs and is never adjusted for them, not by the planner, not by
  * the runner, not by this card. What it does is quote the work: what the
  * cheapest route to the goal actually costs, what a more reliable route costs
  * when one exists, and the smallest cap that would permit each. Raising the cap
@@ -70,8 +70,8 @@ export function BudgetGuidanceCard({ guidance, onProceed, onCancel }: Props) {
           <p className="mt-4 flex items-start gap-2 text-[11px] leading-relaxed text-slate-500">
             <Wallet className="mt-0.5 h-3 w-3 shrink-0" />
             <span>
-              Either way the goal is re-planned and you come back to the usual approval card —
-              nothing is spent until you approve it there. You can also change your cap yourself
+              Either way the goal is re-planned and you come back to the usual approval card.
+              Nothing is spent until you approve it there. You can also change your cap yourself
               in the Wallet tab.
             </span>
           </p>
@@ -124,7 +124,7 @@ function OptionRow({
 
       <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-slate-500">
         <Gauge className="h-3 w-3 shrink-0" />
-        {/* From the registry's trust tier and 30-day usage — not the model's opinion. */}
+        {/* From the registry's trust tier and 30-day usage, not the model's opinion. */}
         <span>Reliability {option.quality}/100</span>
       </div>
 
@@ -136,7 +136,7 @@ function OptionRow({
       </button>
       {!needsCapRaise && (
         <p className="mt-1.5 text-[11px] text-slate-600">
-          Within your ${usdc(capUsdc)} cap — only this run's budget is in the way.
+          Within your ${usdc(capUsdc)} cap. Only this run's budget is in the way.
         </p>
       )}
     </div>

@@ -7,7 +7,7 @@ import { usdc } from '../../lib/format.ts'
  * What the agent can be asked for, drawn from the live service registry.
  *
  * The prices and call volumes on these cards are the real ones from the x402
- * network, not marketing figures — the endpoint resolves each card against the
+ * network, not marketing figures. The endpoint resolves each card against the
  * catalog and drops any service that has been delisted. Only the phrasing is
  * authored.
  *

@@ -115,7 +115,7 @@ export function EndpointsPage() {
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
           <input
             className="field pl-9"
-            placeholder="Search 14,000+ services — try 'domain', 'sentiment', 'price'…"
+            placeholder="Search 14,000+ services. Try 'domain', 'sentiment', 'price'…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -252,7 +252,7 @@ function ServiceCard({ service, onUse }: { service: Service; onUse: () => void }
 
       {service.trust === 'untested' && (
         <p className="mb-3 rounded-lg border border-[#FFA040]/30 bg-[#FFA040]/5 p-2.5 text-[11px] leading-relaxed text-[#FFA040]">
-          No recorded usage in the last 30 days — may not respond.
+          No recorded usage in the last 30 days, so it may not respond.
         </p>
       )}
 

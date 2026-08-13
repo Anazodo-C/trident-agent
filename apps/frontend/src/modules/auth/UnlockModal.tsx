@@ -136,7 +136,7 @@ export function UnlockModal() {
  * Re-encrypt this wallet at the current iteration count, if it is behind.
  *
  * Runs after a successful unlock, when the passphrase is known-correct and the
- * decrypted key is in hand — the only moment this is possible, since the server
+ * decrypted key is in hand, the only moment this is possible, since the server
  * can never do it itself. Silent on failure by design: the user has already
  * been let in, the old ciphertext still works, and the next unlock will try
  * again. Failing loudly here would turn a background improvement into an alarm

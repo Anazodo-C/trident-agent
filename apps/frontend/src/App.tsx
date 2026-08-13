@@ -23,6 +23,21 @@ const StatusPage = lazy(() =>
   import('./modules/status/StatusPage.tsx').then((m) => ({ default: m.StatusPage })),
 )
 
+/*
+ * Public reading material, long prose that most visitors never open. Lazy so
+ * the landing page does not carry it, and each in its own chunk so opening the
+ * terms does not also download the docs.
+ */
+const DocsPage = lazy(() =>
+  import('./modules/content/DocsPage.tsx').then((m) => ({ default: m.DocsPage })),
+)
+const PrivacyPage = lazy(() =>
+  import('./modules/content/PrivacyPage.tsx').then((m) => ({ default: m.PrivacyPage })),
+)
+const TermsPage = lazy(() =>
+  import('./modules/content/TermsPage.tsx').then((m) => ({ default: m.TermsPage })),
+)
+
 export default function App() {
   const hydrate = useAuthStore((s) => s.hydrate)
   const loading = useAuthStore((s) => s.loading)
@@ -42,6 +57,30 @@ export default function App() {
           element={
             <Suspense fallback={<FullscreenSpinner label="Loading status" />}>
               <StatusPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/docs"
+          element={
+            <Suspense fallback={<FullscreenSpinner label="Loading docs" />}>
+              <DocsPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/privacy"
+          element={
+            <Suspense fallback={<FullscreenSpinner label="Loading" />}>
+              <PrivacyPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/terms"
+          element={
+            <Suspense fallback={<FullscreenSpinner label="Loading" />}>
+              <TermsPage />
             </Suspense>
           }
         />

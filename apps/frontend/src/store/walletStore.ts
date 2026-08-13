@@ -67,7 +67,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
         ? info.availableChains
         : [{ chain: info.chain, label: info.chain, chainId: info.chainId, isTestnet: true }]
 
-      // One failing chain must not blank the others — a mainnet RPC hiccup
+      // One failing chain must not blank the others, a mainnet RPC hiccup
       // should not hide the testnet balance the user is actually working with.
       const results = await Promise.allSettled(
         chains.map((c) => api.balance(agentPrivateKey, c.chain)),
@@ -106,7 +106,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
  * Drop pending markers whose funds have arrived.
  *
  * Compared against the Gateway total captured when the deposit was made, not
- * against zero — the wallet may already hold a balance, so "non-zero" proves
+ * against zero, the wallet may already hold a balance, so "non-zero" proves
  * nothing. A marker is also dropped once the total can no longer be read,
  * since a locked wallet cannot confirm either way and a stuck banner is worse
  * than none.
@@ -118,7 +118,7 @@ function settledDeposits(
   const next: Record<string, PendingDeposit> = {}
   for (const [chain, deposit] of Object.entries(pending)) {
     const total = balances[chain]?.gatewayUsdc
-    // Gateway balance unreadable (wallet locked) — keep waiting.
+    // Gateway balance unreadable (wallet locked), keep waiting.
     if (total == null) {
       next[chain] = deposit
       continue

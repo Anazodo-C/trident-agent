@@ -4,7 +4,7 @@ import type { StatusEndpoint } from '../../lib/types.ts'
  * One endpoint, one card.
  *
  * Small and dense on purpose: there are ~936 of these, and the page is scanned
- * rather than read. The dot in the top-right is the whole point — it is what
+ * rather than read. The dot in the top-right is the whole point, it is what
  * the eye lands on first, and everything else is confirmation.
  */
 
@@ -45,7 +45,7 @@ export function StatusCard({ endpoint, label }: { endpoint: StatusEndpoint; labe
       <div className="mt-1.5 flex items-center gap-1.5 whitespace-nowrap font-mono text-[10.5px] text-slate-500">
         <span className="text-slate-600">{endpoint.method}</span>
         <span className="text-[#29354a]">·</span>
-        {/* min-width:0 is what actually lets the ellipsis happen — a flex item
+        {/* min-width:0 is what actually lets the ellipsis happen, a flex item
             will not shrink below its content without it. */}
         <span className="min-w-0 overflow-hidden text-ellipsis">{endpoint.host}</span>
         <span className="text-[#29354a]">·</span>

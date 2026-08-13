@@ -42,7 +42,7 @@ export function AppShell() {
     <div className="flex h-dvh flex-col">
       <header className="z-30 flex shrink-0 items-center justify-between gap-4 border-b border-[#1A7FFF]/20 bg-[#0A0E1A]/85 px-4 py-3 backdrop-blur-md sm:px-6">
         {/* Signed in, so home is the agent. Same affordance as the landing
-            header — the wordmark is always the way back. */}
+            header, the wordmark is always the way back. */}
         <Link
           to="/app"
           className="flex items-center gap-2.5 transition-opacity hover:opacity-80"
@@ -115,7 +115,7 @@ export function AppShell() {
         </main>
       </div>
 
-      {/* Mobile tab bar — in normal flow so it reserves its own space */}
+      {/* Mobile tab bar, in normal flow so it reserves its own space */}
       <nav className="z-30 flex shrink-0 border-t border-[#1A7FFF]/20 bg-[#0A0E1A]/95 backdrop-blur-md md:hidden">
         {NAV.map(({ to, label, Icon, end }) => (
           <NavLink key={to} to={to} end={end} className={mobileNavClass}>

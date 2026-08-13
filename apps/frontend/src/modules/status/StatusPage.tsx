@@ -37,7 +37,7 @@ export function StatusPage() {
   // index.html is titled for the app; on its own subdomain this is the whole
   // site, and a tab reading "Agentic Workspace" would be the wrong label.
   useEffect(() => {
-    document.title = 'Trident Status — endpoint reachability'
+    document.title = 'Trident Status: endpoint reachability'
   }, [])
 
   useEffect(() => {
@@ -119,8 +119,8 @@ export function StatusPage() {
             <p className="mt-6 max-w-xl text-base leading-relaxed text-slate-400 sm:text-lg">
               A probe is an unpaid request. The{' '}
               <span className="font-mono text-[#00D4FF]">402</span> that comes back carries the
-              seller&apos;s live terms, which proves the service is up and still selling — without
-              spending anything to find out.
+              seller&apos;s live terms, which proves the service is up and still selling,
+              without spending anything to find out.
             </p>
           </div>
 
@@ -313,8 +313,8 @@ function Footnote({ snap }: { snap: StatusSnapshot }) {
         <strong className="font-semibold text-slate-400">Three states, two tabs.</strong>{' '}
         <span className="font-mono text-[#00D4FF]">live</span> answered 402 with parseable payment
         terms, or 200 on the free tier.{' '}
-        <span className="font-mono text-[#00D4FF]">answering</span> replied with a 4xx — the host is
-        up and the path exists, but the terms could not be confirmed.{' '}
+        <span className="font-mono text-[#00D4FF]">answering</span> replied with a 4xx. The host
+        is up and the path exists, but the terms could not be confirmed.{' '}
         <span className="font-mono text-[#00D4FF]">gone</span> is a 404 on a path with no template
         in it.
       </p>

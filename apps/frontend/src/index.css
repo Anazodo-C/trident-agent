@@ -2,6 +2,33 @@
 @import '@rainbow-me/rainbowkit/styles.css';
 
 /*
+ * Self-hosted, not fetched from Google.
+ *
+ * These used to load from fonts.googleapis.com, which handed Google every
+ * visitor's IP address on every page load, before any interaction, and with
+ * nothing to consent to. Serving the two files ourselves removes a third party
+ * from the privacy policy and drops a DNS plus TLS round trip to two hosts.
+ *
+ * Both are the variable latin subsets, so one file covers every weight the app
+ * uses. The subset spans U+2000-206F, which is where the em dash, curly quotes
+ * and ellipsis live: the punctuation this product's copy is full of.
+ */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('/fonts/inter-latin.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-latin.woff2') format('woff2');
+}
+
+/*
  * Tailwind v4 takes its design tokens from CSS rather than tailwind.config.ts.
  * These are the sci-fi palette values from the build spec.
  */
@@ -120,6 +147,151 @@
   .badge {
     @apply inline-flex items-center rounded-md px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider;
   }
+
+  /* ------------------------------------------------ documentation & legal
+   *
+   * Shared by /docs, /privacy and /terms. Written as component classes rather
+   * than utilities on every element because these are long prose documents:
+   * the JSX stays readable, and the three pages cannot drift apart.
+   */
+
+  .doc-page {
+    @apply relative z-[1] mx-auto max-w-[1180px] px-6 pb-24 pt-8;
+  }
+
+  /* Sticky contents rail beside the column; stacked below it on narrow screens. */
+  .doc-shell {
+    @apply mt-12 grid gap-10 lg:grid-cols-[200px_minmax(0,1fr)] lg:items-start lg:gap-14;
+  }
+  .doc-toc {
+    @apply border-t border-[#1A7FFF]/20 pt-4 lg:sticky lg:top-8;
+  }
+  .doc-toc-label {
+    @apply mb-3 font-mono text-[10.5px] uppercase tracking-[0.14em] text-slate-600;
+  }
+  .doc-toc-link {
+    @apply font-mono text-[11.5px] text-slate-500 no-underline transition-colors hover:text-[#00D4FF];
+  }
+
+  .doc-body {
+    @apply min-w-0 max-w-[68ch] text-base leading-[1.7] text-slate-400;
+  }
+  .doc-section {
+    @apply mt-11 border-t border-[#1A7FFF]/20 pt-7 first:mt-0 first:border-0 first:pt-0;
+  }
+  .doc-h2 {
+    @apply mb-[18px] scroll-mt-6 font-mono text-[17px] font-medium uppercase tracking-[0.1em] text-slate-100;
+  }
+  .doc-h3 {
+    @apply mb-2.5 mt-7 font-mono text-[13px] font-medium uppercase tracking-[0.08em] text-slate-300;
+  }
+  /* A heading that quotes what the product actually prints. The uppercase
+     treatment is right for a label we invented and wrong for a string the
+     reader is meant to recognise. */
+  .doc-h3-quote {
+    @apply mb-2.5 mt-7 font-mono text-[13.5px] font-medium normal-case leading-snug tracking-normal text-slate-300;
+  }
+  .doc-p {
+    @apply mb-4;
+  }
+  .doc-p strong,
+  .doc-li strong {
+    @apply font-semibold text-slate-300;
+  }
+  .doc-a {
+    @apply text-[#00D4FF] underline decoration-[#00D4FF]/35 underline-offset-[3px];
+  }
+
+  .doc-ul {
+    @apply mb-4 flex list-none flex-col gap-2.5 p-0;
+  }
+  .doc-li {
+    @apply relative pl-[18px];
+  }
+  .doc-li::before {
+    content: '';
+    @apply absolute left-0 top-[0.62em] h-[5px] w-[5px] bg-[#00D4FF] opacity-55;
+  }
+
+  /* An ordered walk-through, where the number carries real sequence. */
+  .doc-steps {
+    counter-reset: step;
+    @apply mb-4 flex list-none flex-col gap-3.5 p-0;
+  }
+  .doc-step {
+    counter-increment: step;
+    @apply relative pl-[34px];
+  }
+  .doc-step::before {
+    content: counter(step, decimal-leading-zero);
+    @apply absolute left-0 top-[0.15em] font-mono text-[11px] text-[#00D4FF] opacity-70;
+  }
+
+  .doc-note {
+    @apply mb-4 rounded-lg border border-[#1A7FFF]/20 bg-[#0D1526]/70 p-[13px_15px] text-[14.5px] leading-[1.65];
+  }
+  .doc-note-tag {
+    @apply mb-1.5 block font-mono text-[10px] uppercase tracking-[0.14em];
+  }
+  .doc-note-money {
+    @apply border-[#FFA040]/35 bg-[#FFA040]/5;
+  }
+  .doc-note-stop {
+    @apply border-[#FF4466]/35 bg-[#FF4466]/5;
+  }
+  .doc-note-free {
+    @apply border-[#00FF88]/30 bg-[#00FF88]/[0.04];
+  }
+
+  /* Wide content scrolls inside its own box so the page body never does. */
+  .doc-scroll {
+    @apply mb-4 overflow-x-auto;
+  }
+  .doc-table {
+    @apply w-full min-w-[460px] border-collapse text-sm;
+  }
+  .doc-table th {
+    @apply border-b border-[#1A7FFF]/35 py-2.5 pr-3.5 text-left font-mono text-[10.5px]
+           font-medium uppercase tracking-[0.1em] text-slate-600;
+  }
+  .doc-table td {
+    @apply border-b border-[#1A7FFF]/20 py-2.5 pr-3.5 text-left align-top;
+  }
+  .doc-table td.k {
+    @apply whitespace-nowrap font-mono text-slate-300;
+  }
+
+  /* The plain-language gloss beside a clause that deserves one. */
+  .doc-plainly {
+    @apply mt-2.5 border-l-2 border-[#00D4FF]/30 pl-3.5 text-[14.5px] text-slate-500;
+  }
+  .doc-plainly strong {
+    @apply text-slate-400;
+  }
+
+  /* Legal clauses are numbered because they get referenced by number. */
+  .doc-clauses {
+    counter-reset: clause;
+  }
+  .doc-clause {
+    counter-increment: clause;
+  }
+  .doc-clause .doc-h2::before {
+    content: counter(clause) '.';
+    @apply mr-2.5 text-[#00D4FF] opacity-70;
+  }
+  .doc-sub {
+    counter-reset: sub;
+    @apply mb-4 flex list-none flex-col gap-[11px] p-0;
+  }
+  .doc-sub > li {
+    counter-increment: sub;
+    @apply relative pl-[38px];
+  }
+  .doc-sub > li::before {
+    content: counter(clause) '.' counter(sub);
+    @apply absolute left-0 top-[0.1em] font-mono text-[11.5px] tabular-nums text-slate-500;
+  }
 }
 
 @keyframes scanline {
@@ -135,13 +307,13 @@
 }
 
 /*
- * Landing hero loop — five beats on one shared 6s timeline.
+ * Landing hero loop: five beats on one shared 6s timeline.
  *
- *   0.0–1.4s  the goal types out          (beat 1)
- *   1.4–2.8s  endpoints are scanned       (beat 2)
- *   2.9–4.2s  the match is paid for       (beat 3)
- *   4.2–5.2s  the answer comes back       (beat 4)
- *   5.2–6.0s  hold, fade, repeat          (beat 5)
+ *   0.0-1.4s  the goal types out          (beat 1)
+ *   1.4-2.8s  endpoints are scanned       (beat 2)
+ *   2.9-4.2s  the match is paid for       (beat 3)
+ *   4.2-5.2s  the answer comes back       (beat 4)
+ *   5.2-6.0s  hold, fade, repeat          (beat 5)
  *
  * Every element runs the same 6s duration and carves out its own slice in
  * keyframe percentages rather than using animation-delay, because delays only
@@ -184,7 +356,7 @@
   23%, 100% { opacity: 0; }
 }
 
-/* Candidate endpoints being evaluated — three nodes, three offsets. */
+/* Candidate endpoints being evaluated: three nodes, three offsets. */
 @keyframes heroScan {
   0%, 26% { opacity: 0.18; }
   32% { opacity: 0.75; }
@@ -246,7 +418,7 @@
 .hero-loop-paused * { animation-play-state: paused !important; }
 
 /*
- * Reduced motion: freeze on beat 4, the state that carries the meaning —
+ * Reduced motion: freeze on beat 4, the state that carries the meaning,
  * goal asked, endpoint matched, answer returned. Nothing moves, and the
  * picture still says what the product does.
  */
@@ -274,7 +446,7 @@
 }
 
 /*
- * Rolling line — two facts about pricing, shown one at a time in a slot that is
+ * Rolling line: two facts about pricing, shown one at a time in a slot that is
  * exactly one line tall. Rolls up out of view and the next rolls up into it, so
  * the strip never changes height and never shifts the layout below it.
  *
@@ -291,7 +463,7 @@
 
 /*
  * Reduced motion: nothing rolls. The slot opens to fit both lines and shows
- * them at once — the information matters more than the effect, and hiding half
+ * them at once, since the information matters more than the effect, and hiding half
  * of it would be a worse answer than a taller strip.
  */
 @media (prefers-reduced-motion: reduce) {

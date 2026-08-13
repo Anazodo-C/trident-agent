@@ -14,7 +14,7 @@ export function LandingPage() {
 
   useEffect(() => {
     // The carousel is the only part of this page that needs the backend. If it
-    // is unreachable the section simply does not render — a marketing page must
+    // is unreachable the section simply does not render. A marketing page must
     // not show an error, and must not block on a fetch to say what Trident is.
     api
       .showcase()
@@ -23,7 +23,7 @@ export function LandingPage() {
   }, [])
 
   // Where the CTA sends you: into the app if you are signed in, to sign-in if
-  // not. Distinct from `home` below — the CTA is the next step, the wordmark is
+  // not. Distinct from `home` below: the CTA is the next step, the wordmark is
   // the way back.
   const enter = token ? '/app' : '/signin'
   const enterLabel = token ? 'Open Trident' : 'Start a task'
@@ -64,7 +64,7 @@ export function LandingPage() {
 
           <p className="mt-6 max-w-xl text-base leading-relaxed text-slate-400 sm:text-lg">
             Type a goal. Trident finds the right service out of thousands, pays for the call
-            from your own wallet, and comes back with the answer — not a list of links.
+            from your own wallet, and comes back with the answer, not a list of links.
           </p>
 
           <div className="mt-9 flex flex-wrap items-center gap-3">
@@ -144,17 +144,22 @@ export function LandingPage() {
         </div>
       </section>
 
+      {/*
+        No sign-in link here. The header already carries one and the hero carries
+        the CTA; a third made the footer read as another prompt rather than as a
+        place to find things.
+      */}
       <footer className="border-t border-[#1A7FFF]/15">
-        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center justify-between gap-3 px-5 py-7 sm:px-8">
-          <span className="font-mono text-[11px] uppercase tracking-widest text-slate-600">
-            Trident — autonomous execution over x402
+        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-x-6 gap-y-3 px-5 py-7 sm:px-8">
+          <span className="mr-auto font-mono text-[11px] uppercase tracking-widest text-slate-600">
+            Trident: autonomous execution over x402
           </span>
-          <Link
-            to={enter}
-            className="font-mono text-[11px] uppercase tracking-widest text-slate-500 transition-colors hover:text-[#00D4FF]"
-          >
-            {token ? 'Open app' : 'Sign in'}
-          </Link>
+          <FooterLink to="/docs">Docs</FooterLink>
+          <FooterLink to="/privacy">Privacy</FooterLink>
+          <FooterLink to="/terms">Terms</FooterLink>
+          <FooterLink href="https://status.tridentagent.xyz">Status</FooterLink>
+          <FooterLink href="https://github.com/Anazodo-C/trident-agent">GitHub</FooterLink>
+          <FooterLink href="https://x.com/tridentagent">X</FooterLink>
         </div>
       </footer>
     </div>
@@ -162,9 +167,42 @@ export function LandingPage() {
 }
 
 /**
- * The two ways to pay, one at a time. Both matter — free testnet endpoints are
+ * One footer link, internal or external.
+ *
+ * External ones get `rel="noreferrer noopener"`: `noopener` so the opened tab
+ * cannot reach back through `window.opener`, and `noreferrer` so leaving the
+ * site does not announce which page they left from.
+ */
+function FooterLink({
+  to,
+  href,
+  children,
+}: {
+  to?: string
+  href?: string
+  children: React.ReactNode
+}) {
+  const className =
+    'font-mono text-[11px] uppercase tracking-widest text-slate-500 transition-colors hover:text-[#00D4FF]'
+
+  if (to) {
+    return (
+      <Link to={to} className={className}>
+        {children}
+      </Link>
+    )
+  }
+  return (
+    <a href={href} className={className} target="_blank" rel="noreferrer noopener">
+      {children}
+    </a>
+  )
+}
+
+/**
+ * The two ways to pay, one at a time. Both matter, since free testnet endpoints are
  * why you can try this without funding anything, and x402 is what the paid
- * catalog settles over — but stacking them turns a one-line footnote under the
+ * catalog settles over, but stacking them turns a one-line footnote under the
  * CTA into a paragraph, so they take turns in a fixed-height slot.
  */
 function RollingNote() {
@@ -177,10 +215,10 @@ function RollingNote() {
           second one precisely in the slot. */}
       <div className="roll-track">
         <p className="h-[1.4em] leading-[1.4em]">
-          Free endpoints run on testnet — no funding needed to try it
+          Free endpoints run on testnet. No funding needed to try it
         </p>
         <p className="h-[1.4em] leading-[1.4em]">
-          Paid endpoints run on x402 — settled per call from your wallet
+          Paid endpoints run on x402. Settled per call from your wallet
         </p>
       </div>
     </div>
