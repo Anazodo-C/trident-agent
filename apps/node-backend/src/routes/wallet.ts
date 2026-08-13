@@ -17,6 +17,8 @@ import {
   strictChain,
   safeErrorMessage,
   unifiedGatewayBalance,
+  walletUsdcByChain,
+  spendableTotalUsdc,
 } from '../circle/gatewayService.ts'
 import { bridge, bridgeChainOptions, estimateBridge } from '../circle/bridgeService.ts'
 import { isValidPrivateKey } from '../auth/keySetup.ts'
@@ -162,12 +164,24 @@ router.all(
     let gatewayAvailableUsdc: string | null = null
     let gatewayWarning: string | null = null
     /*
-     * What the agent can actually spend, which is not the same as what is
-     * deposited on this chain. Gateway pools every domain into one balance, so
-     * a Base deposit pays a Polygon invoice — showing only the per-chain figure
-     * would report "0" on the chain a payment is about to succeed on.
+     * The Gateway ledger summed across every mainnet domain.
+     *
+     * Not the same as what is deposited on this chain, and no longer the same
+     * as what is spendable either: the agent moves funds to whichever chain an
+     * invoice names, so both pots on every chain are reachable. See
+     * spendableUsdc below, which is the figure the user should be shown.
      */
     let gatewaySpendableUsdc: string | null = null
+    /*
+     * One number for the whole of mainnet: every chain, both pots.
+     *
+     * This is what the agent can spend, because the funding ladder reaches all
+     * of it. Splitting it into per-chain, per-pot figures asks the user to
+     * understand a routing problem the product exists to hide, and each part on
+     * its own understates what they can afford.
+     */
+    let walletAcrossChainsUsdc: string | null = null
+    let spendableUsdc: string | null = null
 
     {
       try {
@@ -182,6 +196,20 @@ router.all(
         gatewaySpendableUsdc = await unifiedGatewayBalance(address, peers)
           .then((unified) => unified.totalUsdc)
           .catch(() => null)
+
+        /*
+         * The wallet side of the same question, then the two added together.
+         *
+         * Summed in atomic units. Adding the decimal strings as floats is how a
+         * balance acquires a rounding error, and this figure is what the user
+         * reads before deciding whether they can afford a run.
+         */
+        const walletByChain = await walletUsdcByChain(address, peers).catch(() => null)
+        const totals = spendableTotalUsdc(walletByChain, gatewaySpendableUsdc)
+        if (totals) {
+          walletAcrossChainsUsdc = totals.walletAcrossChains
+          spendableUsdc = totals.spendable
+        }
       } catch (err) {
         // A Gateway API hiccup shouldn't blank out the on-chain balances.
         // This goes in the body, not a header: SDK messages contain newlines,
@@ -202,6 +230,8 @@ router.all(
       gatewayUsdc,
       gatewayAvailableUsdc,
       gatewaySpendableUsdc,
+      walletAcrossChainsUsdc,
+      spendableUsdc,
       gatewayWarning,
       native: formatEther(nativeRaw),
       nativeSymbol: config.chain.nativeCurrency.symbol,

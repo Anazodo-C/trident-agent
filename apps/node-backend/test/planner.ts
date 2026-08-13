@@ -293,14 +293,25 @@ section('chain policy (mainnet is opt-in)')
    * Gateway payment draws only from the chain it settles on.
    */
   const onBase = new Map([['base' as const, 0.063]])
+  /*
+   * That constraint on settlement is still real, but it is no longer the end of
+   * the story: the agent moves the funds to the chain the invoice names. So the
+   * same case is now payable, and payable by the slowest route, which is what
+   * the user should be told it will cost in effort.
+   */
   check(
-    'a Polygon-only service is refused when the money is on Base',
-    chooseChain(polygonOnly, opted, { balances: onBase }) === null,
+    'a Polygon-only service is now payable from Base, by moving the money',
+    chooseChain(polygonOnly, opted, { balances: onBase })?.chain === 'polygon',
+    String(chooseChain(polygonOnly, opted, { balances: onBase })?.chain),
   )
   check(
-    'and the refusal says where to deposit rather than blaming settlement',
-    (unpayableReason(polygonOnly, opted, { balances: onBase }) ?? '').includes('polygon') &&
-      (unpayableReason(polygonOnly, opted, { balances: onBase }) ?? '').includes('0.063'),
+    'and it reports that Gateway funds have to be withdrawn before they can travel',
+    chooseChain(polygonOnly, opted, { balances: onBase })?.route === 'withdraw-bridge',
+    String(chooseChain(polygonOnly, opted, { balances: onBase })?.route),
+  )
+  check(
+    'so there is nothing to refuse',
+    unpayableReason(polygonOnly, opted, { balances: onBase }) === null,
     String(unpayableReason(polygonOnly, opted, { balances: onBase })),
   )
   check(
@@ -355,9 +366,15 @@ section('chain policy (mainnet is opt-in)')
     'but is paid from the wallet balance',
     chooseChain(vanillaOnBase, opted, { gatewayOnly: true, ...walletOnly })?.rail === 'vanilla',
   )
+  /*
+   * The Gateway rail cannot spend wallet USDC directly, but the two are one
+   * transaction apart on the same chain, so the agent deposits and then pays
+   * rather than reporting the money as unusable.
+   */
   check(
-    'a Gateway service is not paid from the wallet balance',
-    chooseChain(gatewayOnBase, opted, { gatewayOnly: true, ...walletOnly }) === null,
+    'a Gateway service is paid from the wallet balance, after a deposit',
+    chooseChain(gatewayOnBase, opted, { gatewayOnly: true, ...walletOnly })?.route === 'deposit',
+    String(chooseChain(gatewayOnBase, opted, { gatewayOnly: true, ...walletOnly })?.route),
   )
   check(
     'gatewayOnly no longer discards the vanilla rail outright',

@@ -21,6 +21,7 @@ import {
   GATEWAY_MAINNET_CHAINS,
   chooseChain,
   unpayableReason,
+  type ChainChoice,
   type ChainPolicy,
 } from '../circle/chainPolicy.ts'
 import { callFreeApi, payVerification } from '../circle/testnetVerification.ts'
@@ -457,77 +458,129 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
   let totalSpent = usdc([...completed.values()].reduce((sum, step) => sum + step.cost, 0))
 
   /**
-   * Move funds to a chain this service can be paid on, when they are elsewhere.
+   * Put the money where the invoice can draw it, following the route
+   * chooseChain already worked out.
    *
-   * Returns null when bridging cannot help — no deployment on either side, no
-   * chain with enough to send, or the keeper is not configured. The caller then
-   * reports the ordinary "wrong chain" refusal, which names what to deposit.
+   * Four rungs, cheapest first, and the route decides which one runs. Nothing
+   * here is speculative: it is only ever called for a step whose price is known
+   * and whose plan the user approved, because every rung costs a fee and the
+   * last two cost minutes as well.
    *
-   * A failure here is surfaced rather than swallowed: it means the user's money
-   * moved, or tried to, and telling them the service was simply unavailable
-   * would be a lie about their balance.
+   * A failure is surfaced rather than swallowed. It means the user's money moved
+   * or tried to, and reporting the service as merely unavailable would be a lie
+   * about their balance.
    */
-  const bridgeForStep = async (
+  const fundForChoice = async (
     step: PlanStep,
-    service: Service,
-    policy: ChainPolicy,
-    walletBalances: Map<SupportedChainName, number>,
-  ): Promise<{ chain: SupportedChainName; creditedUsdc: number } | null> => {
-    // Where the seller will take payment, preferring somewhere we can deliver.
-    const target = service.networks.find(
-      (option) =>
-        !option.isTestnet &&
-        option.gatewayBatchable === true &&
-        policy.allowed.includes(option.chainKey) &&
-        canBridgeTo(option.chainKey),
-    )
-    if (!target || !KEEPER_PRIVATE_KEY) return null
+    choice: ChainChoice,
+    agentPrivateKey: string,
+    pots: {
+      gatewayBalances?: Map<SupportedChainName, number>
+      walletBalances?: Map<SupportedChainName, number>
+    },
+  ): Promise<void> => {
+    const { gatewayBalances: gateway, walletBalances: wallet } = pots
+    const target = choice.chain
+    const needed = choice.priceUsdc
+
+    const say = (purpose: string) =>
+      emit(res, 'step_start', {
+        stepIndex: step.stepIndex,
+        serviceName: step.serviceName,
+        endpointUrl: step.endpointUrl,
+        purpose,
+      })
 
     /*
-     * Choose the source from the wallet, not the Gateway ledger.
+     * Move more than this one call needs.
      *
-     * TridentCctpRouter pulls USDC with `transferFrom` from the caller, so a
-     * bridge spends the EOA's plain balance. Selecting on the Gateway ledger
-     * checked one pot and spent another, and could start a transfer the wallet
-     * had no way to fund.
+     * Each move costs a fee, and for a bridge several minutes, so shifting
+     * exactly one invoice's worth would repeat that on the next call to the
+     * same seller. Ten times the price, capped by what is actually held.
      */
-    const needed = target.priceUsdc
-    const source = [...walletBalances.entries()]
-      .filter(([chain, held]) => chain !== target.chainKey && held >= needed && canBridgeTo(chain))
+    const sizeFor = (held: number) => Math.min(held, Math.max(needed * 10, needed))
+
+    /** Rung 2: the money is already on the right chain, in the wrong pot. */
+    if (choice.route === 'deposit') {
+      const held = wallet?.get(target) ?? 0
+      const amount = sizeFor(held)
+      say(`Moving ${amount} USDC into Gateway on ${target} to pay this`)
+
+      const client = gatewayClientFor(agentPrivateKey, target)
+      await client.deposit(String(amount))
+
+      wallet?.set(target, held - amount)
+      gateway?.set(target, (gateway.get(target) ?? 0) + amount)
+      console.warn(
+        '[trident] gateway deposit:',
+        JSON.stringify({ taskId, chain: target, amount }),
+      )
+      return
+    }
+
+    if (!KEEPER_PRIVATE_KEY) {
+      throw new Error(
+        `Paying on ${target} needs funds moved there, and cross-chain settlement is not ` +
+          'configured. Nothing was charged.',
+      )
+    }
+
+    /*
+     * Rungs 3 and 4 both end in a CCTP burn, which spends the EOA's plain USDC:
+     * TridentCctpRouter pulls with `transferFrom` from the caller, so the
+     * Gateway ledger cannot fund one directly. Rung 4 exists to bring Gateway
+     * funds back into the wallet first, which is the only way money deposited
+     * before this change can reach another chain.
+     */
+    let source = [...(wallet?.entries() ?? [])]
+      .filter(([chain, held]) => chain !== target && held >= needed && canBridgeTo(chain))
       .sort((a, b) => a[1] - b[1])[0]
-    if (!source) return null
 
-    /*
-     * Send more than this one call needs.
-     *
-     * Each bridge costs a CCTP fee and minutes of waiting, so moving exactly
-     * one invoice's worth would repeat that on the next call to the same
-     * seller. Ten times the price, capped by what is actually held, amortises
-     * it without stranding a meaningful balance on a chain the user may never
-     * use again.
-     */
-    const amount = Math.min(source[1], Math.max(needed * 10, needed))
+    if (!source && choice.route === 'withdraw-bridge') {
+      const fromGateway = [...(gateway?.entries() ?? [])]
+        .filter(([chain, held]) => chain !== target && held >= needed && canBridgeTo(chain))
+        .sort((a, b) => a[1] - b[1])[0]
+      if (fromGateway) {
+        const [chain, held] = fromGateway
+        const amount = sizeFor(held)
+        say(`Taking ${amount} USDC out of Gateway on ${chain} so it can move to ${target}`)
+
+        const client = gatewayClientFor(agentPrivateKey, chain)
+        // Same-chain withdrawal, which is instant: no 7-day trustless path.
+        await client.withdraw(String(amount))
+
+        gateway?.set(chain, held - amount)
+        const inWallet = (wallet?.get(chain) ?? 0) + amount
+        wallet?.set(chain, inWallet)
+        source = [chain, inWallet]
+      }
+    }
+
+    if (!source) {
+      throw new Error(
+        `Paying on ${target} needs ${needed} USDC moved there, and no chain holds enough to ` +
+          'send. Nothing was charged.',
+      )
+    }
+
+    const [fromChain, fromHeld] = source
+    const amount = sizeFor(fromHeld)
     const atomic = BigInt(Math.floor(amount * 1_000_000))
 
-    emit(res, 'step_start', {
-      stepIndex: step.stepIndex,
-      serviceName: step.serviceName,
-      endpointUrl: step.endpointUrl,
-      purpose: `Moving ${amount} USDC from ${source[0]} to ${target.chainKey} to pay this`,
-    })
+    say(`Moving ${amount} USDC from ${fromChain} to ${target} to pay this`)
 
     const result = await bridgeToGatewayBalance(
       agentPrivateKey,
-      source[0],
-      target.chainKey,
+      fromChain,
+      target,
       atomic,
       (progress) => {
         console.warn(
           '[trident] bridging:',
           JSON.stringify({
             taskId,
-            from: source[0],
-            to: target.chainKey,
+            from: fromChain,
+            to: target,
             stage: progress.stage,
             detail: progress.detail,
           }),
@@ -536,18 +589,18 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
     )
 
     const creditedUsdc = Number(result.creditedAtomic) / 1_000_000
-    walletBalances.set(source[0], source[1] - amount)
+    wallet?.set(fromChain, fromHeld - amount)
+    gateway?.set(target, (gateway.get(target) ?? 0) + creditedUsdc)
     console.warn(
       '[trident] bridged:',
       JSON.stringify({
         taskId,
-        to: target.chainKey,
+        to: target,
         creditedUsdc,
         burnTx: result.burnTxHash,
         sweepTx: result.sweepTxHash,
       }),
     )
-    return { chain: target.chainKey, creditedUsdc }
   }
 
   /*
@@ -754,42 +807,34 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           ...(gatewayBalances ? { balances: gatewayBalances } : {}),
           ...(walletBalances ? { walletBalances } : {}),
         }
-        let choice = chooseChain(service.networks, policy, chainOpts)
-
-        /*
-         * Nothing settleable where the money is — so move the money.
-         *
-         * Only reached when the wallet holds enough overall but on the wrong
-         * chain, which is the common case for a seller who prices on a single
-         * network. The funds are bridged into the user's Gateway balance on the
-         * chain the invoice names, and the choice is remade against real
-         * balances rather than assumed to have worked.
-         *
-         * Deliberately after the plan is approved and the price is known: this
-         * costs a CCTP fee and minutes of waiting, and doing it speculatively
-         * for a call that might not happen would spend the user's money on a
-         * transfer they never asked for.
-         */
-        if (!choice && walletBalances && service.source === 'x402') {
-          const bridged = await bridgeForStep(step, service, policy, walletBalances)
-          if (bridged) {
-            // The bridge lands in the Gateway ledger, so credit that map — and
-            // re-choose against it rather than assuming the transfer covered it.
-            const ledger = gatewayBalances ?? new Map<SupportedChainName, number>()
-            ledger.set(bridged.chain, (ledger.get(bridged.chain) ?? 0) + bridged.creditedUsdc)
-            choice = chooseChain(service.networks, policy, {
-              ...chainOpts,
-              balances: ledger,
-              walletBalances,
-            })
-          }
-        }
+        const choice = chooseChain(service.networks, policy, chainOpts)
 
         if (!choice) {
           throw new Error(
             unpayableReason(service.networks, policy, chainOpts) ??
               'No permitted settlement network',
           )
+        }
+
+        /*
+         * The money may be reachable rather than already in place.
+         *
+         * chooseChain now judges an option payable if the funds can get there,
+         * not only if they are sitting there, and reports what that would take.
+         * A balance in the wallet on Base pays a Polygon invoice perfectly well;
+         * it just has to travel first, and calling that unfunded made money the
+         * user could see look unusable.
+         *
+         * Deliberately after the plan is approved and the price is known. Moving
+         * funds costs a fee and, for a bridge, minutes of waiting, and doing it
+         * speculatively for a call that might not happen would spend the user's
+         * money on a transfer they never asked for.
+         */
+        if (choice.route !== 'ready') {
+          await fundForChoice(step, choice, agentPrivateKey, {
+            gatewayBalances,
+            walletBalances,
+          })
         }
 
         /*

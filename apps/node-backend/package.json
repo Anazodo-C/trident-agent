@@ -12,10 +12,11 @@
     "test:e2e": "node --experimental-strip-types test/e2e.ts",
     "test:runner": "node --experimental-strip-types test/runner.ts",
     "test:status": "node --experimental-strip-types test/status.ts",
-    "test": "npm run test:planner && npm run test:runner && npm run test:pathparams && npm run test:status && npm run test:e2e",
+    "test": "npm run test:planner && npm run test:runner && npm run test:funding && npm run test:pathparams && npm run test:status && npm run test:e2e",
     "test:planner": "node --experimental-strip-types test/planner.ts",
     "dev:probe": "STATUS_PROBER=on node --watch --experimental-strip-types src/server.ts",
-    "test:pathparams": "node --experimental-strip-types test/pathParams.ts"
+    "test:pathparams": "node --experimental-strip-types test/pathParams.ts",
+    "test:funding": "node --experimental-strip-types test/funding.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.72.0",

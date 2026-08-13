@@ -35,7 +35,7 @@ export function WalletPage() {
    *
    * The backend still returns each fundable chain, because deposits and
    * withdrawals land on a specific one. But a user chooses between testnet and
-   * mainnet — which mainnet chain their money sits on is the agent's business,
+   * mainnet, which mainnet chain their money sits on is the agent's business,
    * and it moves it as needed. Mainnet resolves to the first chain the backend
    * offers, which it orders with the funding chain leading.
    */
@@ -136,11 +136,25 @@ function BalancePanel() {
 
   /*
    * On mainnet the headline Gateway figure is the cross-chain total, because
-   * the agent bridges on demand — a per-chain number would report zero on a
+   * the agent bridges on demand, a per-chain number would report zero on a
    * chain a payment is about to succeed on. `gatewaySpendableUsdc` is that sum;
    * it falls back to this chain's own ledger when the aggregate read failed.
    */
   const gatewayTotal = balance?.gatewaySpendableUsdc ?? balance?.gatewayUsdc ?? null
+
+  /*
+   * The headline on mainnet: both pots, every chain, one number.
+   *
+   * Computed by the backend so the definition lives with the funding ladder
+   * that spends it. The fallback covers a partial read, where the aggregate
+   * call failed but this chain's own figures came back, and showing the little
+   * we know beats showing nothing.
+   */
+  const spendable =
+    balance?.spendableUsdc ??
+    (balance && gatewayTotal != null
+      ? String(Number(balance.walletUsdc) + Number(gatewayTotal))
+      : null)
 
   // Only chains actually holding something, so the disclosure is a short list.
   const perChain = entries.filter(
@@ -184,8 +198,8 @@ function BalancePanel() {
 
       {/*
         One card for the selected network, not one per settlement chain.
-        Which chain an invoice names is the agent's problem — it picks per
-        service and bridges when the money is elsewhere — so listing eleven of
+        Which chain an invoice names is the agent's problem, it picks per
+        service and bridges when the money is elsewhere, so listing eleven of
         them asked the user to manage something they do not decide.
       */}
       {!balance ? (
@@ -208,20 +222,37 @@ function BalancePanel() {
           </div>
 
           <dl className="flex flex-col gap-2">
-            {/* Funds the plain-x402 rail, and the burn when a bridge is needed. */}
-            <Row label="USDC (wallet)" value={usdc(balance.walletUsdc)} />
-            {/* Funds the Gateway rail. On mainnet this is the cross-chain total. */}
-            <Row
-              label="USDC (gateway)"
-              value={
-                (balance.isTestnet ? balance.gatewayUsdc : gatewayTotal) != null
-                  ? usdc((balance.isTestnet ? balance.gatewayUsdc : gatewayTotal)!)
-                  : 'unavailable'
-              }
-              dim={(balance.isTestnet ? balance.gatewayUsdc : gatewayTotal) == null}
-            />
             {/*
-              Payments themselves cost no gas — both rails are signature-only and
+              On mainnet, one number.
+
+              The agent moves funds to whichever chain an invoice names and
+              between the wallet and Gateway as the rail requires, so which pot
+              on which chain holds the money is its problem rather than the
+              user's. Showing the parts as headline figures asked them to
+              understand a routing problem this product exists to hide, and each
+              part alone understates what they can afford.
+
+              Testnet keeps the split: there is only one chain, no bridging is
+              involved, and the two pots are genuinely the thing to look at.
+            */}
+            {balance.isTestnet ? (
+              <>
+                <Row label="USDC (wallet)" value={usdc(balance.walletUsdc)} />
+                <Row
+                  label="USDC (gateway)"
+                  value={balance.gatewayUsdc != null ? usdc(balance.gatewayUsdc) : 'unavailable'}
+                  dim={balance.gatewayUsdc == null}
+                />
+              </>
+            ) : (
+              <Row
+                label="USDC"
+                value={spendable != null ? usdc(spendable) : 'unavailable'}
+                dim={spendable == null}
+              />
+            )}
+            {/*
+              Payments themselves cost no gas, because both rails are signature-only and
               the seller submits. This is still here because four things do spend
               it: every free-tier call, a Gateway deposit or withdrawal, and the
               CCTP burn. On Arc the gas token is also called USDC but is a
@@ -235,25 +266,41 @@ function BalancePanel() {
 
           {!balance.isTestnet && (
             <p className="mt-2.5 text-[11px] leading-relaxed text-slate-500">
-              Held across networks. The agent moves it to whichever chain a
-              service settles on.
+              Your balance across every network. The agent moves it to whichever
+              chain a service settles on.
             </p>
           )}
 
           {/*
-            Where it actually sits, folded away. A cross-chain total is the right
-            headline now the bridge works, but the split still matters when a
-            transfer is mid-flight or a chain is short.
+            The split, folded away.
+
+            One total is the right headline now that the agent routes funds, but
+            the parts still matter to someone watching a transfer land or asking
+            why a payment is taking minutes rather than seconds.
           */}
-          {!balance.isTestnet && perChain.length > 0 && (
+          {!balance.isTestnet && spendable != null && (
             <details className="mt-2.5">
               <summary className="cursor-pointer text-[11px] text-slate-500 transition-colors hover:text-slate-300">
                 Where it sits
               </summary>
               <dl className="mt-2 flex flex-col gap-1.5 border-l border-[#1A7FFF]/20 pl-3">
-                {perChain.map((b) => (
-                  <Row key={b.chain} label={b.chain} value={usdc(b.gatewayUsdc ?? '0')} />
-                ))}
+                <Row
+                  label="in your wallet"
+                  value={usdc(balance.walletAcrossChainsUsdc ?? balance.walletUsdc)}
+                />
+                <Row label="in Gateway" value={usdc(gatewayTotal ?? '0')} />
+                {perChain.length > 0 && (
+                  <>
+                    <div className="mt-1 border-t border-[#1A7FFF]/15 pt-1.5" />
+                    {perChain.map((b) => (
+                      <Row
+                        key={b.chain}
+                        label={`Gateway on ${b.chain}`}
+                        value={usdc(b.gatewayUsdc ?? '0')}
+                      />
+                    ))}
+                  </>
+                )}
               </dl>
             </details>
           )}
@@ -282,7 +329,7 @@ function BalancePanel() {
  *
  * Gateway credits nothing until the source chain finalises, so the wallet
  * shows a successful transfer and an unchanged balance for up to twenty
- * minutes. Saying so — with the clock running — is the difference between
+ * minutes. Saying so, with the clock running, is the difference between
  * "waiting" and "my money is gone".
  */
 function PendingDepositNote({ deposit }: { deposit: PendingDeposit }) {
@@ -301,7 +348,7 @@ function PendingDepositNote({ deposit }: { deposit: PendingDeposit }) {
       <Clock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
       <span>
         <strong className="font-semibold">{usdc(deposit.amount)} USDC deposited</strong>, waiting
-        on {deposit.chain} finality — {finalityNote(deposit.chain)}.{' '}
+        on {deposit.chain} finality: {finalityNote(deposit.chain)}.{' '}
         {minutes === 0 ? 'Just now.' : `${minutes} min ago.`} The transfer is already on chain;
         Gateway credits it once the chain finalises.
       </span>
@@ -343,7 +390,7 @@ function GatewayPanel() {
     setBusy(kind)
     setMessage(null)
     try {
-      // Explicitly on the selected chain — never on a stored default.
+      // Explicitly on the selected chain, never on a stored default.
       const chain = activeChain ?? undefined
       const baselineTotal = chain
         ? (useWalletStore.getState().balances[chain]?.gatewayUsdc ?? null)
@@ -371,7 +418,7 @@ function GatewayPanel() {
         tone: 'ok',
         text:
           kind === 'deposit'
-            ? `Deposited ${amount} USDC on ${chain}. It will show in the Gateway balance once ${chain} finalises — ${finalityNote(chain)}.`
+            ? `Deposited ${amount} USDC on ${chain}. It will show in the Gateway balance once ${chain} finalises: ${finalityNote(chain)}.`
             : `Withdrew ${amount} USDC on ${chain}. Gateway balance: ${res.newGatewayBalance}`,
       })
       if (kind === 'deposit') setDepositAmount('')
@@ -386,9 +433,17 @@ function GatewayPanel() {
 
   return (
     <Panel title="Gateway">
+      {/*
+        This used to read "move USDC in before a run", which stopped being true
+        when the runner gained the funding ladder: a Gateway-rail step now
+        deposits from the wallet on the spot. Telling a user to do by hand what
+        the agent already does is how a balance ends up parked on the one chain
+        that turns out to be the wrong one.
+      */}
       <p className="mb-4 text-sm leading-relaxed text-slate-400">
         Your agent pays x402 services from its Gateway balance on the chain the service settles
-        on. Move USDC in before a run.
+        on, and moves funds there itself when a run needs them. These controls are here for when
+        you want to place funds yourself.
       </p>
 
       {/* The single most expensive mistake here is funding the wrong chain. */}
@@ -555,7 +610,7 @@ function SpendingCapPanel({ onSaved }: { onSaved: () => void }) {
  * Mainnet spending is opt-in and off by default.
  *
  * Turning it on is the moment the agent stops playing with faucet funds and
- * starts spending real USDC autonomously once a plan is approved — so it is a
+ * starts spending real USDC autonomously once a plan is approved, so it is a
  * deliberate, separate action, stated plainly rather than buried in a setting.
  */
 function MainnetPanel({ onSaved }: { onSaved: () => void }) {
@@ -616,7 +671,7 @@ function MainnetPanel({ onSaved }: { onSaved: () => void }) {
           <div className="flex gap-2">
             <button className="btn-danger flex-1" onClick={() => apply(true)} disabled={busy}>
               {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              I understand — enable
+              I understand, enable
             </button>
             <button className="btn-ghost" onClick={() => setConfirming(false)}>
               Cancel

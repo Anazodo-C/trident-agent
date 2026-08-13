@@ -294,6 +294,38 @@ export function fromAtomicUsdc(atomic: bigint): string {
 }
 
 /**
+ * One mainnet number: plain wallet USDC on every chain, plus the Gateway ledger
+ * across every domain.
+ *
+ * Summed in atomic units, never in floats. Adding "0.1" and "0.2" as numbers
+ * yields 0.30000000000000004, and a balance that renders a cent off is a
+ * balance nobody trusts.
+ *
+ * The invariant this exists to hold: moving funds between the two pots must not
+ * change the total. A Gateway deposit takes X off the wallet side and puts X on
+ * the Gateway side, so a user watching this figure sees it sit still while the
+ * agent works, which is the whole point of showing one number.
+ *
+ * A failed Gateway read nulls `spendable` but not `walletAcrossChains`: half a
+ * picture is still worth showing, a wrong total is not.
+ */
+export function spendableTotalUsdc(
+  walletByChain: Map<string, string | number> | null,
+  gatewaySpendableUsdc: string | null,
+): { walletAcrossChains: string; spendable: string | null } | null {
+  if (!walletByChain) return null
+  let walletAtomic = 0n
+  for (const amount of walletByChain.values()) walletAtomic += toAtomicUsdc(String(amount))
+  return {
+    walletAcrossChains: fromAtomicUsdc(walletAtomic),
+    spendable:
+      gatewaySpendableUsdc === null
+        ? null
+        : fromAtomicUsdc(walletAtomic + toAtomicUsdc(gatewaySpendableUsdc)),
+  }
+}
+
+/**
  * A signer used only to construct a client for reads.
  *
  * GatewayClient requires a private key to exist, but `getBalances(address)`

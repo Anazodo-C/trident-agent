@@ -2,6 +2,8 @@ import { CHAIN_CONFIGS } from '@circle-fin/x402-batching/client'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import type { UserRow } from '../db.ts'
 import { isTestnetChain } from './registryService.ts'
+// Leaf module with no imports of ours, so this cannot create a cycle.
+import { canBridgeTo } from './deployments.ts'
 
 /**
  * Which chains a given user is allowed to spend on.
@@ -89,6 +91,11 @@ export interface ChainChoice {
   isTestnet: boolean
   /** Which rail to pay on. The runner routes on this. */
   rail: 'gateway' | 'vanilla' | 'verification'
+  /**
+   * What has to happen before this can be paid, decided from the balances the
+   * caller supplied. The runner follows it rather than re-deriving it.
+   */
+  route: FundingRoute
 }
 
 export interface ServiceNetworkLike {
@@ -159,15 +166,78 @@ export interface ChooseChainOptions {
  * Testnet options are exempt. They settle through the verification transfer
  * rather than Gateway, and that path is already working.
  */
-function fundedFor(option: ServiceNetworkLike, opts: ChooseChainOptions): boolean {
-  if (option.isTestnet) return true
+/**
+ * How much work it takes to pay an option, or null when it cannot be paid.
+ *
+ * The rungs are ordered by cost to the user in fees and in waiting, and the
+ * number is used only for that ordering.
+ */
+export type FundingRoute = 'ready' | 'deposit' | 'bridge' | 'withdraw-bridge'
 
-  // The vanilla rail spends the EOA's own USDC, not the Gateway ledger, so it
-  // must be measured against the wallet balance or it would be judged unfunded
-  // on a chain where it can pay perfectly well.
-  const pot = option.rail === 'vanilla' ? opts.walletBalances : opts.balances
-  if (!pot) return true
-  return (pot.get(option.chainKey) ?? 0) >= option.priceUsdc
+const ROUTE_COST: Record<FundingRoute, number> = {
+  ready: 0,
+  // One transaction on the chain we are already paying on.
+  deposit: 1,
+  // A burn, an attestation and a mint: minutes, and a CCTP fee.
+  bridge: 2,
+  // The same, preceded by pulling the money out of Gateway first.
+  'withdraw-bridge': 3,
+}
+
+/**
+ * Can this option be paid at all, and at what cost.
+ *
+ * This used to ask whether one pot on one chain held the price, which is the
+ * question settlement asks but not the question the user cares about. Money in
+ * the wallet on Base pays a Polygon invoice perfectly well; it just has to
+ * travel first. Reporting that as unfunded made a balance the user could see
+ * look unusable, and pushed them to deposit again on a second chain.
+ *
+ * The vanilla rail is the exception and stays strict: it signs against the USDC
+ * contract on the invoice's own chain, so only wallet funds already sitting
+ * there can pay it. Nothing can be moved in to help.
+ */
+export function fundingRouteFor(
+  option: ServiceNetworkLike,
+  opts: ChooseChainOptions,
+): FundingRoute | null {
+  if (option.isTestnet) return 'ready'
+
+  const price = option.priceUsdc
+  const wallet = opts.walletBalances
+  const gateway = opts.balances
+
+  // No balance information at all means the caller is not gating on funds.
+  if (!wallet && !gateway) return 'ready'
+
+  const walletHere = wallet?.get(option.chainKey) ?? 0
+  const gatewayHere = gateway?.get(option.chainKey) ?? 0
+
+  if (option.rail === 'vanilla') {
+    return walletHere >= price ? 'ready' : null
+  }
+
+  // Gateway rail from here down.
+  if (gatewayHere >= price) return 'ready'
+  if (walletHere >= price) return 'deposit'
+
+  // Somewhere else entirely. Only chains the router and receiver are deployed
+  // on can take delivery, so a balance on a chain we cannot bridge to or from
+  // is not reachable however large it is.
+  if (!canBridgeTo(option.chainKey)) return null
+
+  const elsewhere = (pot: Map<SupportedChainName, number> | undefined) =>
+    [...(pot?.entries() ?? [])].some(
+      ([chain, held]) => chain !== option.chainKey && held >= price && canBridgeTo(chain),
+    )
+
+  if (elsewhere(wallet)) return 'bridge'
+  if (elsewhere(gateway)) return 'withdraw-bridge'
+  return null
+}
+
+function fundedFor(option: ServiceNetworkLike, opts: ChooseChainOptions): boolean {
+  return fundingRouteFor(option, opts) !== null
 }
 
 /**
@@ -206,18 +276,33 @@ export function chooseChain(
    * payable today; one listing Polygon alone is not, and saying so up front
    * beats signing an authorisation that cannot clear.
    */
-  const funded = pool.filter((o) => fundedFor(o, { gatewayOnly, balances, walletBalances }))
-  if (funded.length === 0) return null
-  pool = funded
+  const routed = pool
+    .map((o) => ({ option: o, route: fundingRouteFor(o, { gatewayOnly, balances, walletBalances }) }))
+    .filter((r): r is { option: ServiceNetworkLike; route: FundingRoute } => r.route !== null)
+  if (routed.length === 0) return null
 
-  const best = pool.reduce((a, b) => (b.priceUsdc < a.priceUsdc ? b : a))
+  /*
+   * Cheapest to reach first, cheapest to buy second.
+   *
+   * Price alone would pick a marginally cheaper option on a chain the money is
+   * not on, and pay for that saving with a CCTP fee and several minutes of
+   * bridging. A tenth of a cent is not worth a round trip, so an option that
+   * can be paid right now beats one that has to be funded first, and price only
+   * decides between options of equal effort.
+   */
+  const best = routed.reduce((a, b) => {
+    const byRoute = ROUTE_COST[a.route] - ROUTE_COST[b.route]
+    if (byRoute !== 0) return byRoute < 0 ? a : b
+    return b.option.priceUsdc < a.option.priceUsdc ? b : a
+  })
 
   return {
-    chain: best.chainKey,
-    network: best.network,
-    priceUsdc: best.priceUsdc,
-    isTestnet: best.isTestnet,
-    rail: best.rail ?? (best.gatewayBatchable ? 'gateway' : 'vanilla'),
+    chain: best.option.chainKey,
+    network: best.option.network,
+    priceUsdc: best.option.priceUsdc,
+    isTestnet: best.option.isTestnet,
+    rail: best.option.rail ?? (best.option.gatewayBatchable ? 'gateway' : 'vanilla'),
+    route: best.route,
   }
 }
 
@@ -236,7 +321,15 @@ export function unpayableReason(
    * have helped. Check the batching case first, because it is the more
    * specific diagnosis.
    */
-  if (opts.gatewayOnly && chooseChain(options, policy)) {
+  /*
+   * Vary only the batching requirement, holding the balances fixed.
+   *
+   * This used to call chooseChain with no options at all, which dropped the
+   * funding check too, so any shortfall came back as "does not offer Gateway
+   * batch settlement" and sent the user looking at the wrong thing entirely.
+   * A diagnosis has to change one variable.
+   */
+  if (opts.gatewayOnly && chooseChain(options, policy, { ...opts, gatewayOnly: false })) {
     return 'This service does not offer Gateway batch settlement, so the agent cannot pay it.'
   }
 
@@ -245,19 +338,33 @@ export function unpayableReason(
   }
 
   /*
-   * Distinguish "cannot be paid" from "cannot be paid from where the money
-   * currently is". The second is the user's to fix in one deposit, and
-   * reporting it as a settlement failure told them nothing.
+   * Separate "not enough money" from "money that cannot get there".
+   *
+   * The agent now moves funds to whichever chain an invoice names, so the old
+   * advice to deposit on a particular chain is no longer the fix and would send
+   * the user to do something the agent does for them. What remains are two
+   * genuinely different failures, and they need different sentences.
    */
-  if (opts.balances && chooseChain(options, policy, { ...opts, balances: undefined })) {
+  const gatingOnFunds = Boolean(opts.balances ?? opts.walletBalances)
+  if (gatingOnFunds && chooseChain(options, policy, { ...opts, balances: undefined, walletBalances: undefined })) {
     const wanted = [...new Set(options.filter((o) => !o.isTestnet).map((o) => o.chainKey))]
-    const held = [...opts.balances.entries()]
-      .filter(([, amount]) => amount > 0)
-      .map(([chain, amount]) => `${amount} USDC on ${chain}`)
+    const total =
+      [...(opts.balances?.values() ?? [])].reduce((a, b) => a + b, 0) +
+      [...(opts.walletBalances?.values() ?? [])].reduce((a, b) => a + b, 0)
+    const cheapest = Math.min(...options.filter((o) => !o.isTestnet).map((o) => o.priceUsdc))
+
+    // Reachable chains are the ones the router and receiver are deployed on.
+    // A service priced only on a chain we cannot deliver to is a coverage gap
+    // on our side, not a shortfall on the user's, and should not read as one.
+    if (!wanted.some((chain) => canBridgeTo(chain))) {
+      return (
+        `This service settles only on ${wanted.join(', ')}, which the agent cannot move funds ` +
+        'to yet. Nothing was charged.'
+      )
+    }
     return (
-      `This service settles on ${wanted.join(', ')}, and a Gateway payment can only draw from ` +
-      `the chain it settles on. ${held.length ? `You hold ${held.join(', ')}.` : 'No Gateway balance was found.'} ` +
-      `Deposit to ${wanted[0]} to use it.`
+      `This service costs ${cheapest} USDC and your balance is ${Number(total.toFixed(6))} USDC ` +
+      'across every network. Add funds in Wallet to use it.'
     )
   }
 

@@ -71,7 +71,7 @@ export interface StepUpgrade {
   options: PremiumUpgrade[]
 }
 
-/** Registry-sourced facts about a planned step — not the model's claims. */
+/** Registry-sourced facts about a planned step, not the model's claims. */
 export interface StepAnnotation {
   trust: TrustTier
   calls30d: number
@@ -114,7 +114,7 @@ export interface LiveStep {
   txRef?: string
   error?: string
   result?: unknown
-  /** Carried over from an earlier attempt — already paid for, not re-charged. */
+  /** Carried over from an earlier attempt, already paid for, not re-charged. */
   replayed?: boolean
 }
 
@@ -136,7 +136,7 @@ export interface BudgetOption {
   totalUsdc: number
   /** The cap the user would have to set for this route to run. */
   minimumCapUsdc: number
-  /** 0–100, from the registry's trust tier and recorded usage. */
+  /** 0-100, from the registry's trust tier and recorded usage. */
   quality: number
   services: string
   rationale: string
@@ -152,7 +152,7 @@ export interface BudgetGuidance {
   message: string
 }
 
-/** Registry-priced totals for the plan — never the model's own estimates. */
+/** Registry-priced totals for the plan, never the model's own estimates. */
 export interface PlanCosting {
   ceilingUsdc: number
   capUsdc: number
@@ -204,7 +204,7 @@ export interface TaskStepDetail {
 
 export interface WalletBalance {
   eoaAddress: string
-  /** The chain this balance is for — the request's chain, not a stored default. */
+  /** The chain this balance is for, the request's chain, not a stored default. */
   chain: string
   isTestnet: boolean
   chainId: number
@@ -212,14 +212,18 @@ export interface WalletBalance {
   walletUsdc: string
   gatewayUsdc: string | null
   gatewayAvailableUsdc: string | null
-  /**
-   * The Gateway ledger summed across every mainnet domain.
-   *
-   * A total, not a spendable figure — an invoice draws the ledger on its own
-   * chain and nowhere else. What makes it usable anywhere is the agent bridging
-   * on demand, which costs a fee and takes minutes.
-   */
+  /** The Gateway ledger summed across every mainnet domain. */
   gatewaySpendableUsdc: string | null
+  /** Plain wallet USDC summed across every mainnet chain. */
+  walletAcrossChainsUsdc: string | null
+  /**
+   * One number for the whole of mainnet: every chain, both pots.
+   *
+   * What the agent can actually spend. It moves funds to whichever chain an
+   * invoice names, so where the money currently sits is its problem, not the
+   * user's, and any single per-chain figure understates what they can afford.
+   */
+  spendableUsdc: string | null
   /** Set when the on-chain read succeeded but the Gateway API call did not. */
   gatewayWarning: string | null
   native: string
@@ -240,15 +244,15 @@ export interface PendingDeposit {
   txHash: string
   /** Epoch ms, for showing elapsed time. */
   at: number
-  /** Gateway total at deposit time — the balance to beat before clearing this. */
+  /** Gateway total at deposit time, the balance to beat before clearing this. */
   baselineTotal: string | null
 }
 
 /** A chain this account is permitted to hold funds on. */
 export interface ChainOption {
-  /** SDK key, e.g. `base` — what the balance and Gateway routes expect. */
+  /** SDK key, e.g. `base`, what the balance and Gateway routes expect. */
   chain: string
-  /** Label form, e.g. `BASE` — what the bridge options speak. */
+  /** Label form, e.g. `BASE`, what the bridge options speak. */
   label: string
   chainId: number
   isTestnet: boolean
@@ -258,7 +262,7 @@ export interface DepositInfo {
   address: string
   chain: string
   chainId: number
-  /** Every chain the account may use — testnet always, mainnet once opted in. */
+  /** Every chain the account may use, testnet always, mainnet once opted in. */
   availableChains: ChainOption[]
   bridgeChains: { label: string; chain: string }[]
   /** No onramp exists; the faucet and a direct transfer are the ways in. */
@@ -271,7 +275,7 @@ export interface KeyMaterial {
   salt: string
   iv: string
   eoaAddress: string
-  /** The count this blob was encrypted at — decrypt with exactly this. */
+  /** The count this blob was encrypted at, decrypt with exactly this. */
   iterations: number
   /** The count it should be re-encrypted at, if it is behind. */
   targetIterations: number
