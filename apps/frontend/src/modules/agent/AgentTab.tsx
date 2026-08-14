@@ -444,7 +444,7 @@ function EmptyState({
     <div className="flex flex-col items-center pt-8 text-center sm:pt-16">
       <Sparkles className="mb-5 h-8 w-8 text-[#00D4FF]" />
       <h1 className="font-mono text-xl uppercase tracking-widest text-slate-100 sm:text-2xl">
-        What should the agent do?
+        What can I do for you today?
       </h1>
       <p className="mt-3 max-w-md text-sm leading-relaxed text-slate-400">
         Describe a goal. Trident scouts x402 services, shows you a costed plan, and
