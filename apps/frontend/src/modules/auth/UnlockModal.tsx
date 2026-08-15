@@ -4,7 +4,9 @@ import { KeyRound, Loader2, X } from 'lucide-react'
 import { api } from '../../lib/api.ts'
 import {
   buildRotationMessage,
+  buildVerifierMessage,
   decryptEoaKey,
+  derivePassphraseVerifier,
   encryptEoaKey,
 } from '../../lib/crypto.ts'
 import type { KeyMaterial } from '../../lib/types.ts'
@@ -46,6 +48,36 @@ export function UnlockModal() {
     setError(null)
     try {
       const material = await api.keyMaterial()
+
+      /*
+       * Two ways to establish the same thing, depending on whether this wallet
+       * still has a key to decrypt.
+       *
+       * Before migration, decrypting the ciphertext is itself the proof: AES-GCM
+       * authenticates, so a wrong passphrase fails rather than yielding garbage.
+       * Afterwards there is no ciphertext, and the passphrase is checked against
+       * a verifier derived under a separate domain.
+       */
+      if (!material.encryptedKey || !material.iv) {
+        if (!material.hasVerifier) {
+          throw new Error(
+            'This wallet has migrated but has no passphrase set up. Contact us through the ' +
+              'link in the footer.',
+          )
+        }
+        const verifier = await derivePassphraseVerifier(
+          passphrase,
+          material.salt,
+          material.iterations,
+        )
+        // A 403 from here is a wrong passphrase; anything else is a real fault.
+        await api.verifyPassphrase(verifier).catch(() => {
+          throw new Error('Wrong passphrase')
+        })
+        unlock()
+        return
+      }
+
       const key = await decryptEoaKey(
         passphrase,
         material.encryptedKey,
@@ -61,10 +93,11 @@ export function UnlockModal() {
         throw new Error('Wrong passphrase')
       }
 
-      // Unlock first. The upgrade below is housekeeping and must never be the
+      // Unlock first. Both jobs below are housekeeping and must never be the
       // reason someone cannot get into their own wallet.
       unlock(key)
       void upgradeKdf(material, passphrase, key, account)
+      void ensureVerifier(material, passphrase, account)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Could not unlock'
       setError(message === 'Wrong passphrase' ? 'Wrong passphrase' : message)
@@ -101,8 +134,8 @@ export function UnlockModal() {
         </div>
 
         <p className="mb-5 text-xs leading-relaxed text-slate-400">
-          Your passphrase decrypts the agent wallet key in this browser. The key stays in
-          memory only and is cleared when you refresh the page.
+          Your passphrase confirms it is you before the agent spends anything. It is checked in
+          this browser and is never sent to us.
         </p>
 
         <form onSubmit={submit} className="flex flex-col gap-4">
@@ -124,7 +157,7 @@ export function UnlockModal() {
 
           <button type="submit" className="btn-primary w-full" disabled={!passphrase || busy}>
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-            {busy ? 'Decrypting' : 'Unlock'}
+            {busy ? 'Checking' : 'Unlock'}
           </button>
         </form>
       </div>
@@ -166,5 +199,38 @@ async function upgradeKdf(
     await api.rotateKdf({ ...sealed, signature })
   } catch {
     /* keep the old ciphertext; retried on the next unlock */
+  }
+}
+
+/**
+ * Install a passphrase verifier while the key is still available to sign with.
+ *
+ * Migration deletes the ciphertext, and after that a passphrase has nothing to
+ * be checked against unless this ran first. So it runs on every unlock of an
+ * unmigrated wallet, not only during migration: a user who never migrates loses
+ * nothing, and one who does is already prepared.
+ *
+ * Silent on failure, like the KDF upgrade above. The user is already inside
+ * their wallet, and the next unlock tries again.
+ */
+async function ensureVerifier(
+  material: KeyMaterial,
+  passphrase: string,
+  account: ReturnType<typeof privateKeyToAccount>,
+): Promise<void> {
+  if (material.hasVerifier) return
+
+  try {
+    const verifier = await derivePassphraseVerifier(
+      passphrase,
+      material.salt,
+      material.iterations,
+    )
+    const signature = await account.signMessage({
+      message: buildVerifierMessage({ userId: material.userId, verifier }),
+    })
+    await api.setPassphraseVerifier({ verifier, signature })
+  } catch {
+    /* retried on the next unlock */
   }
 }

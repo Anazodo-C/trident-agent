@@ -24,7 +24,7 @@ const EXAMPLE_PROMPTS = [
 export function AgentTab() {
   const location = useLocation()
   const token = useAuthStore((s) => s.token)
-  const unlockedKey = useAgentStore((s) => s.unlockedKey)
+  const unlocked = useAgentStore((s) => s.unlocked)
   const requestUnlock = useAgentStore((s) => s.requestUnlock)
 
   const store = useTaskStore()
@@ -172,8 +172,7 @@ export function AgentTab() {
       const currentTaskId = useTaskStore.getState().taskId
       if (!currentTaskId || !token) return
 
-      const key = useAgentStore.getState().unlockedKey
-      if (!key) {
+      if (!useAgentStore.getState().unlocked) {
         requestUnlock(() => void runApproved(approvedSteps, budget))
         return
       }
@@ -192,7 +191,7 @@ export function AgentTab() {
 
       try {
         await streamAgentRun(
-          { taskId: currentTaskId, approvedSteps, agentPrivateKey: key, budgetUsdc: budget },
+          { taskId: currentTaskId, approvedSteps, budgetUsdc: budget },
           token,
           handleEvent,
           controller.signal,
@@ -419,7 +418,7 @@ export function AgentTab() {
           onChange={setInput}
           onSubmit={handleSubmit}
           disabled={phase === 'planning' || phase === 'running' || chatPending}
-          locked={!unlockedKey && !canFollowUp}
+          locked={!unlocked && !canFollowUp}
           followUp={canFollowUp}
         />
       </section>

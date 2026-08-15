@@ -104,6 +104,29 @@ export function addressForKey(privateKey: `0x${string}`): string {
  * MUST stay byte-identical to `buildRotationMessage` in the browser's
  * `lib/crypto.ts`, or every rotation fails signature verification.
  */
+/**
+ * The message signed to install a passphrase verifier.
+ *
+ * Same reasoning as buildRotationMessage, and the same threat: a session token
+ * alone must not be enough to set the value that later gates spending, or the
+ * factor it is meant to add would be trivially bypassed by anyone holding a
+ * stolen JWT. A signature recovering to the stored EOA proves the caller
+ * actually decrypted the key, which proves they know the passphrase.
+ *
+ * Binding the verifier into the message stops a captured signature installing a
+ * different one.
+ *
+ * MUST stay byte-identical to `buildVerifierMessage` in the browser's
+ * `lib/crypto.ts`.
+ */
+export function buildVerifierMessage(input: { userId: string; verifier: string }): string {
+  return [
+    'Trident passphrase verifier',
+    `user: ${input.userId}`,
+    `verifier: ${input.verifier}`,
+  ].join('\n')
+}
+
 export function buildRotationMessage(input: {
   userId: string
   encryptedKey: string

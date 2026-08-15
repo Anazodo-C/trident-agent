@@ -409,33 +409,32 @@ export function DocsPage() {
       <Section id="security" heading="Security">
         <Note tag="Read this one" tone="stop">
           <p>
-            <strong>Lose your passphrase and the money is gone.</strong> It is the only thing
-            that can decrypt your agent&apos;s key. There is no reset, no recovery email, and
-            no support process that can get it back, not because we will not but because we
-            cannot.
+            <strong>Trident can spend from your agent&apos;s wallet.</strong> That is what makes
+            an agent able to pay for things while you are not watching, and it is the trade you
+            are making. Your spending cap is the limit, and it is enforced on every call.
           </p>
         </Note>
 
-        <h3 className="doc-h3">Where your key lives, precisely</h3>
+        <h3 className="doc-h3">Where the signing key lives, precisely</h3>
         <p className="doc-p">
-          Your agent&apos;s wallet key is generated at setup, encrypted with a key derived
-          from your passphrase, and stored encrypted. The database file is itself encrypted at
-          rest.
+          Your agent&apos;s wallet is created and held by Circle. The key that signs from it is
+          generated inside Circle&apos;s infrastructure and never exists on your device or on
+          ours.
         </p>
         <ul className="doc-ul">
           <li className="doc-li">
-            <strong>Your passphrase is never stored.</strong> It is used once, at setup, to
-            derive the encryption key, and then discarded.
+            <strong>Nothing we send or receive contains a key.</strong> A payment is a signature
+            Circle produces on our request, and a transfer is a transaction Circle submits.
           </li>
           <li className="doc-li">
-            <strong>Unlocking happens in your browser.</strong> The key is decrypted locally
-            when you enter your passphrase.
+            <strong>This is custody, not self-custody.</strong> There is no key for you to export
+            or to import into another wallet. To hold your own keys, withdraw to a wallet you
+            control.
           </li>
           <li className="doc-li">
-            <strong>The decrypted key is sent to Trident&apos;s server to sign.</strong> Each
-            payment, deposit or withdrawal transmits it over an encrypted connection, uses it
-            in memory for that one operation, and never writes it down. It is filtered out of
-            logs.
+            <strong>Your passphrase confirms it is you.</strong> It is checked in your browser
+            against a value that opens nothing, and it gates spending rather than unlocking a
+            key. We never store the passphrase itself.
           </li>
           <li className="doc-li">
             <strong>Your other wallet is untouched.</strong> Signing in with a wallet produces
@@ -443,15 +442,25 @@ export function DocsPage() {
           </li>
         </ul>
         <p className="doc-p">
-          That third point is worth being plain about: this is not a design where the key
-          never leaves your device. It leaves, in use, for as long as a request takes.
+          This replaced an earlier design where the wallet key was encrypted with your passphrase
+          and sent to our server on every payment. That is worth stating rather than quietly
+          changing: the old arrangement was self-custody but put the key on the network
+          constantly, and the new one keeps the key off the network entirely but puts Trident in
+          a position to spend. Neither is free of risk; they are different risks.
+        </p>
+
+        <h3 className="doc-h3">If you had an account before this change</h3>
+        <p className="doc-p">
+          Wallet shows a one-time move to the new arrangement. It transfers your funds, and it
+          offers you a copy of your original wallet key to keep. That address stays yours, and
+          after the move you will be the only one able to sign for it.
         </p>
 
         <h3 className="doc-h3">Staying unlocked</h3>
         <p className="doc-p">
-          Once you unlock, the key stays in memory for that browser tab and the agent can keep
-          spending up to your cap without asking again. There is no idle timeout. Closing or
-          refreshing the tab clears it. On a shared or unattended machine, close the tab.
+          Once you confirm your passphrase, the agent can keep spending up to your cap without
+          asking again. There is no idle timeout. Closing or refreshing the tab clears it. On a
+          shared or unattended machine, close the tab.
         </p>
       </Section>
 

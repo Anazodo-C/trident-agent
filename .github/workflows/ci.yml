@@ -71,3 +71,45 @@ jobs:
           DB_PATH: ${{ runner.temp }}/ci-status.db
           JWT_SECRET: ci-only-not-a-real-secret
         run: npm run test:status -w @trident/node-backend
+
+      # Which chain a payment settles on and what has to move first. Pure
+      # selection logic, but the alternative to getting it right is not an error
+      # message: it is USDC crossing a bridge it did not need to cross, or a
+      # service called unaffordable while the money sits one chain away.
+      - name: Funding ladder tests
+        env:
+          DB_PATH: ${{ runner.temp }}/ci-funding.db
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: npm run test:funding -w @trident/node-backend
+
+      # How a Circle transaction's terminal state is read, and the chain-key
+      # mapping. Runs without credentials by design. A terminal failure read as
+      # success reports a charge that never happened, and a wrong chain key
+      # sends real USDC to the right address on the wrong network.
+      - name: Circle wallet tests
+        env:
+          DB_PATH: ${{ runner.temp }}/ci-circle.db
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: npm run test:circle -w @trident/node-backend
+
+      # The Gateway burn intent, diffed field by field against the SDK's own.
+      # GatewayClient cannot take a signer, so we rebuild its intent by hand;
+      # EIP-712 hashes a struct in declaration order, so a moved field yields a
+      # signature Circle rejects, or accepts for the wrong destination. Local
+      # only: no credentials, nothing signed, nothing sent.
+      - name: Gateway move tests
+        env:
+          DB_PATH: ${{ runner.temp }}/ci-gateway-moves.db
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: npm run test:gateway-moves -w @trident/node-backend
+
+      # Messages the browser signs and the server verifies exist in both
+      # packages and must stay byte-identical. A signature is over exact bytes,
+      # so one reordered line breaks re-encryption and the passphrase gate for
+      # every user at once, and a comment saying "keep these in sync" enforces
+      # nothing.
+      - name: Cross-package message tests
+        env:
+          DB_PATH: ${{ runner.temp }}/ci-cross-package.db
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: npm run test:cross-package -w @trident/node-backend

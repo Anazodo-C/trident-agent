@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 import db from '../db.ts'
 import { FRONTEND_URL } from '../env.ts'
@@ -8,6 +9,7 @@ import {
   PBKDF2_ITERATIONS,
   PBKDF2_ITERATIONS_LEGACY,
   buildRotationMessage,
+  buildVerifierMessage,
   generateAndEncryptEoa,
 } from '../auth/keySetup.ts'
 import { passphraseProblem } from '../auth/passphrase.ts'
@@ -144,7 +146,16 @@ router.post(
 router.get('/key-material', requireAuth, (req, res) => {
   const user = currentUser(req)
   const row = findUserById(user.id)
-  if (!row?.encrypted_payment_key || !row.payment_key_salt || !row.payment_key_iv) {
+  /*
+   * A migrated wallet has no ciphertext left, only a salt and an iteration
+   * count so the browser can still derive the passphrase verifier. Both are
+   * parameters rather than secrets: a salt is public by design, and there is
+   * nothing remaining for either to decrypt.
+   *
+   * This used to 404 whenever the ciphertext was absent, which after migration
+   * would lock every user out of their own unlock prompt.
+   */
+  if (!row?.payment_key_salt) {
     res.status(404).json({ error: 'No agent wallet has been set up for this account' })
     return
   }
@@ -153,10 +164,13 @@ router.get('/key-material', requireAuth, (req, res) => {
     // Included so the browser can build the rotation message without a second
     // round trip; it is the caller's own id, never anybody else's.
     userId: row.id,
+    /** Null once migrated: there is no key left to decrypt. */
     encryptedKey: row.encrypted_payment_key,
     salt: row.payment_key_salt,
     iv: row.payment_key_iv,
     eoaAddress: row.eoa_address,
+    /** Whether the passphrase can be checked without the ciphertext. */
+    hasVerifier: Boolean(row.passphrase_verifier),
     // The browser must derive with the same count this was encrypted at, not
     // with whatever the current default happens to be.
     iterations: row.kdf_iterations || PBKDF2_ITERATIONS_LEGACY,
@@ -226,6 +240,82 @@ router.post(
     ).run(encryptedKey, salt, iv, iterations, user.id)
 
     res.json({ ok: true, iterations })
+  }),
+)
+
+/* --------------------------------------------------- passphrase verifier */
+
+const VerifierBody = z.object({
+  verifier: z.string().regex(/^[0-9a-f]{64}$/, 'verifier must be 64 lowercase hex chars'),
+  signature: z.string().min(1),
+})
+
+/**
+ * Install the value that will stand in for the passphrase once the wallet key
+ * is gone.
+ *
+ * Gated on a signature from the old EOA, exactly as re-encryption is, because
+ * whoever can set this can later pass the gate it guards. A session token is
+ * not enough on its own: it proves who is asking, not that they know the
+ * passphrase.
+ */
+router.post(
+  '/passphrase-verifier',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const user = currentUser(req)
+    const parsed = VerifierBody.safeParse(req.body)
+    if (!parsed.success) {
+      throw httpError(400, parsed.error.issues[0]?.message ?? 'Invalid request body')
+    }
+    const { verifier, signature } = parsed.data
+
+    const row = findUserById(user.id)
+    if (!row?.eoa_address) throw httpError(404, 'No agent wallet for this account')
+
+    let valid = false
+    try {
+      valid = await verifyMessage({
+        address: row.eoa_address as `0x${string}`,
+        message: buildVerifierMessage({ userId: user.id, verifier }),
+        signature: signature as `0x${string}`,
+      })
+    } catch {
+      valid = false
+    }
+    if (!valid) throw httpError(403, 'Signature does not match this account\u2019s agent wallet')
+
+    db.prepare('UPDATE users SET passphrase_verifier = ? WHERE id = ?').run(verifier, user.id)
+    res.json({ ok: true })
+  }),
+)
+
+/**
+ * Check a passphrase when there is no longer a key to try it against.
+ *
+ * Compared in constant time. A plain === on a secret leaks it a byte at a time
+ * to anyone who can measure the response, and this one is short enough to walk.
+ */
+router.post(
+  '/passphrase-verify',
+  requireAuth,
+  asyncRoute(async (req, res) => {
+    const user = currentUser(req)
+    const parsed = z
+      .object({ verifier: z.string().regex(/^[0-9a-f]{64}$/) })
+      .safeParse(req.body)
+    if (!parsed.success) throw httpError(400, 'Invalid request body')
+
+    const row = findUserById(user.id)
+    const stored = row?.passphrase_verifier
+    if (!stored) throw httpError(409, 'This account has no passphrase verifier set.')
+
+    const a = Buffer.from(stored, 'hex')
+    const b = Buffer.from(parsed.data.verifier, 'hex')
+    const ok = a.length === b.length && timingSafeEqual(a, b)
+    if (!ok) throw httpError(403, 'Wrong passphrase')
+
+    res.json({ ok: true })
   }),
 )
 

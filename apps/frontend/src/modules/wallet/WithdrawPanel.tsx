@@ -12,7 +12,8 @@ import { usdc } from '../../lib/format.ts'
  * The only way funds left before this was spending them. Deposit had a panel,
  * the Gateway panel moved money between the wallet and the Gateway ledger
  * both inside the user's own address, and nothing carried a balance off the
- * platform. For a self-custody product that was the wrong gap to have.
+ * platform. Funds a user cannot get back out are not really theirs, whoever
+ * holds the signing key.
  *
  * It is also the one irreversible action here. A wrong address cannot be
  * undone, so the send button stays disabled until the address parses and the
@@ -50,8 +51,7 @@ export function WithdrawPanel() {
   const ready = addressValid && amountValid && !overBalance && !busy
 
   async function run() {
-    const key = useAgentStore.getState().unlockedKey
-    if (!key) {
+    if (!useAgentStore.getState().unlocked) {
       requestUnlock(() => void run())
       return
     }
@@ -60,14 +60,14 @@ export function WithdrawPanel() {
     setMessage(null)
     try {
       const chain = activeChain ?? undefined
-      const res = await api.withdrawCrypto(toAddress.trim(), amount, key, chain)
+      const res = await api.withdrawCrypto(toAddress.trim(), amount, chain)
       setMessage({
         tone: 'ok',
         text: `Sent ${usdc(amount)} on ${chain ?? 'this network'}. Transaction ${res.txHash.slice(0, 14)}…`,
       })
       setAmount('')
       setToAddress('')
-      void refresh(key, chain)
+      void refresh(chain)
     } catch (err) {
       setMessage({ tone: 'err', text: err instanceof Error ? err.message : 'Withdrawal failed' })
     } finally {
@@ -77,8 +77,7 @@ export function WithdrawPanel() {
 
   /** Bring the shortfall back from Gateway, then let the user send again. */
   async function pullFromGateway() {
-    const key = useAgentStore.getState().unlockedKey
-    if (!key) {
+    if (!useAgentStore.getState().unlocked) {
       requestUnlock(() => void pullFromGateway())
       return
     }
@@ -90,12 +89,12 @@ export function WithdrawPanel() {
       // Only the shortfall, so funds the agent may still need for a payment are
       // left where they are.
       const needed = (parsed - walletUsdc).toFixed(6)
-      await api.gatewayWithdraw(needed, key, chain)
+      await api.gatewayWithdraw(needed, chain)
       setMessage({
         tone: 'ok',
         text: `Moved ${usdc(needed)} out of Gateway into your wallet. Send again to complete.`,
       })
-      void refresh(key, chain)
+      void refresh(chain)
     } catch (err) {
       setMessage({
         tone: 'err',

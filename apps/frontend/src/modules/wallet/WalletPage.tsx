@@ -16,17 +16,18 @@ import { useWalletStore } from '../../store/walletStore.ts'
 import { copyToClipboard, shortAddress, usdc } from '../../lib/format.ts'
 import type { PendingDeposit } from '../../lib/types.ts'
 import { DepositPanel } from './DepositPanel.tsx'
+import { MigrationPanel } from './MigrationPanel.tsx'
 import { WithdrawPanel } from './WithdrawPanel.tsx'
 
 export function WalletPage() {
   const refreshUser = useAuthStore((s) => s.refreshUser)
-  const unlockedKey = useAgentStore((s) => s.unlockedKey)
+  const unlocked = useAgentStore((s) => s.unlocked)
   const { activeChain, depositInfo, loading, error, refresh, refreshAll, setActiveChain } =
     useWalletStore()
 
   useEffect(() => {
-    void refreshAll(unlockedKey ?? undefined)
-  }, [refreshAll, unlockedKey])
+    void refreshAll()
+  }, [refreshAll, unlocked])
 
   const chains = depositInfo?.availableChains ?? []
 
@@ -50,12 +51,12 @@ export function WalletPage() {
         <div>
           <h1 className="font-mono text-lg uppercase tracking-widest text-slate-100">Wallet</h1>
           <p className="mt-2 text-sm text-slate-400">
-            One self-custody address, {networks.length > 1 ? 'on testnet and mainnet' : 'on testnet'}.
+            One agent address, {networks.length > 1 ? 'on testnet and mainnet' : 'on testnet'}.
           </p>
         </div>
         <button
           className="btn-ghost"
-          onClick={() => refreshAll(unlockedKey ?? undefined)}
+          onClick={() => refreshAll()}
           disabled={loading}
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -83,7 +84,7 @@ export function WalletPage() {
                 setActiveChain(n.chain)
                 // Read that network now rather than showing a stale figure
                 // until the next refresh.
-                void refresh(unlockedKey ?? undefined, n.chain)
+                void refresh(n.chain)
               }}
               className={`badge px-3 py-1.5 transition-colors ${
                 n.chain === activeChain
@@ -101,6 +102,7 @@ export function WalletPage() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
+        <MigrationPanel />
         <BalancePanel />
         <DepositPanel />
         <WithdrawPanel />
@@ -366,7 +368,7 @@ function Row({ label, value, dim }: { label: string; value: string; dim?: boolea
 }
 
 function GatewayPanel() {
-  const unlockedKey = useAgentStore((s) => s.unlockedKey)
+  const unlocked = useAgentStore((s) => s.unlocked)
   const requestUnlock = useAgentStore((s) => s.requestUnlock)
   const refreshAll = useWalletStore((s) => s.refreshAll)
   const notePendingDeposit = useWalletStore((s) => s.notePendingDeposit)
@@ -379,8 +381,7 @@ function GatewayPanel() {
   const [message, setMessage] = useState<{ tone: 'ok' | 'err'; text: string } | null>(null)
 
   async function run(kind: 'deposit' | 'withdraw') {
-    const key = useAgentStore.getState().unlockedKey
-    if (!key) {
+    if (!useAgentStore.getState().unlocked) {
       requestUnlock(() => void run(kind))
       return
     }
@@ -398,8 +399,8 @@ function GatewayPanel() {
 
       const res =
         kind === 'deposit'
-          ? await api.gatewayDeposit(amount, key, chain)
-          : await api.gatewayWithdraw(amount, key, chain)
+          ? await api.gatewayDeposit(amount, chain)
+          : await api.gatewayWithdraw(amount, chain)
 
       if (kind === 'deposit' && chain) {
         // The transfer is on chain, but Gateway will not count it until the
@@ -423,7 +424,7 @@ function GatewayPanel() {
       })
       if (kind === 'deposit') setDepositAmount('')
       else setWithdrawAmount('')
-      void refreshAll(key)
+      void refreshAll()
     } catch (err) {
       setMessage({ tone: 'err', text: err instanceof Error ? err.message : 'Transaction failed' })
     } finally {
@@ -478,7 +479,7 @@ function GatewayPanel() {
         />
       </div>
 
-      {!unlockedKey && (
+      {!unlocked && (
         <p className="mt-4 text-xs text-slate-500">
           You will be asked to unlock your wallet before the transaction is signed.
         </p>

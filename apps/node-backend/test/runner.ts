@@ -217,6 +217,20 @@ function urlStep(url: string, method: 'GET' | 'POST', params: Record<string, unk
   }
 }
 
+/*
+ * A wallet reference, not a wallet.
+ *
+ * These tests never sign anything: every path they exercise stops short of a
+ * Circle call, which is the point of them running without credentials. The id
+ * is deliberately obvious so a test that unexpectedly reaches the network fails
+ * loudly rather than against something that looks real.
+ */
+const TEST_WALLET = {
+  walletId: 'test-wallet-never-signs',
+  address: '0x0000000000000000000000000000000000000001' as `0x${string}`,
+  env: 'testnet' as const,
+}
+
 async function main(): Promise<void> {
   console.log('\x1b[1mTrident runner tests\x1b[0m\n')
   const key = generatePrivateKey()
@@ -747,7 +761,7 @@ async function main(): Promise<void> {
       goal: 'test goal',
       steps,
       completed: new Map(),
-      agentPrivateKey: key,
+      walletFor: () => TEST_WALLET,
       budgetUsdc: 0.001,
       spendingCapUsdc: 100,
       policy: TEST_POLICY,
@@ -776,7 +790,7 @@ async function main(): Promise<void> {
       goal: 'test goal',
       steps,
       completed: new Map(),
-      agentPrivateKey: key,
+      walletFor: () => TEST_WALLET,
       // No per-run budget: the account-level cap must still stop it.
       budgetUsdc: null,
       spendingCapUsdc: 0.001,
@@ -816,7 +830,7 @@ async function main(): Promise<void> {
       goal: 'test goal',
       steps,
       completed: new Map(),
-      agentPrivateKey: key,
+      walletFor: () => TEST_WALLET,
       budgetUsdc: null,
       spendingCapUsdc: 100,
       policy: TEST_POLICY,
@@ -853,7 +867,7 @@ async function main(): Promise<void> {
       goal: 'test goal',
       steps,
       completed: new Map(),
-      agentPrivateKey: key,
+      walletFor: () => TEST_WALLET,
       budgetUsdc: null,
       spendingCapUsdc: 100,
       policy: TEST_POLICY,
@@ -884,7 +898,7 @@ async function main(): Promise<void> {
       goal: 'test goal',
       steps,
       completed: new Map(),
-      agentPrivateKey: key,
+      walletFor: () => TEST_WALLET,
       budgetUsdc: null,
       spendingCapUsdc: 100,
       policy: TEST_POLICY,
@@ -900,16 +914,32 @@ async function main(): Promise<void> {
     )
     check('stream is closed', fake.ended())
 
-    // The single most important property: the key must never reach the wire.
+    /*
+     * The single most important property, and the reason the runner stopped
+     * taking a private key at all.
+     *
+     * This used to check for one specific key it had been handed. Now that the
+     * runner is never given one, that check would pass whatever the code did,
+     * so it asks the stronger question instead: does anything key-shaped appear
+     * anywhere in the stream? A 32-byte hex run is what a private key looks
+     * like, and nothing the agent legitimately emits has that shape. Transaction
+     * hashes are also 32 bytes, so they are excluded by their 0x prefix being
+     * reported as `txRef` rather than bare.
+     */
     const raw = fake.raw()
-    check('private key never appears in the stream', !raw.includes(key.slice(2)))
+    const keyShaped = raw.match(/(?<![0-9a-fA-Fx])[0-9a-fA-F]{64}(?![0-9a-fA-F])/g) ?? []
+    check(`nothing key-shaped in the stream (found ${keyShaped.length})`, keyShaped.length === 0)
+
+    // Belt and braces: the key this test generated is not on the wire either,
+    // which would catch a leak through a path the shape check somehow misses.
+    check('the generated key never appears in the stream', !raw.includes(key.slice(2)))
 
     const persisted = db
       .prepare('SELECT response_summary FROM task_steps WHERE task_id = ?')
       .all(taskId) as { response_summary: string | null }[]
     check(
-      'private key never persisted to the database',
-      persisted.every((r) => !(r.response_summary ?? '').includes(key.slice(2))),
+      'nothing key-shaped persisted to the database',
+      persisted.every((r) => !/(?<![0-9a-fA-Fx])[0-9a-fA-F]{64}(?![0-9a-fA-F])/.test(r.response_summary ?? '')),
     )
   }
 
@@ -937,7 +967,7 @@ async function main(): Promise<void> {
       goal: 'test goal',
       steps,
       completed: new Map(),
-      agentPrivateKey: key,
+      walletFor: () => TEST_WALLET,
       budgetUsdc: null,
       spendingCapUsdc: 100,
       policy: TEST_POLICY,
@@ -1008,7 +1038,7 @@ async function main(): Promise<void> {
       goal: 'test goal',
       steps,
       completed,
-      agentPrivateKey: key,
+      walletFor: () => TEST_WALLET,
       budgetUsdc: null,
       spendingCapUsdc: 100,
       policy: TEST_POLICY,

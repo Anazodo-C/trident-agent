@@ -204,6 +204,51 @@ function addColumnIfMissing(table: string, column: string, definition: string): 
 
 addColumnIfMissing('users', 'mainnet_enabled', 'INTEGER DEFAULT 0')
 addColumnIfMissing('users', 'mainnet_chain', "TEXT DEFAULT 'BASE'")
+
+/*
+ * The Circle wallet that replaces holding this user's private key.
+ *
+ * `circle_wallet_id` is what signing calls address; `circle_wallet_address` is
+ * the same address on every EVM chain, so it plays the role eoa_address used
+ * to. Both null until the user is provisioned or migrated.
+ *
+ * The old key columns stay for now. A user is only migrated once their funds
+ * have actually moved and they have been offered the old key back, and
+ * dropping the ciphertext before that point would strand anything left at the
+ * old address with no way to ever sign for it. They are removed in a follow-up,
+ * after every row has migrated.
+ */
+addColumnIfMissing('users', 'circle_wallet_id', 'TEXT')
+addColumnIfMissing('users', 'circle_wallet_address', 'TEXT')
+/*
+ * A second wallet, because Circle has a second environment.
+ *
+ * Sandbox and production are separate account spaces, so one wallet cannot act
+ * on both Arc Testnet and Base. The pair above is the production wallet, this
+ * pair is the sandbox one, and the two have different addresses. That is not a
+ * flaw to paper over: a testnet address and a mainnet address were never the
+ * same account, they only looked like it while one key signed for both.
+ */
+addColumnIfMissing('users', 'circle_wallet_id_testnet', 'TEXT')
+addColumnIfMissing('users', 'circle_wallet_address_testnet', 'TEXT')
+/*
+ * How far this user's migration got, so a sweep that dies part way resumes
+ * instead of restarting. Restarting is not merely wasteful: re-running a
+ * transfer that already landed is how one balance gets sent twice.
+ *
+ * null = never started, then 'provisioned', 'gateway-withdrawn', 'swept',
+ * 'complete'. Only 'complete' means the old key material may be deleted.
+ */
+addColumnIfMissing('users', 'migration_state', 'TEXT')
+/*
+ * Proof the user knows their passphrase, once there is no key left to decrypt.
+ *
+ * Not key material and not a password: a PBKDF2 value derived under a separate
+ * domain, so it reveals nothing about the AES key that protected the wallet.
+ * Installing one requires a signature from the old EOA, so a stolen session
+ * cannot set its own and walk through the gate.
+ */
+addColumnIfMissing('users', 'passphrase_verifier', 'TEXT')
 addColumnIfMissing('services', 'source', "TEXT DEFAULT 'x402'")
 // Verification transfer hash for free-API calls, alongside the x402 tx_ref.
 addColumnIfMissing('task_steps', 'verification_tx', 'TEXT')
@@ -319,6 +364,17 @@ export interface UserRow {
   kdf_iterations: number
   mainnet_enabled: number
   mainnet_chain: string
+  /** Production Circle wallet, for mainnet chains. Null until provisioned. */
+  circle_wallet_id: string | null
+  /** Its address, the same on every mainnet EVM chain. */
+  circle_wallet_address: string | null
+  /** Sandbox Circle wallet, for testnet chains. A different address. */
+  circle_wallet_id_testnet: string | null
+  circle_wallet_address_testnet: string | null
+  /** null | 'provisioned' | 'gateway-withdrawn' | 'swept' | 'complete' */
+  migration_state: string | null
+  /** Hex PBKDF2 value proving passphrase knowledge. Never key material. */
+  passphrase_verifier: string | null
   created_at: number
 }
 

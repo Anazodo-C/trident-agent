@@ -4,8 +4,6 @@ import type { PlanStep } from './types.ts'
 export interface RunPayload {
   taskId: string
   approvedSteps: PlanStep[]
-  /** EOA key, sent in the POST body only. Never place this in a URL. */
-  agentPrivateKey: string
   budgetUsdc: number | null
 }
 
@@ -26,8 +24,11 @@ export type AgentEventName =
 /**
  * SSE over POST.
  *
- * `EventSource` is deliberately not used: it only issues GET requests, which
- * would force the private key into a query string.
+ * `EventSource` is deliberately not used, though the original reason is gone:
+ * it only issues GET requests, which used to mean putting the private key in a
+ * query string. There is no key any more, but two reasons remain. EventSource
+ * cannot set an Authorization header, and the approved plan is an array too
+ * large to belong in a URL.
  */
 export async function streamAgentRun(
   payload: RunPayload,

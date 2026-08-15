@@ -226,49 +226,120 @@ export const api = {
   // `chain` is optional everywhere and defaults to testnet server-side. It is
   // validated against the account's policy, so asking for mainnet without
   // opting in is a 403 rather than a silent testnet operation.
-  balance: (agentPrivateKey?: string, chain?: string) =>
-    agentPrivateKey
-      ? request<WalletBalance>('/api/wallet/balance', {
-          method: 'POST',
-          body: JSON.stringify({ agentPrivateKey, ...(chain ? { chain } : {}) }),
-        })
-      : request<WalletBalance>(
-          `/api/wallet/balance${chain ? `?chain=${encodeURIComponent(chain)}` : ''}`,
-        ),
+  /*
+   * One shape now, where there used to be two.
+   *
+   * The POST variant existed only because a browser cannot attach a body to a
+   * GET, and the Gateway balance was thought to need the private key in one.
+   * It never did: a balance is public state, readable from the address alone.
+   */
+  balance: (chain?: string) =>
+    request<WalletBalance>(
+      `/api/wallet/balance${chain ? `?chain=${encodeURIComponent(chain)}` : ''}`,
+    ),
 
   depositInfo: (chain?: string) =>
     request<DepositInfo>(
       `/api/wallet/deposit-address${chain ? `?chain=${encodeURIComponent(chain)}` : ''}`,
     ),
 
-  gatewayDeposit: (amount: string, agentPrivateKey: string, chain?: string) =>
+  /*
+   * The session identifies the wallet, so these carry an amount and nothing
+   * else that matters. They used to carry the plaintext private key on every
+   * call, which is the whole reason this migration happened.
+   */
+  gatewayDeposit: (amount: string, chain?: string) =>
     request<{ success: boolean; depositTxHash: string; newGatewayBalance: string }>(
       '/api/wallet/gateway/deposit',
-      { method: 'POST', body: JSON.stringify({ amount, agentPrivateKey, ...(chain ? { chain } : {}) }) },
+      { method: 'POST', body: JSON.stringify({ amount, ...(chain ? { chain } : {}) }) },
     ),
 
-  gatewayWithdraw: (amount: string, agentPrivateKey: string, chain?: string) =>
+  gatewayWithdraw: (amount: string, chain?: string) =>
     request<{ success: boolean; mintTxHash: string; newGatewayBalance: string }>(
       '/api/wallet/gateway/withdraw',
-      { method: 'POST', body: JSON.stringify({ amount, agentPrivateKey, ...(chain ? { chain } : {}) }) },
+      { method: 'POST', body: JSON.stringify({ amount, ...(chain ? { chain } : {}) }) },
     ),
 
-  withdrawCrypto: (toAddress: string, amount: string, agentPrivateKey: string, chain?: string) =>
+  withdrawCrypto: (toAddress: string, amount: string, chain?: string) =>
     request<{ txHash: string; explorerBase: string | null }>('/api/wallet/withdraw/crypto', {
       method: 'POST',
-      body: JSON.stringify({ toAddress, amount, agentPrivateKey, ...(chain ? { chain } : {}) }),
+      body: JSON.stringify({ toAddress, amount, ...(chain ? { chain } : {}) }),
     }),
 
-  bridge: (payload: {
-    fromChain: string
-    toChain: string
-    amount: string
-    agentPrivateKey: string
-  }) =>
-    request<{ state: string; txHash: string | null; estimatedArrivalSeconds: number }>(
-      '/api/wallet/bridge',
-      { method: 'POST', body: JSON.stringify(payload) },
-    ),
+  /**
+   * Prove the passphrase when there is no ciphertext left to try it against.
+   *
+   * The verifier is a password-equivalent, not a signing key: passing this gate
+   * does not move money, it only satisfies the confirmation the UI asks for
+   * before it will.
+   */
+  verifyPassphrase: (verifier: string) =>
+    request<{ ok: boolean }>('/auth/passphrase-verify', {
+      method: 'POST',
+      body: JSON.stringify({ verifier }),
+    }),
+
+  /** Install a verifier. Requires a signature from the wallet being retired. */
+  setPassphraseVerifier: (payload: { verifier: string; signature: string }) =>
+    request<{ ok: boolean }>('/auth/passphrase-verifier', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  /* ------------------------------------------------------------ migration */
+
+  migrationStatus: () =>
+    request<{
+      state: string | null
+      oldAddress: string | null
+      newAddress: string | null
+      newTestnetAddress: string | null
+      hasVerifier: boolean
+      keyStillAvailable: boolean
+      remaining: { walletByChain: { chain: string; usdc: string }[]; gatewayUsdc: string }
+    }>('/api/wallet/migrate/status'),
+
+  /** Provisions a wallet per Circle environment the account needs. */
+  migrateProvision: () =>
+    request<{
+      address: string | null
+      testnetAddress: string | null
+      created: string[]
+      missing: string[]
+    }>('/api/wallet/migrate/provision', { method: 'POST' }),
+
+  /**
+   * Ask the server what to sign.
+   *
+   * The intent is built and held server-side rather than composed here, so the
+   * browser cannot choose the recipient of its own withdrawal.
+   */
+  migrateGatewayIntent: (chain: string, amountUsdc: string) =>
+    request<{ typedData: Record<string, unknown> }>('/api/wallet/migrate/gateway-intent', {
+      method: 'POST',
+      body: JSON.stringify({ chain, amountUsdc }),
+    }),
+
+  migrateGatewayTransfer: (signature: string) =>
+    request<{ mintTxHash: string }>('/api/wallet/migrate/gateway-transfer', {
+      method: 'POST',
+      body: JSON.stringify({ signature }),
+    }),
+
+  migrateOldBalance: (chain: string) =>
+    request<{
+      chain: string
+      usdc: string
+      usdcAtomic: string
+      nativeWei: string
+      usdcAddress: string
+      chainId: number
+      rpcUrl: string
+      newAddress: string | null
+    }>(`/api/wallet/migrate/old-balance?chain=${encodeURIComponent(chain)}`),
+
+  migrateComplete: () =>
+    request<{ ok: boolean }>('/api/wallet/migrate/complete', { method: 'POST' }),
 
   setSpendingCap: (cap: number) =>
     request<{ ok: boolean; newCap: number; user: User }>('/api/wallet/user/spending-cap', {

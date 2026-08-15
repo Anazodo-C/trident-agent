@@ -1,7 +1,6 @@
 import { Router, type RequestHandler } from 'express'
 import { z } from 'zod'
-import { createPublicClient, createWalletClient, http, erc20Abi, parseUnits, isAddress, formatEther } from 'viem'
-import { privateKeyToAccount } from 'viem/accounts'
+import { createPublicClient, http, erc20Abi, parseUnits, isAddress, formatEther } from 'viem'
 import db from '../db.ts'
 import { asyncRoute, httpError } from '../http.ts'
 import { currentUser, requireAuth } from '../auth/jwt.ts'
@@ -10,9 +9,7 @@ import { publicUser } from './auth.ts'
 import {
   chainConfig,
   chainLabel,
-  gatewayClientFor,
   readOnlyGatewayClient,
-  resolveChain,
   rpcUrlFor,
   strictChain,
   safeErrorMessage,
@@ -20,10 +17,10 @@ import {
   walletUsdcByChain,
   spendableTotalUsdc,
 } from '../circle/gatewayService.ts'
-import { bridge, bridgeChainOptions, estimateBridge } from '../circle/bridgeService.ts'
-import { isValidPrivateKey } from '../auth/keySetup.ts'
 import { GATEWAY_MAINNET_CHAINS, policyFor } from '../circle/chainPolicy.ts'
 import { canBridgeTo } from '../circle/deployments.ts'
+import { executeContract, walletForChain } from '../circle/circleWallets.ts'
+import { depositToGateway, withdrawFromGateway } from '../circle/gatewayMoves.ts'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import type { UserRow } from '../db.ts'
 
@@ -90,24 +87,15 @@ const AmountString = z
   .regex(/^\d+(\.\d{1,6})?$/, 'amount must be a decimal string with at most 6 dp')
   .refine((v) => Number(v) > 0, 'amount must be greater than zero')
 
-const KeyString = z.string().refine(isValidPrivateKey, 'agentPrivateKey must be 0x + 64 hex chars')
-
-/** Confirm the supplied key actually controls this account's agent wallet. */
-function assertKeyMatchesUser(userId: string, key: `0x${string}`): string {
-  const row = findUserById(userId)
-  if (!row?.eoa_address) throw httpError(409, 'No agent wallet has been set up for this account')
-  const derived = privateKeyToAccount(key).address
-  if (derived.toLowerCase() !== row.eoa_address.toLowerCase()) {
-    throw httpError(403, 'This key does not match your agent wallet')
-  }
-  return row.eoa_address
-}
 
 /**
- * GET returns the keyless view (on-chain wallet USDC + gas).
- * POST accepts `{ agentPrivateKey }` and additionally resolves the Gateway
- * balance — a browser cannot attach a body to a GET, so the key-bearing variant
- * has to be its own method.
+ * Balances for this account, on the requested chain.
+ *
+ * GET and POST both work and both do the same thing now. They used to differ
+ * because the Gateway balance needed a private key in a body and a browser
+ * cannot attach one to a GET. Reading a Gateway balance never actually required
+ * the key, only the address, so the distinction is gone; both methods are kept
+ * so existing callers do not break.
  */
 router.all(
   '/balance',
@@ -128,7 +116,14 @@ router.all(
         : null)
     const chain = walletChain(row, requestedChain)
     const config = chainConfig(chain)
-    const address = row.eoa_address as `0x${string}`
+    /*
+     * The Circle wallet once there is one, the old EOA until then.
+     *
+     * A user part way through migration still holds funds at the old address,
+     * and showing them a zero balance because we read only the new one would
+     * look exactly like their money had vanished.
+     */
+    const address = (row.circle_wallet_address ?? row.eoa_address) as `0x${string}`
 
     const publicClient = createPublicClient({
       chain: config.chain,
@@ -251,7 +246,6 @@ function formatUnitsFixed(value: bigint, decimals: number): string {
 
 const GatewayAmountBody = z.object({
   amount: AmountString,
-  agentPrivateKey: KeyString,
   /** Omit for testnet. Validated against the account's chain policy. */
   chain: z.string().optional(),
 })
@@ -264,20 +258,18 @@ router.post(
     const parsed = GatewayAmountBody.safeParse(req.body)
     if (!parsed.success) throw httpError(400, parsed.error.issues[0]?.message ?? 'Invalid body')
 
-    const key = parsed.data.agentPrivateKey as `0x${string}`
-    assertKeyMatchesUser(user.id, key)
-
     const row = findUserById(user.id)!
-    const client = gatewayClientFor(key, walletChain(row, parsed.data.chain))
+    const chain = walletChain(row, parsed.data.chain)
+    const wallet = walletForChain(row, chain)
 
     try {
-      const result = await client.deposit(parsed.data.amount)
-      const balances = await client.getBalances()
+      const result = await depositToGateway(wallet, chain, parsed.data.amount)
+      const balances = await readOnlyGatewayClient(chain).getBalances(wallet.address)
       res.json({
         success: true,
         depositTxHash: result.depositTxHash,
-        approvalTxHash: result.approvalTxHash ?? null,
-        amount: result.formattedAmount,
+        approvalTxHash: result.approvalTxHash,
+        amount: result.amountUsdc,
         newGatewayBalance: balances.gateway.formattedTotal,
       })
     } catch (err) {
@@ -294,20 +286,18 @@ router.post(
     const parsed = GatewayAmountBody.safeParse(req.body)
     if (!parsed.success) throw httpError(400, parsed.error.issues[0]?.message ?? 'Invalid body')
 
-    const key = parsed.data.agentPrivateKey as `0x${string}`
-    assertKeyMatchesUser(user.id, key)
-
     const row = findUserById(user.id)!
-    const client = gatewayClientFor(key, walletChain(row, parsed.data.chain))
+    const chain = walletChain(row, parsed.data.chain)
+    const wallet = walletForChain(row, chain)
 
     try {
       // Same-chain withdrawal is instant; no 7-day trustless path involved.
-      const result = await client.withdraw(parsed.data.amount)
-      const balances = await client.getBalances()
+      const result = await withdrawFromGateway(wallet, chain, { amountUsdc: parsed.data.amount })
+      const balances = await readOnlyGatewayClient(chain).getBalances(wallet.address)
       res.json({
         success: true,
         mintTxHash: result.mintTxHash,
-        amount: result.formattedAmount,
+        amount: result.amountUsdc,
         newGatewayBalance: balances.gateway.formattedTotal,
         newWalletUsdc: balances.wallet.formatted,
       })
@@ -320,7 +310,6 @@ router.post(
 const CryptoWithdrawBody = z.object({
   toAddress: z.string().refine(isAddress, 'toAddress must be a valid EVM address'),
   amount: AmountString,
-  agentPrivateKey: KeyString,
   chain: z.string().optional(),
 })
 
@@ -332,34 +321,24 @@ router.post(
     const parsed = CryptoWithdrawBody.safeParse(req.body)
     if (!parsed.success) throw httpError(400, parsed.error.issues[0]?.message ?? 'Invalid body')
 
-    const key = parsed.data.agentPrivateKey as `0x${string}`
-    assertKeyMatchesUser(user.id, key)
-
     const row = findUserById(user.id)!
     const chain = walletChain(row, parsed.data.chain)
+    const wallet = walletForChain(row, chain)
     const config = chainConfig(chain)
-    const account = privateKeyToAccount(key)
-
-    const walletClient = createWalletClient({
-      account,
-      chain: config.chain,
-      transport: http(rpcUrlFor(chain)),
-    })
-    const publicClient = createPublicClient({
-      chain: config.chain,
-      transport: http(rpcUrlFor(chain)),
-    })
 
     try {
       const value = parseUnits(parsed.data.amount, USDC_DECIMALS)
-      const { request } = await publicClient.simulateContract({
-        account,
-        address: config.usdc,
-        abi: erc20Abi,
-        functionName: 'transfer',
-        args: [parsed.data.toAddress as `0x${string}`, value],
+      /*
+       * `executeContract` estimates before it submits, which is what
+       * `simulateContract` was doing here: refuse a transfer that cannot
+       * succeed rather than spend gas discovering it.
+       */
+      const { txHash } = await executeContract({
+        wallet,
+        contractAddress: config.usdc,
+        abiFunctionSignature: 'transfer(address,uint256)',
+        abiParameters: [parsed.data.toAddress, value.toString()],
       })
-      const txHash = await walletClient.writeContract(request)
       res.json({ txHash, explorerBase: config.chain.blockExplorers?.default.url ?? null })
     } catch (err) {
       throw httpError(502, `Withdrawal failed: ${safeErrorMessage(err)}`)
@@ -367,57 +346,19 @@ router.post(
   }),
 )
 
-const BridgeBody = z.object({
-  fromChain: z.string().min(1),
-  toChain: z.string().min(1),
-  amount: AmountString,
-  agentPrivateKey: KeyString,
-  toAddress: z.string().refine(isAddress, 'toAddress must be a valid EVM address').optional(),
-})
+/*
+ * The manual bridge routes are gone.
+ *
+ * They went through BridgeKit, whose `bridge()` takes a `fromPrivateKey` and
+ * accepts only testnet chain labels, so on mainnet they could return nothing
+ * but a 400. Their only caller was the deposit panel's manual move, which was
+ * removed once that was established. Keeping a key-accepting endpoint alive for
+ * a flow that cannot work is the exact surface this change exists to close.
+ *
+ * Cross-chain movement now happens through TridentCctpRouter, which the agent
+ * drives itself at payment time.
+ */
 
-router.post(
-  '/bridge',
-  requireAuth,
-  asyncRoute(async (req, res) => {
-    const user = currentUser(req)
-    const parsed = BridgeBody.safeParse(req.body)
-    if (!parsed.success) throw httpError(400, parsed.error.issues[0]?.message ?? 'Invalid body')
-
-    const key = parsed.data.agentPrivateKey as `0x${string}`
-    assertKeyMatchesUser(user.id, key)
-
-    const result = await bridge({
-      fromChain: parsed.data.fromChain,
-      toChain: parsed.data.toChain,
-      amount: parsed.data.amount,
-      fromPrivateKey: key,
-      ...(parsed.data.toAddress ? { toAddress: parsed.data.toAddress } : {}),
-    })
-    res.json(result)
-  }),
-)
-
-router.post(
-  '/bridge/estimate',
-  requireAuth,
-  asyncRoute(async (req, res) => {
-    const user = currentUser(req)
-    const parsed = BridgeBody.omit({ toAddress: true }).safeParse(req.body)
-    if (!parsed.success) throw httpError(400, parsed.error.issues[0]?.message ?? 'Invalid body')
-
-    const key = parsed.data.agentPrivateKey as `0x${string}`
-    assertKeyMatchesUser(user.id, key)
-
-    res.json(
-      await estimateBridge({
-        fromChain: parsed.data.fromChain,
-        toChain: parsed.data.toChain,
-        amount: parsed.data.amount,
-        fromPrivateKey: key,
-      }),
-    )
-  }),
-)
 
 router.get('/deposit-address', requireAuth, (req, res) => {
   const row = findUserById(currentUser(req).id)
@@ -444,7 +385,6 @@ router.get('/deposit-address', requireAuth, (req, res) => {
       chainId: chainConfig(c).chain.id,
       isTestnet: chainConfig(c).chain.testnet === true,
     })),
-    bridgeChains: bridgeChainOptions(),
     /**
      * ASSUMPTION #6 resolved: Circle exposes no public API for minting a fiat
      * onramp URL against an arbitrary destination address. On testnet the

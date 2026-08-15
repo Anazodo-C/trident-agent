@@ -3,7 +3,6 @@ import { generatePrivateKey } from 'viem/accounts'
 import { createPublicClient, http, erc20Abi } from 'viem'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import { httpError } from '../http.ts'
-import { isValidPrivateKey } from '../auth/keySetup.ts'
 
 export const DEFAULT_CHAIN: SupportedChainName = 'arcTestnet'
 
@@ -76,25 +75,17 @@ export function rpcUrlFor(chain: SupportedChainName = DEFAULT_CHAIN): string {
   return url
 }
 
-/**
- * Build a GatewayClient for a user-supplied EOA key.
+/*
+ * `gatewayClientFor` lived here and is gone.
  *
- * The key is validated structurally first so a malformed value fails here with a
- * clean 400 rather than deep inside the SDK, where the message could echo it back.
+ * It was the last constructor in the backend that took a user's private key,
+ * and it existed only because GatewayClient demands one. Deposits, withdrawals
+ * and payments all go through the Circle wallet now, so nothing needs it, and
+ * leaving a key-accepting factory in place would be an open door to a room we
+ * no longer keep anything in. `readOnlyGatewayClient` below is unaffected: it
+ * invents a throwaway key purely to satisfy the constructor for reads.
  */
-export function gatewayClientFor(
-  agentPrivateKey: unknown,
-  chain: SupportedChainName = DEFAULT_CHAIN,
-): GatewayClient {
-  if (!isValidPrivateKey(agentPrivateKey)) {
-    throw httpError(400, 'agentPrivateKey must be a 0x-prefixed 32-byte hex string')
-  }
-  return new GatewayClient({
-    chain,
-    privateKey: agentPrivateKey,
-    rpcUrl: rpcUrlFor(chain),
-  })
-}
+
 
 export interface LiveQuote {
   /** Exactly what the endpoint asks for, in USDC atomic units. */

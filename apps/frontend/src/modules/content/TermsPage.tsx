@@ -119,7 +119,7 @@ export function TermsPage() {
             anything in that wallet.
           </li>
           <li>
-            You choose a passphrase. It encrypts your agent&apos;s wallet key, and it never
+            You choose a passphrase. It confirms that it is you before the agent spends, and it never
             reaches us in a form we retain.
           </li>
           <li>
@@ -138,26 +138,37 @@ export function TermsPage() {
       <Section id="wallet" heading="The agent wallet" numbered>
         <ol className="doc-sub">
           <li>
-            When you set a passphrase, Trident generates a new wallet for your agent and
-            encrypts its key with a key derived from that passphrase.
+            Your agent&apos;s wallet is created and held by Circle, a regulated payments company.
+            The key that signs from it is generated inside Circle&apos;s infrastructure and never
+            exists on your device or ours.
           </li>
           <li>
-            We store that encrypted key. <strong>We cannot decrypt it</strong>, because we do
-            not have your passphrase, and we cannot move your funds.
+            <strong>We can move your funds.</strong> Trident holds credentials that authorise
+            Circle to sign for your wallet, so a payment happens because we ask for it. We only
+            ask when you have approved a plan or pressed a button, and your spending cap is
+            enforced on every call, but you should choose to use Trident knowing this rather
+            than believing otherwise.
           </li>
           <li>
-            To make a payment, the key is decrypted in your browser and sent to our server over
-            an encrypted connection to sign that transaction. It is used in memory for that
-            operation and never stored in readable form.
+            This is custody. It is not self-custody, and there is no key for you to export or
+            import elsewhere. If you want to hold your own keys, withdraw your funds to a wallet
+            you control.
           </li>
           <li>
             The funds in that wallet are yours. You can withdraw them to any address at any
             time, and nothing in these terms gives us a claim over them.
           </li>
+          <li>
+            Accounts created before this change had a wallet whose key was encrypted with your
+            passphrase. Moving to the new arrangement is a one-time step in Wallet, and it offers
+            you a copy of that original key to keep. That address remains yours and only you will
+            be able to sign for it afterwards.
+          </li>
         </ol>
         <p className="doc-plainly">
-          <strong>Plainly:</strong> we hold a locked box we cannot open. You hold the only key,
-          and if you lose it the box stays shut forever.
+          <strong>Plainly:</strong> we can spend from your agent&apos;s wallet, within the limits
+          you set. That is the trade for an agent that can pay for things while you are not
+          watching. If that is not a trade you want to make, do not keep funds here.
         </p>
       </Section>
 

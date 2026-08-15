@@ -1,8 +1,7 @@
-import { createPublicClient, createWalletClient, erc20Abi, http, parseUnits } from 'viem'
-import { privateKeyToAccount } from 'viem/accounts'
+import { parseUnits } from 'viem'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
-import { chainConfig, rpcUrlFor, safeErrorMessage } from './gatewayService.ts'
-import { isValidPrivateKey } from '../auth/keySetup.ts'
+import { chainConfig, safeErrorMessage } from './gatewayService.ts'
+import { executeContract, type AgentWallet } from './circleWallets.ts'
 import { optional } from '../env.ts'
 
 /**
@@ -47,32 +46,23 @@ export interface VerificationReceipt {
  * Throws when the wallet cannot pay — which is the point: it is the gate that
  * stops an unfunded wallet from calling free APIs.
  */
-export async function payVerification(
-  agentPrivateKey: string,
-): Promise<VerificationReceipt> {
-  if (!isValidPrivateKey(agentPrivateKey)) {
-    throw new Error('agentPrivateKey must be a 0x-prefixed 32-byte hex string')
-  }
-
+export async function payVerification(wallet: AgentWallet): Promise<VerificationReceipt> {
   const config = chainConfig(VERIFICATION_CHAIN)
-  const account = privateKeyToAccount(agentPrivateKey)
-  const to = (SINK_ADDRESS || account.address) as `0x${string}`
-
-  const transport = http(rpcUrlFor(VERIFICATION_CHAIN))
-  const publicClient = createPublicClient({ chain: config.chain, transport })
-  const walletClient = createWalletClient({ account, chain: config.chain, transport })
+  const to = (SINK_ADDRESS || wallet.address) as `0x${string}`
 
   try {
     const value = parseUnits(String(VERIFICATION_AMOUNT_USDC), USDC_DECIMALS)
-    // Simulate first so an unfunded wallet fails before a transaction is signed.
-    const { request } = await publicClient.simulateContract({
-      account,
-      address: config.usdc,
-      abi: erc20Abi,
-      functionName: 'transfer',
-      args: [to, value],
+    /*
+     * `executeContract` estimates before submitting, which serves the purpose
+     * `simulateContract` served here: an unfunded wallet fails before anything
+     * is signed, which is the whole point of this gate.
+     */
+    const { txHash } = await executeContract({
+      wallet,
+      contractAddress: config.usdc,
+      abiFunctionSignature: 'transfer(address,uint256)',
+      abiParameters: [to, value.toString()],
     })
-    const txHash = await walletClient.writeContract(request)
 
     return {
       txHash,

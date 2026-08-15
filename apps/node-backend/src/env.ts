@@ -28,6 +28,11 @@ const KNOWN_VARS = [
   'GOOGLE_CLIENT_ID',
   'GOOGLE_CLIENT_SECRET',
   'GOOGLE_REDIRECT_URI',
+  'CIRCLE_API_KEY',
+  'CIRCLE_API_KEY_MAINNET',
+  'CIRCLE_ENTITY_SECRET',
+  'CIRCLE_WALLET_SET_ID',
+  'CIRCLE_WALLET_SET_ID_MAINNET',
 ] as const
 
 /**
@@ -213,3 +218,47 @@ export const DB_ENCRYPTION_KEY = optional('DB_ENCRYPTION_KEY')
  * unaffected.
  */
 export const KEEPER_PRIVATE_KEY = optional('KEEPER_PRIVATE_KEY')
+
+/**
+ * Circle Developer Platform credentials, which together replace holding user
+ * private keys at all.
+ *
+ * CIRCLE_ENTITY_SECRET is a 32-byte secret that authorises signing for every
+ * wallet in the set. Circle never stores it. That makes it the single most
+ * dangerous value this process reads: the old design leaked one user's key if a
+ * request was intercepted, this one loses every user's funds at once if the
+ * secret escapes. It belongs in a secret store with rotation, never in the
+ * repo, never in a log, and never in an error message.
+ *
+ * CIRCLE_WALLET_SET_ID groups the wallets. Every EVM wallet in a set shares one
+ * address, which is what keeps "one user, one address on every chain" true.
+ *
+ * All three unset simply means wallet provisioning is unavailable, the same way
+ * an unset KEEPER_PRIVATE_KEY disables cross-chain settlement.
+ */
+/*
+ * Two environments, because Circle has two.
+ *
+ * Sandbox and production are separate account spaces: separate API keys,
+ * separate wallet sets, separate wallets. A sandbox key cannot create or sign
+ * for a wallet on Base, and a production key cannot touch Arc Testnet. So a
+ * user who spends on both ends up with two wallets at two addresses, and the
+ * code has to pick by chain rather than assume one of anything.
+ *
+ * The entity secret is the exception: one value, but it must be registered
+ * separately in each environment before that environment will sign.
+ */
+export const CIRCLE_API_KEY = optional('CIRCLE_API_KEY')
+export const CIRCLE_API_KEY_MAINNET = optional('CIRCLE_API_KEY_MAINNET')
+export const CIRCLE_ENTITY_SECRET = optional('CIRCLE_ENTITY_SECRET')
+export const CIRCLE_WALLET_SET_ID = optional('CIRCLE_WALLET_SET_ID')
+export const CIRCLE_WALLET_SET_ID_MAINNET = optional('CIRCLE_WALLET_SET_ID_MAINNET')
+
+/** Testnet signing is available. Gates the free tier and Arc. */
+export const CIRCLE_TESTNET_ENABLED = Boolean(
+  CIRCLE_API_KEY && CIRCLE_ENTITY_SECRET && CIRCLE_WALLET_SET_ID,
+)
+/** Mainnet signing is available. Gates every payment that costs real money. */
+export const CIRCLE_MAINNET_ENABLED = Boolean(
+  CIRCLE_API_KEY_MAINNET && CIRCLE_ENTITY_SECRET && CIRCLE_WALLET_SET_ID_MAINNET,
+)

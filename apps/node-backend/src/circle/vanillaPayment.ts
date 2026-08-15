@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
-import { privateKeyToAccount } from 'viem/accounts'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import { chainConfig, fromAtomicUsdc, safeErrorMessage } from './gatewayService.ts'
+import { signTypedDataFor, type AgentWallet } from './circleWallets.ts'
 
 /**
  * The second payment rail: plain x402, settled from the wallet's own USDC.
@@ -108,12 +108,11 @@ export interface VanillaPayResult {
  */
 export async function payVanilla(
   url: string,
-  agentPrivateKey: string,
+  wallet: AgentWallet,
   chain: SupportedChainName,
   init: { method: 'GET' | 'POST'; body?: unknown },
   maxAtomic: bigint,
 ): Promise<VanillaPayResult> {
-  const account = privateKeyToAccount(agentPrivateKey as `0x${string}`)
   const chainId = chainConfig(chain).chain.id
   const expectedNetwork = `eip155:${chainId}`
 
@@ -171,7 +170,7 @@ export async function payVanilla(
    */
   const now = Math.floor(Date.now() / 1000)
   const authorization = {
-    from: account.address,
+    from: wallet.address,
     to: accepted.payTo as `0x${string}`,
     value: amount,
     validAfter: BigInt(now - BACKDATE_SECONDS),
@@ -179,13 +178,19 @@ export async function payVanilla(
     nonce: `0x${randomBytes(32).toString('hex')}` as `0x${string}`,
   }
 
-  const signature = await account.signTypedData({
+  /*
+   * Circle signs this, not a key we hold. The payload is byte-for-byte what
+   * viem used to sign, because the seller's facilitator verifies the signature
+   * against the token's own EIP-712 domain and neither knows nor cares who
+   * produced it. That is what made this migration possible without touching the
+   * x402 protocol at all.
+   */
+  const signature = await signTypedDataFor(wallet, {
     domain: {
       name: String(accepted.extra?.['name'] ?? 'USD Coin'),
       version: String(accepted.extra?.['version'] ?? '2'),
       chainId,
-      verifyingContract: (accepted.extra?.['verifyingContract'] ??
-        accepted.asset) as `0x${string}`,
+      verifyingContract: String(accepted.extra?.['verifyingContract'] ?? accepted.asset),
     },
     types: AUTHORIZATION_TYPES,
     primaryType: 'TransferWithAuthorization',

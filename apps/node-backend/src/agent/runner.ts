@@ -2,17 +2,18 @@ import type { Response } from 'express'
 import db from '../db.ts'
 import type { PlanStep } from '../llm/planner.ts'
 import {
-  gatewayClientFor,
   lastErrorBodyFor,
   quoteFromEndpoint,
   safeErrorMessage,
   unifiedGatewayBalance,
   walletUsdcByChain,
 } from '../circle/gatewayService.ts'
-import { privateKeyToAccount } from 'viem/accounts'
 import { BridgeError, bridgeToGatewayBalance } from '../circle/cctpBridge.ts'
 import { canBridgeTo } from '../circle/deployments.ts'
 import { payVanilla } from '../circle/vanillaPayment.ts'
+import type { AgentWallet } from '../circle/circleWallets.ts'
+import { GatewayBatchPayer } from '../circle/gatewayPayment.ts'
+import { depositToGateway, withdrawFromGateway } from '../circle/gatewayMoves.ts'
 import { KEEPER_PRIVATE_KEY } from '../env.ts'
 import { findServiceByResource, type Service } from '../circle/registryService.ts'
 import { findAlternatives, noteEndpointFailure } from '../circle/candidateService.ts'
@@ -27,7 +28,7 @@ import {
 import { callFreeApi, payVerification } from '../circle/testnetVerification.ts'
 import { summariseRun, type StepResult } from '../llm/responder.ts'
 import { appendMessage } from './conversation.ts'
-import type { GatewayClient } from '@circle-fin/x402-batching/client'
+import type { PayResult } from '@circle-fin/x402-batching/client'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 
 export type SseEvent =
@@ -76,6 +77,19 @@ function isBalanceError(message: string): boolean {
 }
 
 /**
+ * A failed metering payment on the free path.
+ *
+ * This used to be caught by isBalanceError, because viem's refusal to simulate
+ * an unfunded transfer said "insufficient funds". Circle's estimate refuses for
+ * its own reasons and in its own words, so the match stopped holding and the
+ * message came out as "CoinGecko is not reachable right now" — blaming a
+ * provider that was never called, for a problem the user can actually fix.
+ */
+function isVerificationFailure(message: string): boolean {
+  return /verification payment failed/i.test(message)
+}
+
+/**
  * One payment attempt, retried once when the facilitator says to.
  *
  * "Payment verification temporarily unavailable, please retry" is an upstream
@@ -83,11 +97,11 @@ function isBalanceError(message: string): boolean {
  * was bought and a second attempt cannot double-charge.
  */
 async function payOnce(
-  client: GatewayClient,
+  client: GatewayBatchPayer,
   step: PlanStep,
   payOptions: { method: 'POST'; body: Record<string, unknown> } | undefined,
   inQuery: boolean,
-): Promise<Awaited<ReturnType<GatewayClient['pay']>>> {
+): Promise<PayResult> {
   try {
     return await client.pay(requestUrl(step, inQuery), payOptions)
   } catch (err) {
@@ -310,11 +324,11 @@ function isMethodNotAllowed(message: string): boolean {
  * paying twice.
  */
 async function payWithMethodRecovery(
-  client: GatewayClient,
+  client: GatewayBatchPayer,
   step: PlanStep,
   payOptions: { method: 'POST'; body: Record<string, unknown> } | undefined,
   inQuery: boolean,
-): Promise<Awaited<ReturnType<GatewayClient['pay']>>> {
+): Promise<PayResult> {
   /**
    * Ask the endpoint, not the catalog, before spending.
    *
@@ -364,11 +378,6 @@ async function payWithMethodRecovery(
   }
 }
 
-/** The public address for a signing key, for balance lookups. */
-function addressOf(privateKey: string): string {
-  return privateKeyToAccount(privateKey as `0x${string}`).address
-}
-
 /** Round to USDC's 6 decimals so repeated addition doesn't drift. */
 function usdc(n: number): number {
   return Number(n.toFixed(6))
@@ -401,8 +410,21 @@ export interface RunTaskOptions {
   taskId: string
   userId: string
   steps: PlanStep[]
-  /** EOA key — never logged, never persisted, never echoed in an error. */
-  agentPrivateKey: string
+  /**
+   * Which wallet signs for a given chain.
+   *
+   * A resolver rather than a wallet, because one plan can span both: a free
+   * step meters on Arc Testnet while a paid step settles on Base, and those are
+   * separate Circle environments with separate wallets at separate addresses.
+   * Handing the runner one wallet would mean signing for one of them with
+   * credentials the other rejects.
+   *
+   * There is no private key here either way. Payments are signatures Circle
+   * produces, and the moves that are real transactions go through its contract
+   * execution, so nothing the runner touches can leak a key because it no
+   * longer has one to leak.
+   */
+  walletFor: (chain: SupportedChainName) => AgentWallet
   /** The user's original request, echoed into the transcript and the summary. */
   goal: string
   /** Steps already paid for on a previous attempt, keyed by step index. */
@@ -421,7 +443,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
     goal,
     steps,
     completed,
-    agentPrivateKey,
+    walletFor,
     budgetUsdc,
     spendingCapUsdc,
     policy,
@@ -473,7 +495,12 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
   const fundForChoice = async (
     step: PlanStep,
     choice: ChainChoice,
-    agentPrivateKey: string,
+    /*
+     * Named to stay clear of `wallet` below, which is the balances map, not the
+     * signing wallet. Two different things called wallet in one function is how
+     * a deposit ends up sized from the wrong number.
+     */
+    agentWallet: AgentWallet,
     pots: {
       gatewayBalances?: Map<SupportedChainName, number>
       walletBalances?: Map<SupportedChainName, number>
@@ -506,8 +533,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
       const amount = sizeFor(held)
       say(`Moving ${amount} USDC into Gateway on ${target} to pay this`)
 
-      const client = gatewayClientFor(agentPrivateKey, target)
-      await client.deposit(String(amount))
+      await depositToGateway(agentWallet, target, String(amount))
 
       wallet?.set(target, held - amount)
       gateway?.set(target, (gateway.get(target) ?? 0) + amount)
@@ -545,9 +571,8 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
         const amount = sizeFor(held)
         say(`Taking ${amount} USDC out of Gateway on ${chain} so it can move to ${target}`)
 
-        const client = gatewayClientFor(agentPrivateKey, chain)
         // Same-chain withdrawal, which is instant: no 7-day trustless path.
-        await client.withdraw(String(amount))
+        await withdrawFromGateway(agentWallet, chain, { amountUsdc: String(amount) })
 
         gateway?.set(chain, held - amount)
         const inWallet = (wallet?.get(chain) ?? 0) + amount
@@ -570,7 +595,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
     say(`Moving ${amount} USDC from ${fromChain} to ${target} to pay this`)
 
     const result = await bridgeToGatewayBalance(
-      agentPrivateKey,
+      agentWallet,
       fromChain,
       target,
       atomic,
@@ -612,7 +637,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
    * than blocking a run on a balance lookup.
    */
   const gatewayBalances = policy.mainnetEnabled
-    ? await unifiedGatewayBalance(addressOf(agentPrivateKey), GATEWAY_MAINNET_CHAINS)
+    ? await unifiedGatewayBalance(walletFor('base').address, GATEWAY_MAINNET_CHAINS)
         .then((unified) => {
           const byChain = new Map<SupportedChainName, number>()
           for (const entry of unified.byChain) byChain.set(entry.chain, Number(entry.usdc))
@@ -630,7 +655,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
    * reverse, so the two are read and spent independently.
    */
   const walletBalances = policy.mainnetEnabled
-    ? await walletUsdcByChain(addressOf(agentPrivateKey), GATEWAY_MAINNET_CHAINS)
+    ? await walletUsdcByChain(walletFor('base').address, GATEWAY_MAINNET_CHAINS)
     : undefined
 
   // Kept in memory as the run proceeds so the summary is written from the live
@@ -657,13 +682,13 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
     }
   }
 
-  // One client per chain, built lazily: a plan may span chains, and building a
-  // client is cheap but not free.
-  const clients = new Map<SupportedChainName, GatewayClient>()
-  const clientFor = (chain: SupportedChainName): GatewayClient => {
+  // One payer per chain, built lazily: a plan may span chains, and building a
+  // payer is cheap but not free.
+  const clients = new Map<SupportedChainName, GatewayBatchPayer>()
+  const clientFor = (chain: SupportedChainName): GatewayBatchPayer => {
     let existing = clients.get(chain)
     if (!existing) {
-      existing = gatewayClientFor(agentPrivateKey, chain)
+      existing = new GatewayBatchPayer(walletFor(chain), chain)
       clients.set(chain, existing)
     }
     return existing
@@ -831,7 +856,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
          * money on a transfer they never asked for.
          */
         if (choice.route !== 'ready') {
-          await fundForChoice(step, choice, agentPrivateKey, {
+          await fundForChoice(step, choice, walletFor(choice.chain), {
             gatewayBalances,
             walletBalances,
           })
@@ -893,7 +918,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
           // nobody to pay. They are metered instead: a real Arc Testnet transfer
           // settles first, so a call still moves value on chain and leaves a
           // receipt, and an unfunded wallet cannot reach them.
-          const receipt = await payVerification(agentPrivateKey)
+          const receipt = await payVerification(walletFor(policy.testnet))
           verificationTx = receipt.txHash
           txRef = receipt.txHash
           cost = receipt.amountUsdc
@@ -958,7 +983,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
             const remaining = spendingCapUsdc - totalSpent
             const paid = await payVanilla(
               requestUrl(step, step.httpMethod === 'GET'),
-              agentPrivateKey,
+              walletFor(choice.chain),
               choice.chain,
               {
                 method: step.httpMethod,
@@ -1181,7 +1206,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
          * calling it "not reachable right now" both misleads the user and
          * hides a security refusal behind an apology.
          */
-        const reported = isPolicyRefusal(detail) || isBalanceError(detail)
+        const reported = isPolicyRefusal(detail) || isBalanceError(detail) || isVerificationFailure(detail)
           ? detail
           : `${approvedService?.serviceName ?? step.serviceName} is not reachable right now. ` +
             `Nothing else in the catalog could do this step, so it is worth trying again later.`

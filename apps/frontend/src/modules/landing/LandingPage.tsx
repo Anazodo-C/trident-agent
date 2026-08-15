@@ -133,8 +133,8 @@ export function LandingPage() {
               Give it a goal
             </h2>
             <p className="mt-3 max-w-lg text-sm leading-relaxed text-slate-400">
-              Trident creates a self-custody wallet for your agent, encrypted with a passphrase
-              only you know. Start on free testnet endpoints and fund it when you are ready.
+              Trident gives your agent its own wallet, held by Circle and spendable only within
+              the cap you set. Start on free testnet endpoints and fund it when you are ready.
             </p>
           </div>
           <Link to={enter} className="btn-primary shrink-0">

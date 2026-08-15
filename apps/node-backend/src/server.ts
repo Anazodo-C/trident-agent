@@ -23,6 +23,7 @@ import authRoutes from './routes/auth.ts'
 import serviceRoutes from './routes/services.ts'
 import agentRoutes from './routes/agent.ts'
 import walletRoutes, { userRoutes } from './routes/wallet.ts'
+import migrateRoutes from './routes/migrate.ts'
 import taskRoutes from './routes/tasks.ts'
 import statsRoutes from './routes/stats.ts'
 import showcaseRoutes from './routes/showcase.ts'
@@ -60,6 +61,7 @@ app.get('/health', (_req, res) => {
 app.use('/auth', authRoutes)
 app.use('/api/services', serviceRoutes)
 app.use('/api/agent', agentRoutes)
+app.use('/api/wallet/migrate', migrateRoutes)
 app.use('/api/wallet', walletRoutes)
 app.use('/api/user', userRoutes)
 app.use('/api/tasks', taskRoutes)

@@ -53,6 +53,71 @@ function bytesToHex(bytes: Uint8Array): string {
 }
 
 /**
+ * Domain separator for the passphrase verifier.
+ *
+ * The verifier must share no output with the AES key, or storing it would be
+ * storing something derived from the key that protects the wallet. Appending
+ * this to the salt gives PBKDF2 a different input and therefore an independent
+ * result, while keeping one passphrase and one iteration count.
+ */
+const VERIFIER_DOMAIN = 'trident-passphrase-verifier-v1'
+
+/**
+ * Prove knowledge of the passphrase without a key to decrypt.
+ *
+ * Once a wallet has migrated to Circle there is no ciphertext left to try the
+ * passphrase against, so the unlock prompt has nothing to fail on. This gives it
+ * something: a value only the right passphrase produces, stored server-side and
+ * compared on each spend.
+ *
+ * It is a password-equivalent, not a signing key. Someone who intercepts it can
+ * pass this gate but cannot move funds with it, because the backend only ever
+ * signs for the wallet belonging to the authenticated session. That is a large
+ * step down in sensitivity from the private key this replaces, though it is not
+ * nothing: a challenge-response would remove the replay entirely and is the
+ * upgrade if this gate ever needs to stand on its own.
+ */
+/**
+ * The message signed to install a passphrase verifier.
+ *
+ * MUST stay byte-identical to `buildVerifierMessage` in the backend's
+ * `auth/keySetup.ts`, or installing a verifier fails signature verification.
+ */
+export function buildVerifierMessage(input: { userId: string; verifier: string }): string {
+  return [
+    'Trident passphrase verifier',
+    `user: ${input.userId}`,
+    `verifier: ${input.verifier}`,
+  ].join('\n')
+}
+
+export async function derivePassphraseVerifier(
+  passphrase: string,
+  saltHex: string,
+  iterations: number,
+): Promise<string> {
+  const salt = hexToBytes(saltHex)
+  const domain = new TextEncoder().encode(VERIFIER_DOMAIN)
+  const verifierSalt = new Uint8Array(salt.length + domain.length)
+  verifierSalt.set(salt, 0)
+  verifierSalt.set(domain, salt.length)
+
+  const baseKey = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(passphrase),
+    'PBKDF2',
+    false,
+    ['deriveBits'],
+  )
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: verifierSalt as BufferSource, iterations, hash: PBKDF2_HASH },
+    baseKey,
+    256,
+  )
+  return bytesToHex(new Uint8Array(bits))
+}
+
+/**
  * Decrypt the agent wallet private key. Throws on a wrong passphrase, because AES-GCM
  * authentication fails rather than returning garbage.
  */

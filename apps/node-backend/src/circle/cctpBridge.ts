@@ -1,9 +1,17 @@
-import { createPublicClient, createWalletClient, http, parseAbi, erc20Abi } from 'viem'
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  parseAbi,
+  erc20Abi,
+  toFunctionSignature,
+} from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import { chainConfig, rpcUrlFor, safeErrorMessage } from './gatewayService.ts'
-import { DEPLOYMENTS, TOKEN_MESSENGER_V2 } from './deployments.ts'
+import { DEPLOYMENTS } from './deployments.ts'
 import { KEEPER_PRIVATE_KEY } from '../env.ts'
+import { executeContract, type AgentWallet } from './circleWallets.ts'
 
 /**
  * Moves a user's USDC to the chain a seller wants paying on, and lands it in
@@ -153,7 +161,7 @@ export async function receiverAddressFor(
  *        and the caller is holding a stream open, so silence is not an option.
  */
 export async function bridgeToGatewayBalance(
-  agentPrivateKey: string,
+  wallet: AgentWallet,
   fromChain: SupportedChainName,
   toChain: SupportedChainName,
   amountAtomic: bigint,
@@ -165,20 +173,19 @@ export async function bridgeToGatewayBalance(
   if (!destination) throw new BridgeError(`Cross-chain settlement is not available to ${toChain}.`)
 
   const keeper = keeperAccount()
-  const user = privateKeyToAccount(agentPrivateKey as `0x${string}`)
   const src = clientsFor(fromChain)
   const dst = clientsFor(toChain)
 
-  const mintRecipient = await receiverAddressFor(user.address, toChain)
+  const mintRecipient = await receiverAddressFor(wallet.address, toChain)
 
   /* ------------------------------------------------------------- 1. burn */
   onProgress({ stage: 'burning', detail: `${fromChain} → ${toChain}` })
 
-  const userWallet = createWalletClient({
-    account: user,
-    chain: src.config.chain,
-    transport: src.transport,
-  })
+  /*
+   * The user's half is signed by Circle now, so there is no wallet client for
+   * them here. The reads below still go through our own public client: an
+   * allowance is public state and needs no signer.
+   */
 
   // Approve only what this transfer needs. The router consumes it in the same
   // transaction, so no standing allowance is left behind.
@@ -186,26 +193,23 @@ export async function bridgeToGatewayBalance(
     address: src.config.usdc,
     abi: erc20Abi,
     functionName: 'allowance',
-    args: [user.address, source.cctpRouter],
+    args: [wallet.address, source.cctpRouter],
   })
   if (allowance < amountAtomic) {
-    const approveTx = await userWallet.writeContract({
-      address: src.config.usdc,
-      abi: erc20Abi,
-      functionName: 'approve',
-      args: [source.cctpRouter, amountAtomic],
-    })
-    const receipt = await src.publicClient.waitForTransactionReceipt({ hash: approveTx })
-
     /*
-     * A receipt is not a success. `waitForTransactionReceipt` resolves for a
-     * reverted transaction too, so an approve that failed used to pass silently
-     * and the burn then reverted with "ERC20: transfer amount exceeds
-     * allowance" — an error that points at the wrong thing entirely.
+     * `executeContract` estimates first and then polls to a terminal state, so
+     * the two hazards this code was built around are both still covered: it
+     * refuses a call that would revert, and it treats anything short of
+     * COMPLETE as a failure. A mined-but-reverted approve used to pass silently
+     * here and surface later as "ERC20: transfer amount exceeds allowance", an
+     * error that points at the wrong thing entirely.
      */
-    if (receipt.status !== 'success') {
-      throw new BridgeError(`Approving USDC for the bridge failed (${approveTx}).`)
-    }
+    await executeContract({
+      wallet,
+      contractAddress: src.config.usdc,
+      abiFunctionSignature: 'approve(address,uint256)',
+      abiParameters: [source.cctpRouter, amountAtomic.toString()],
+    })
 
     /*
      * Then confirm the allowance is actually readable before spending against
@@ -217,35 +221,40 @@ export async function bridgeToGatewayBalance(
       address: src.config.usdc,
       abi: erc20Abi,
       functionName: 'allowance',
-      args: [user.address, source.cctpRouter],
+      args: [wallet.address, source.cctpRouter],
     })
     if (confirmed < amountAtomic) {
       throw new BridgeError(
-        'The USDC approval for the bridge has not propagated yet. Nothing was charged — retry ' +
+        'The USDC approval for the bridge has not propagated yet. Nothing was charged, retry ' +
           'in a moment.',
       )
     }
   }
 
   const maxFee = (amountAtomic * MAX_FEE_BPS) / 10_000n
-  const burnTxHash = await userWallet.writeContract({
-    address: source.cctpRouter,
-    abi: ROUTER_ABI,
-    functionName: 'bridge',
-    args: [
+  const { txHash: burnTxHash } = await executeContract({
+    wallet,
+    contractAddress: source.cctpRouter,
+    /*
+     * Derived from the ABI, never hand-written. Circle takes a signature
+     * string rather than an ABI, and a typo in one would compute a different
+     * function selector: the call would either revert or, far worse, land on
+     * some other function that happened to match.
+     */
+    abiFunctionSignature: toFunctionSignature(ROUTER_ABI[0]),
+    abiParameters: [
       destination.domain,
       // Left-pad the address into the bytes32 CCTP expects.
       `0x${mintRecipient.slice(2).toLowerCase().padStart(64, '0')}`,
-      amountAtomic,
+      amountAtomic.toString(),
       // A fee of zero would be rejected by the contract's own guard on tiny
       // amounts, so keep at least one atomic unit of headroom.
-      maxFee > 0n ? maxFee : 1n,
+      (maxFee > 0n ? maxFee : 1n).toString(),
       FAST_FINALITY_THRESHOLD,
       // No forwarding marker: the keeper submits the mint itself.
       '0x',
     ],
   })
-  await src.publicClient.waitForTransactionReceipt({ hash: burnTxHash })
 
   /* -------------------------------------------------------- 2. attestation */
   onProgress({ stage: 'attesting', detail: 'waiting for Circle' })
@@ -283,7 +292,7 @@ export async function bridgeToGatewayBalance(
     address: destination.receiverFactory,
     abi: FACTORY_ABI,
     functionName: 'sweep',
-    args: [user.address],
+    args: [wallet.address],
   })
   await dst.publicClient.waitForTransactionReceipt({ hash: sweepTxHash })
 

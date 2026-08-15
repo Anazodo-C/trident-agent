@@ -25,9 +25,9 @@ interface WalletState {
   setActiveChain: (chain: string) => void
   notePendingDeposit: (deposit: PendingDeposit) => void
   /** Load one chain. Omit to load the active one. */
-  refresh: (agentPrivateKey?: string, chain?: string) => Promise<void>
+  refresh: (chain?: string) => Promise<void>
   /** Load every chain this account may use, so both are visible side by side. */
-  refreshAll: (agentPrivateKey?: string) => Promise<void>
+  refreshAll: () => Promise<void>
   loadDepositInfo: () => Promise<void>
 }
 
@@ -44,11 +44,11 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   notePendingDeposit: (deposit) =>
     set((state) => ({ pendingDeposits: { ...state.pendingDeposits, [deposit.chain]: deposit } })),
 
-  refresh: async (agentPrivateKey, chain) => {
+  refresh: async (chain) => {
     const target = chain ?? get().activeChain ?? undefined
     set({ loading: true, error: null })
     try {
-      const balance = await api.balance(agentPrivateKey, target)
+      const balance = await api.balance(target)
       set((state) => ({
         balances: { ...state.balances, [balance.chain]: balance },
         activeChain: state.activeChain ?? balance.chain,
@@ -59,7 +59,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
     }
   },
 
-  refreshAll: async (agentPrivateKey) => {
+  refreshAll: async () => {
     set({ loading: true, error: null })
     try {
       const info = get().depositInfo ?? (await api.depositInfo())
@@ -70,7 +70,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
       // One failing chain must not blank the others, a mainnet RPC hiccup
       // should not hide the testnet balance the user is actually working with.
       const results = await Promise.allSettled(
-        chains.map((c) => api.balance(agentPrivateKey, c.chain)),
+        chains.map((c) => api.balance(c.chain)),
       )
 
       const balances: Record<string, WalletBalance> = {}

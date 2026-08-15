@@ -20,7 +20,7 @@ export function AppShell() {
   const user = useAuthStore((s) => s.user)
   const logout = useAuthStore((s) => s.logout)
   const lock = useAgentStore((s) => s.lock)
-  const unlocked = useAgentStore((s) => s.unlockedKey !== null)
+  const unlocked = useAgentStore((s) => s.unlocked)
   const [copied, setCopied] = useState(false)
 
   useEffect(() => {

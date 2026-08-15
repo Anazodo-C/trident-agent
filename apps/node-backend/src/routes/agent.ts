@@ -19,6 +19,7 @@ import {
 import { findUpgrades } from '../circle/upgradeService.ts'
 import { runTask, type CompletedStep } from '../agent/runner.ts'
 import { findUserById } from '../auth/users.ts'
+import { walletForChain } from '../circle/circleWallets.ts'
 import { answerFollowUp } from '../llm/responder.ts'
 import {
   appendMessage,
@@ -316,7 +317,6 @@ function buildBudgetGuidance(input: {
 const RunBody = z.object({
   taskId: z.string().uuid(),
   approvedSteps: z.array(StepSchema).min(1, 'At least one step is required'),
-  agentPrivateKey: z.string(),
   budgetUsdc: z.number().positive().nullable().optional(),
 })
 
@@ -330,7 +330,7 @@ router.post(
       throw httpError(400, parsed.error.issues[0]?.message ?? 'Invalid request body')
     }
     // Destructured but never logged and never written to the DB.
-    const { taskId, approvedSteps, agentPrivateKey, budgetUsdc } = parsed.data
+    const { taskId, approvedSteps, budgetUsdc } = parsed.data
 
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined
     if (!task || task.user_id !== user.id) throw httpError(404, 'Task not found')
@@ -431,7 +431,7 @@ router.post(
       goal: task.goal,
       steps: approvedSteps,
       completed,
-      agentPrivateKey,
+      walletFor: (chain) => walletForChain(fresh, chain),
       budgetUsdc: budgetUsdc ?? task.budget_usdc ?? null,
       spendingCapUsdc: fresh.spending_cap_usdc,
       policy,

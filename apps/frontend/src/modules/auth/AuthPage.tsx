@@ -133,8 +133,8 @@ export function AuthPage() {
           </div>
 
           <p className="mt-6 text-center text-xs leading-relaxed text-slate-500">
-            Trident generates a self-custody agent wallet for you. Your private key is
-            encrypted with a passphrase only you know.
+            Trident gives your agent its own wallet, held by Circle. Your passphrase confirms
+            it is you before the agent spends anything.
           </p>
         </div>
       </div>

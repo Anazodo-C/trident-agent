@@ -264,21 +264,23 @@ export interface DepositInfo {
   chainId: number
   /** Every chain the account may use, testnet always, mainnet once opted in. */
   availableChains: ChainOption[]
-  bridgeChains: { label: string; chain: string }[]
   /** No onramp exists; the faucet and a direct transfer are the ways in. */
   faucet: { testnetFaucetUrl: string; note: string }
 }
 
 export interface KeyMaterial {
   userId: string
-  encryptedKey: string
+  /** Null once the wallet has migrated: there is no key left to decrypt. */
+  encryptedKey: string | null
   salt: string
-  iv: string
+  iv: string | null
   eoaAddress: string
   /** The count this blob was encrypted at, decrypt with exactly this. */
   iterations: number
   /** The count it should be re-encrypted at, if it is behind. */
   targetIterations: number
+  /** Whether the passphrase can be checked without the ciphertext. */
+  hasVerifier: boolean
 }
 
 export interface StatBreakdown {
