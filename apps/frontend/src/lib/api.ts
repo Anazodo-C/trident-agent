@@ -310,6 +310,7 @@ export const api = {
         gatewayByChain: { chain: string; usdc: string }[]
         gatewayUsdc: string
       }
+      testnetRemaining: { chain: string; usdc: string }[]
     }>('/api/wallet/migrate/status'),
 
   /** Provisions a wallet per Circle environment the account needs. */

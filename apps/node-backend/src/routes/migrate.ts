@@ -54,6 +54,18 @@ function chainsFor(row: { default_chain: string; mainnet_enabled: number; mainne
   return policy.mainnetEnabled ? [policy.testnet, ...GATEWAY_MAINNET_CHAINS] : [policy.testnet]
 }
 
+/**
+ * The chains whose balances are worth blocking a migration over.
+ *
+ * Only mainnet. Testnet USDC has no value, and refusing to finish because some
+ * is left behind protects nothing while stranding the user in a half-migrated
+ * state, which is the genuinely dangerous place to be. It is also still theirs:
+ * they keep the old key, so a faucet balance stays reachable forever.
+ */
+function realMoneyChains(row: Parameters<typeof chainsFor>[0]) {
+  return chainsFor(row).filter((c) => chainConfig(c).chain.testnet !== true)
+}
+
 /* ------------------------------------------------------------------ status */
 
 router.get(
@@ -72,6 +84,7 @@ router.get(
      * complete while money is still sitting there.
      */
     let walletByChain: { chain: string; usdc: string }[] = []
+    let testnetByChain: { chain: string; usdc: string }[] = []
     let gatewayByChain: { chain: string; usdc: string }[] = []
     let gatewayUsdc = '0'
     if (oldAddress) {
@@ -81,8 +94,17 @@ router.get(
           () => null,
         ),
       ])
-      walletByChain = [...(wallet?.entries() ?? [])]
-        .filter(([, amount]) => Number(amount) > 0)
+      /*
+       * Split by whether it is real. Only mainnet balances hold up finishing;
+       * testnet ones are listed so the user knows what they are leaving, and
+       * leaving them is fine because the old key goes with them.
+       */
+      const all = [...(wallet?.entries() ?? [])].filter(([, amount]) => Number(amount) > 0)
+      walletByChain = all
+        .filter(([chain]) => chainConfig(chain as SupportedChainName).chain.testnet !== true)
+        .map(([chain, amount]) => ({ chain, usdc: String(amount) }))
+      testnetByChain = all
+        .filter(([chain]) => chainConfig(chain as SupportedChainName).chain.testnet === true)
         .map(([chain, amount]) => ({ chain, usdc: String(amount) }))
       gatewayUsdc = gateway?.totalUsdc ?? '0'
       /*
@@ -106,6 +128,8 @@ router.get(
       /** True while the old key still exists and can be handed back. */
       keyStillAvailable: Boolean(row.encrypted_payment_key),
       remaining: { walletByChain, gatewayByChain, gatewayUsdc },
+      /** Left behind by choice. Never blocks finishing. */
+      testnetRemaining: testnetByChain,
     })
   }),
 )
@@ -369,13 +393,10 @@ router.post(
      * could move it. Trusting the client's word here would turn a failed sweep
      * into permanently stranded funds.
      */
-    const chains = chainsFor(row)
+    const chains = realMoneyChains(row)
     const [wallet, gateway] = await Promise.all([
       walletUsdcByChain(row.eoa_address, chains).catch(() => null),
-      unifiedGatewayBalance(
-        row.eoa_address,
-        chains.filter((c) => !chainConfig(c).chain.testnet),
-      ).catch(() => null),
+      unifiedGatewayBalance(row.eoa_address, chains).catch(() => null),
     ])
     if (!wallet || !gateway) {
       throw httpError(502, 'Could not read the old balances, so nothing was deleted. Try again.')
@@ -386,8 +407,8 @@ router.post(
       const where = stillHeld.map(([c, a]) => `${a} on ${c}`).join(', ')
       throw httpError(
         409,
-        `The old wallet still holds funds (${where || `${gateway.totalUsdc} in Gateway`}), so ` +
-          'nothing was deleted. Finish moving them first.',
+        `The old wallet still holds real funds (${where || `${gateway.totalUsdc} in Gateway`}), ` +
+          'so nothing was deleted. Finish moving them first.',
       )
     }
 

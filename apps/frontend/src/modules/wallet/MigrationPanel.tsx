@@ -53,6 +53,13 @@ export function MigrationPanel() {
   const remainingGateway = Number(status.remaining.gatewayUsdc)
   const gatewayChains = status.remaining.gatewayByChain ?? []
   const remainingWallet = status.remaining.walletByChain
+  const testnetLeft = status.testnetRemaining ?? []
+  /*
+   * Only real money holds this up. Testnet balances are shown so the choice to
+   * leave them is a choice rather than an oversight, but they cannot block:
+   * refusing to finish over play money would strand the account half migrated,
+   * which is the one genuinely risky state in this whole flow.
+   */
   const nothingLeft = remainingGateway <= 0 && remainingWallet.length === 0
 
   async function withKey(label: string, fn: (key: string) => Promise<void>) {
@@ -312,6 +319,12 @@ export function MigrationPanel() {
           {!status.hasVerifier && (
             <p className="mt-2 text-[11px] text-[#FFA040]">
               Unlock your wallet once first, so your passphrase keeps working afterwards.
+            </p>
+          )}
+          {testnetLeft.length > 0 && (
+            <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+              Leaving {testnetLeft.map((b) => `${b.usdc} on ${b.chain}`).join(', ')} behind. Testnet
+              funds are not real and do not hold this up. Your original key still reaches them.
             </p>
           )}
         </Step>
