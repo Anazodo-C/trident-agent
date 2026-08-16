@@ -19,7 +19,7 @@ import {
   CIRCLE_SUPPORTED_CHAINS,
 } from '../src/circle/circleWallets.ts'
 import { toAtomicUsdc } from '../src/circle/gatewayService.ts'
-import { parseShortfall } from '../src/routes/migrate.ts'
+import { parseShortfall } from '../src/circle/gatewayMoves.ts'
 
 let failures = 0
 

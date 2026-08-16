@@ -295,66 +295,6 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  /* ------------------------------------------------------------ migration */
-
-  migrationStatus: () =>
-    request<{
-      state: string | null
-      oldAddress: string | null
-      newAddress: string | null
-      newTestnetAddress: string | null
-      hasVerifier: boolean
-      keyStillAvailable: boolean
-      remaining: {
-        walletByChain: { chain: string; usdc: string }[]
-        gatewayByChain: { chain: string; usdc: string }[]
-        gatewayUsdc: string
-      }
-      testnetRemaining: { chain: string; usdc: string }[]
-    }>('/api/wallet/migrate/status'),
-
-  /** Provisions a wallet per Circle environment the account needs. */
-  migrateProvision: () =>
-    request<{
-      address: string | null
-      testnetAddress: string | null
-      created: string[]
-      missing: string[]
-    }>('/api/wallet/migrate/provision', { method: 'POST' }),
-
-  /**
-   * Ask the server what to sign.
-   *
-   * The intent is built and held server-side rather than composed here, so the
-   * browser cannot choose the recipient of its own withdrawal.
-   */
-  migrateGatewayIntent: (chain: string, amountUsdc: string) =>
-    request<{ typedData: Record<string, unknown> }>('/api/wallet/migrate/gateway-intent', {
-      method: 'POST',
-      body: JSON.stringify({ chain, amountUsdc }),
-    }),
-
-  migrateGatewayTransfer: (signature: string) =>
-    request<{ mintTxHash: string }>('/api/wallet/migrate/gateway-transfer', {
-      method: 'POST',
-      body: JSON.stringify({ signature }),
-    }),
-
-  migrateOldBalance: (chain: string) =>
-    request<{
-      chain: string
-      usdc: string
-      usdcAtomic: string
-      nativeWei: string
-      usdcAddress: string
-      chainId: number
-      rpcUrl: string
-      newAddress: string | null
-    }>(`/api/wallet/migrate/old-balance?chain=${encodeURIComponent(chain)}`),
-
-  migrateComplete: () =>
-    request<{ ok: boolean }>('/api/wallet/migrate/complete', { method: 'POST' }),
-
   setSpendingCap: (cap: number) =>
     request<{ ok: boolean; newCap: number; user: User }>('/api/wallet/user/spending-cap', {
       method: 'PATCH',

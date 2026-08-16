@@ -186,6 +186,25 @@ export const ANTHROPIC_KEY_MISDIRECTED =
 export const STATUS_PROBER_ENABLED =
   optional('STATUS_PROBER', IS_PROD ? 'on' : 'off').toLowerCase() === 'on'
 
+/**
+ * Extra RPC endpoints, per chain, highest priority first.
+ *
+ * Comma separated, e.g. RPC_URLS_BASE="https://paid.example,https://backup.example".
+ * The chain's public default is always appended, so these add resilience rather
+ * than replacing it.
+ *
+ * Base needed this first. Its public endpoint, https://mainnet.base.org, rate
+ * limits under the fan-out a wallet page produces, and a throttled read is
+ * indistinguishable to a user from having no money.
+ */
+export function rpcOverridesFor(chain: string): string[] {
+  const name = chain.replace(/[^a-zA-Z0-9]/g, '').toUpperCase()
+  return optional(`RPC_URLS_${name}`)
+    .split(',')
+    .map((u) => u.trim())
+    .filter((u) => u.length > 0)
+}
+
 export const DB_PATH = optional('DB_PATH', './trident.db')
 
 /**

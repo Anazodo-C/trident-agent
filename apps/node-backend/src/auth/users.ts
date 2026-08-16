@@ -50,6 +50,17 @@ export function upsertWalletUser(walletAddress: string): UserRow {
 }
 
 /** True when the user has not yet created their agent wallet. */
+/**
+ * Whether this account still needs to be set up before it can pay.
+ *
+ * Keyed on the Circle wallet, which is the only thing that can sign. It used to
+ * test for an encrypted EOA, which no account gets any more, so leaving it
+ * would have sent every user to the passphrase screen on every visit and
+ * refused them when they arrived.
+ *
+ * The testnet wallet is the minimum: the free tier meters on it, so an account
+ * without one cannot run anything at all.
+ */
 export function needsPassphraseSetup(user: UserRow): boolean {
-  return !user.eoa_address || !user.encrypted_payment_key
+  return !user.circle_wallet_id_testnet && !user.circle_wallet_id
 }

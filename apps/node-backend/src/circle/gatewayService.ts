@@ -1,8 +1,9 @@
 import { GatewayClient, CHAIN_CONFIGS } from '@circle-fin/x402-batching/client'
 import { generatePrivateKey } from 'viem/accounts'
-import { createPublicClient, http, erc20Abi } from 'viem'
+import { createPublicClient, fallback, http, erc20Abi, type Transport } from 'viem'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import { httpError } from '../http.ts'
+import { rpcOverridesFor } from '../env.ts'
 
 export const DEFAULT_CHAIN: SupportedChainName = 'arcTestnet'
 
@@ -68,6 +69,30 @@ export function chainConfig(chain: SupportedChainName = DEFAULT_CHAIN) {
 }
 
 /** RPC URL for a chain, preferring the SDK's own configuration. */
+/**
+ * A transport that survives one endpoint throttling.
+ *
+ * viem's `fallback` moves to the next URL when a request errors, which is what
+ * a public RPC does under load rather than failing outright. A wallet page fans
+ * out balance reads across every supported chain at once, and the free Base
+ * endpoint answers that with rate limits; a single-URL transport turns that
+ * into "balance unavailable" and a user reasonably concludes their funds are
+ * gone.
+ *
+ * Configured endpoints come first, then the chain's public default, so this is
+ * never worse than what it replaced.
+ */
+export function transportFor(chain: SupportedChainName = DEFAULT_CHAIN): Transport {
+  const urls = [...rpcOverridesFor(chain), rpcUrlFor(chain)]
+  const unique = [...new Set(urls)]
+  return fallback(
+    unique.map((url) => http(url)),
+    // Retries are handled per URL before moving on, so a blip does not burn a
+    // whole endpoint out of the rotation.
+    { rank: false, retryCount: 1 },
+  )
+}
+
 export function rpcUrlFor(chain: SupportedChainName = DEFAULT_CHAIN): string {
   const config = chainConfig(chain)
   const url = config.rpcUrl ?? config.chain.rpcUrls.default.http[0]
@@ -176,7 +201,7 @@ export async function walletUsdcByChain(
       if (!config?.usdc) return [chain, 0] as const
       const client = createPublicClient({
         chain: config.chain,
-        transport: http(rpcUrlFor(chain)),
+        transport: transportFor(chain),
       })
       const raw = await client.readContract({
         address: config.usdc,

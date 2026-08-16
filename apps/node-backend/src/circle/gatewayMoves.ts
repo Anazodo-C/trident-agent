@@ -2,7 +2,6 @@ import { randomBytes } from 'node:crypto'
 import {
   createPublicClient,
   createWalletClient,
-  http,
   maxUint256,
   pad,
   parseAbi,
@@ -11,10 +10,10 @@ import {
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import {
   chainConfig,
-  rpcUrlFor,
   safeErrorMessage,
   toAtomicUsdc,
   fromAtomicUsdc,
+  transportFor,
 } from './gatewayService.ts'
 import { keeperAccount } from './cctpBridge.ts'
 
@@ -253,7 +252,7 @@ export async function mintGatewayAttestation(
 ): Promise<string> {
   const keeper = keeperAccount()
   const config = chainConfig(chain)
-  const transport = http(rpcUrlFor(chain))
+  const transport = transportFor(chain)
   const publicClient = createPublicClient({ chain: config.chain, transport })
   const wallet = createWalletClient({ account: keeper, chain: config.chain, transport })
 
@@ -271,6 +270,32 @@ export async function mintGatewayAttestation(
     throw httpError(502, `The Gateway mint reverted on ${chain} (${hash}). Nothing was credited.`)
   }
   return hash
+}
+
+/**
+ * Read the fee back out of a rejection.
+ *
+ * Circle reports "available X, required Y" in USDC decimals. Y exceeds the
+ * requested value by exactly the fee, so the largest movable amount is
+ * available minus that fee, and moving it empties the ledger.
+ *
+ * Returns null for any other failure, so an unrelated error is never
+ * misreported as a fee problem.
+ */
+export function parseShortfall(
+  err: unknown,
+  requestedAtomic: bigint,
+): { movableUsdc: string; feeUsdc: string } | null {
+  const message = err instanceof Error ? err.message : String(err)
+  const match = /available\s+([\d.]+),\s*required\s+([\d.]+)/i.exec(message)
+  if (!match?.[1] || !match[2]) return null
+
+  const available = toAtomicUsdc(match[1])
+  const required = toAtomicUsdc(match[2])
+  const fee = required - requestedAtomic
+  if (fee <= 0n || fee >= available) return null
+
+  return { movableUsdc: fromAtomicUsdc(available - fee), feeUsdc: fromAtomicUsdc(fee) }
 }
 
 export interface WithdrawOutcome {

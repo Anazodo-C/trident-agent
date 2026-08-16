@@ -61,8 +61,8 @@ export function UnlockModal() {
       if (!material.encryptedKey || !material.iv) {
         if (!material.hasVerifier) {
           throw new Error(
-            'This wallet has migrated but has no passphrase set up. Contact us through the ' +
-              'link in the footer.',
+            'This account has no passphrase set up yet, so there is nothing to check against. ' +
+              'Sign out and back in to finish setting one up.',
           )
         }
         const verifier = await derivePassphraseVerifier(

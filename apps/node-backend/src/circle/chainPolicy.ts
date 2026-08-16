@@ -372,3 +372,17 @@ export function unpayableReason(
 }
 
 export { isTestnetChain }
+
+/**
+ * Every chain an account may hold funds on, testnet first.
+ *
+ * Used to decide which Circle environments a user needs a wallet in. Sandbox
+ * and production are separate account spaces, so an account that has opted into
+ * mainnet needs one in each.
+ */
+export function walletChainsFor(
+  user: Pick<UserRow, 'default_chain' | 'mainnet_enabled' | 'mainnet_chain'>,
+): SupportedChainName[] {
+  const policy = policyFor(user)
+  return policy.mainnetEnabled ? [policy.testnet, ...GATEWAY_MAINNET_CHAINS] : [policy.testnet]
+}

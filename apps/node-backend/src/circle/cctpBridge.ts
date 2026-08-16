@@ -1,14 +1,15 @@
 import {
   createPublicClient,
   createWalletClient,
-  http,
   parseAbi,
   erc20Abi,
   toFunctionSignature,
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
-import { chainConfig, rpcUrlFor, safeErrorMessage } from './gatewayService.ts'
+import { chainConfig, safeErrorMessage,
+  transportFor,
+} from './gatewayService.ts'
 import { DEPLOYMENTS } from './deployments.ts'
 import { KEEPER_PRIVATE_KEY } from '../env.ts'
 import { executeContract, type AgentWallet } from './circleWallets.ts'
@@ -121,7 +122,7 @@ export function keeperAccount() {
 
 function clientsFor(chain: SupportedChainName) {
   const config = chainConfig(chain)
-  const transport = http(rpcUrlFor(chain))
+  const transport = transportFor(chain)
   return {
     config,
     publicClient: createPublicClient({ chain: config.chain, transport }),

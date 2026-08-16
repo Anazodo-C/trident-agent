@@ -105,6 +105,37 @@ export function addressForKey(privateKey: `0x${string}`): string {
  * `lib/crypto.ts`, or every rotation fails signature verification.
  */
 /**
+ * Domain separator for the passphrase verifier.
+ *
+ * MUST match VERIFIER_DOMAIN in the browser's `lib/crypto.ts`. The two derive
+ * the same value from the same passphrase, one at signup and one at unlock, and
+ * a difference of a single character means every correct passphrase is rejected.
+ */
+const VERIFIER_DOMAIN = 'trident-passphrase-verifier-v1'
+
+/**
+ * Prove knowledge of a passphrase without holding anything it unlocks.
+ *
+ * Derived under a salt of its own so it shares no output with any encryption
+ * key: storing it reveals nothing beyond the ability to check a guess, and
+ * there is no ciphertext left in the system for it to open anyway.
+ *
+ * Byte-identical to `derivePassphraseVerifier` in the browser, which is asserted
+ * by test/crossPackage.ts rather than trusted.
+ */
+export function derivePassphraseVerifier(
+  passphrase: string,
+  saltHex: string,
+  iterations: number,
+): string {
+  const salt = Buffer.concat([
+    Buffer.from(saltHex, 'hex'),
+    Buffer.from(VERIFIER_DOMAIN, 'utf8'),
+  ])
+  return pbkdf2Sync(passphrase, salt, iterations, 32, PBKDF2_DIGEST).toString('hex')
+}
+
+/**
  * The message signed to install a passphrase verifier.
  *
  * Same reasoning as buildRotationMessage, and the same threat: a session token

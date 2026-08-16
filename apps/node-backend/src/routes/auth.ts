@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import { randomBytes } from 'node:crypto'
 import { timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 import db from '../db.ts'
@@ -10,9 +11,11 @@ import {
   PBKDF2_ITERATIONS_LEGACY,
   buildRotationMessage,
   buildVerifierMessage,
-  generateAndEncryptEoa,
+  derivePassphraseVerifier,
 } from '../auth/keySetup.ts'
 import { passphraseProblem } from '../auth/passphrase.ts'
+import { circleEnabled, circleEnvFor, provisionWallet } from '../circle/circleWallets.ts'
+import { walletChainsFor } from '../circle/chainPolicy.ts'
 import {
   currentUser,
   requireAuth,
@@ -117,28 +120,70 @@ router.post(
 
     const fresh = findUserById(user.id)
     if (!fresh) throw httpError(401, 'User no longer exists')
-    // Re-running setup would orphan any funds already held by the existing EOA.
-    // Checked before the passphrase rules so an existing wallet reports as
-    // such, whatever was typed into the form.
+    // Re-running setup would leave a second wallet nobody is watching. Checked
+    // before the passphrase rules so an existing wallet reports as such,
+    // whatever was typed into the form.
     if (!needsPassphraseSetup(fresh)) {
       throw httpError(409, 'Agent wallet already exists for this account')
     }
 
-    // Enforced here, not just in the browser: this passphrase is the only thing
-    // protecting the encrypted key if the database ever leaks, and the client
-    // check is a convenience the caller can skip.
+    // Enforced here, not just in the browser: the passphrase gates every spend
+    // and the client check is a convenience the caller can skip.
     const problem = passphraseProblem(parsed.data.passphrase)
     if (problem) throw httpError(400, problem)
 
-    const eoa = generateAndEncryptEoa(parsed.data.passphrase)
+    /*
+     * A wallet, not a key.
+     *
+     * Circle creates and holds the signing key, so nothing here generates,
+     * encrypts or stores one. What is stored is a verifier: a value only the
+     * right passphrase produces, which opens nothing. The passphrase itself is
+     * used for this one derivation and never written down.
+     *
+     * Repairable rather than all-or-nothing. Each piece is filled in only if
+     * missing, so an account that has one and not the other is completed by
+     * visiting this route rather than being stuck between two states.
+     */
+    const salt = fresh.payment_key_salt ?? randomBytes(32).toString('hex')
+    const iterations = fresh.kdf_iterations || PBKDF2_ITERATIONS
+    const verifier = derivePassphraseVerifier(parsed.data.passphrase, salt, iterations)
+
+    const chains = walletChainsFor(fresh)
+    for (const env of [...new Set(chains.map(circleEnvFor))]) {
+      const already = env === 'mainnet' ? fresh.circle_wallet_id : fresh.circle_wallet_id_testnet
+      if (already || !circleEnabled(env)) continue
+
+      const wallet = await provisionWallet(env, chains)
+      const cols =
+        env === 'mainnet'
+          ? 'circle_wallet_id = ?, circle_wallet_address = ?'
+          : 'circle_wallet_id_testnet = ?, circle_wallet_address_testnet = ?'
+      db.prepare(`UPDATE users SET ${cols} WHERE id = ?`).run(
+        wallet.walletId,
+        wallet.address,
+        user.id,
+      )
+    }
+
     db.prepare(
-      `UPDATE users
-       SET eoa_address = ?, encrypted_payment_key = ?, payment_key_salt = ?,
-           payment_key_iv = ?, kdf_iterations = ?
+      `UPDATE users SET payment_key_salt = ?, kdf_iterations = ?, passphrase_verifier = ?
        WHERE id = ?`,
-    ).run(eoa.eoaAddress, eoa.encryptedKey, eoa.salt, eoa.iv, eoa.iterations, user.id)
+    ).run(salt, iterations, verifier, user.id)
 
     const updated = findUserById(user.id)!
+    /*
+     * Refuse rather than hand back a token for an account that cannot pay. A
+     * testnet wallet is the minimum: without it the free tier cannot meter and
+     * every run would fail at the first step with nothing explaining why.
+     */
+    if (!updated.circle_wallet_id_testnet && !updated.circle_wallet_id) {
+      throw httpError(
+        503,
+        'Could not create an agent wallet. Circle wallet credentials are not configured ' +
+          'for this environment, so nothing was set up. Nothing was charged.',
+      )
+    }
+
     res.json({ token: signFullToken(user.id), user: publicUser(updated) })
   }),
 )
@@ -147,13 +192,13 @@ router.get('/key-material', requireAuth, (req, res) => {
   const user = currentUser(req)
   const row = findUserById(user.id)
   /*
-   * A migrated wallet has no ciphertext left, only a salt and an iteration
-   * count so the browser can still derive the passphrase verifier. Both are
-   * parameters rather than secrets: a salt is public by design, and there is
-   * nothing remaining for either to decrypt.
+   * Accounts hold no ciphertext, only a salt and an iteration count so the
+   * browser can derive the passphrase verifier. Both are parameters rather than
+   * secrets: a salt is public by design, and nothing remains for either to
+   * decrypt.
    *
-   * This used to 404 whenever the ciphertext was absent, which after migration
-   * would lock every user out of their own unlock prompt.
+   * This used to 404 whenever the ciphertext was absent, which now describes
+   * every account and would lock everyone out of their own unlock prompt.
    */
   if (!row?.payment_key_salt) {
     res.status(404).json({ error: 'No agent wallet has been set up for this account' })
@@ -164,7 +209,7 @@ router.get('/key-material', requireAuth, (req, res) => {
     // Included so the browser can build the rotation message without a second
     // round trip; it is the caller's own id, never anybody else's.
     userId: row.id,
-    /** Null once migrated: there is no key left to decrypt. */
+    /** Null for every current account: signing is Circle's, so no key is held. */
     encryptedKey: row.encrypted_payment_key,
     salt: row.payment_key_salt,
     iv: row.payment_key_iv,

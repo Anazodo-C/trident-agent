@@ -270,7 +270,7 @@ export interface DepositInfo {
 
 export interface KeyMaterial {
   userId: string
-  /** Null once the wallet has migrated: there is no key left to decrypt. */
+  /** Null for every current account: signing is Circle's, so there is no key here. */
   encryptedKey: string | null
   salt: string
   iv: string | null

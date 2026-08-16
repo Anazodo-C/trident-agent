@@ -16,7 +16,6 @@ import { useWalletStore } from '../../store/walletStore.ts'
 import { copyToClipboard, shortAddress, usdc } from '../../lib/format.ts'
 import type { PendingDeposit } from '../../lib/types.ts'
 import { DepositPanel } from './DepositPanel.tsx'
-import { MigrationPanel } from './MigrationPanel.tsx'
 import { WithdrawPanel } from './WithdrawPanel.tsx'
 
 export function WalletPage() {
@@ -102,7 +101,6 @@ export function WalletPage() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <MigrationPanel />
         <BalancePanel />
         <DepositPanel />
         <WithdrawPanel />

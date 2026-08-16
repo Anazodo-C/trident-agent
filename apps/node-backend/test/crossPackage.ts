@@ -15,10 +15,12 @@
 import {
   buildRotationMessage as backendRotation,
   buildVerifierMessage as backendVerifier,
+  derivePassphraseVerifier as backendDerive,
 } from '../src/auth/keySetup.ts'
 import {
   buildRotationMessage as browserRotation,
   buildVerifierMessage as browserVerifier,
+  derivePassphraseVerifier as browserDerive,
 } from '../../frontend/src/lib/crypto.ts'
 
 let failures = 0
@@ -88,6 +90,53 @@ check(
   backendVerifier({ userId: 'a', verifier: 'x' }) !== backendVerifier({ userId: 'a', verifier: 'y' }),
   true,
 )
+
+console.log('\n  the passphrase verifier derives identically in both packages\n')
+
+/*
+ * The server derives this at signup, the browser re-derives it at every unlock,
+ * and they must agree exactly. A mismatch does not fail loudly: it rejects the
+ * correct passphrase, for every user, with no way to tell why.
+ *
+ * Deliberately low iteration counts here. The real one is 600,000 and would
+ * make this suite take minutes; the derivation is identical either way.
+ */
+{
+  const cases: [string, string, number][] = [
+    ['correct horse battery staple', 'a1b2c3d4e5f60718', 1000],
+    ['short', '00'.repeat(32), 2048],
+    // Non-ASCII: the two sides encode the passphrase separately, so a UTF-8
+    // handling difference would only ever show up on input like this.
+    ['pässwörd with ünicode 🔑', 'ff'.repeat(16), 1500],
+    ['', 'deadbeef', 1000],
+  ]
+  for (const [passphrase, salt, iterations] of cases) {
+    const expected = backendDerive(passphrase, salt, iterations)
+    check(
+      `verifier for ${JSON.stringify(passphrase.slice(0, 20))}`,
+      await browserDerive(passphrase, salt, iterations),
+      expected,
+    )
+    check(`  and it is 32 bytes of hex`, /^[0-9a-f]{64}$/.test(expected), true)
+  }
+
+  /* Each input must actually matter, or the check is not checking. */
+  check(
+    'a different passphrase gives a different verifier',
+    backendDerive('a', 'aa', 1000) !== backendDerive('b', 'aa', 1000),
+    true,
+  )
+  check(
+    'a different salt gives a different verifier',
+    backendDerive('a', 'aa', 1000) !== backendDerive('a', 'bb', 1000),
+    true,
+  )
+  check(
+    'a different iteration count gives a different verifier',
+    backendDerive('a', 'aa', 1000) !== backendDerive('a', 'aa', 1001),
+    true,
+  )
+}
 
 console.log(failures === 0 ? '\nall cross-package tests passed\n' : `\n${failures} FAILED\n`)
 process.exit(failures === 0 ? 0 : 1)

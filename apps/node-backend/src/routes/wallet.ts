@@ -1,6 +1,6 @@
 import { Router, type RequestHandler } from 'express'
 import { z } from 'zod'
-import { createPublicClient, http, erc20Abi, parseUnits, isAddress, formatEther } from 'viem'
+import { createPublicClient, erc20Abi, parseUnits, isAddress, formatEther } from 'viem'
 import db from '../db.ts'
 import { asyncRoute, httpError } from '../http.ts'
 import { currentUser, requireAuth } from '../auth/jwt.ts'
@@ -10,12 +10,12 @@ import {
   chainConfig,
   chainLabel,
   readOnlyGatewayClient,
-  rpcUrlFor,
   strictChain,
   safeErrorMessage,
   unifiedGatewayBalance,
   walletUsdcByChain,
   spendableTotalUsdc,
+  transportFor,
 } from '../circle/gatewayService.ts'
 import { GATEWAY_MAINNET_CHAINS, policyFor } from '../circle/chainPolicy.ts'
 import { canBridgeTo } from '../circle/deployments.ts'
@@ -127,7 +127,7 @@ router.all(
 
     const publicClient = createPublicClient({
       chain: config.chain,
-      transport: http(rpcUrlFor(chain)),
+      transport: transportFor(chain),
     })
 
     // Wallet USDC + native gas are readable from the address alone — no key needed.
