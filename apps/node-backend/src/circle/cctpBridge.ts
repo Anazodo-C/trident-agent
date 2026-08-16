@@ -109,7 +109,7 @@ export interface BridgeResult {
   creditedAtomic: bigint
 }
 
-function keeperAccount() {
+export function keeperAccount() {
   if (!KEEPER_PRIVATE_KEY) {
     throw new BridgeError(
       'Cross-chain settlement is not configured: KEEPER_PRIVATE_KEY is unset, so nothing can ' +

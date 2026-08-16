@@ -296,7 +296,11 @@ export const api = {
       newTestnetAddress: string | null
       hasVerifier: boolean
       keyStillAvailable: boolean
-      remaining: { walletByChain: { chain: string; usdc: string }[]; gatewayUsdc: string }
+      remaining: {
+        walletByChain: { chain: string; usdc: string }[]
+        gatewayByChain: { chain: string; usdc: string }[]
+        gatewayUsdc: string
+      }
     }>('/api/wallet/migrate/status'),
 
   /** Provisions a wallet per Circle environment the account needs. */

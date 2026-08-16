@@ -1,7 +1,25 @@
 import { randomBytes } from 'node:crypto'
-import { maxUint256, pad, zeroAddress } from 'viem'
+import {
+  createPublicClient,
+  createWalletClient,
+  http,
+  maxUint256,
+  pad,
+  parseAbi,
+  zeroAddress,
+} from 'viem'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
-import { chainConfig, safeErrorMessage, toAtomicUsdc, fromAtomicUsdc } from './gatewayService.ts'
+import {
+  chainConfig,
+  rpcUrlFor,
+  safeErrorMessage,
+  toAtomicUsdc,
+  fromAtomicUsdc,
+} from './gatewayService.ts'
+import { keeperAccount } from './cctpBridge.ts'
+
+/** The one function a Gateway attestation is redeemed through. */
+const GATEWAY_MINTER_ABI = parseAbi(['function gatewayMint(bytes attestationPayload, bytes signature)'])
 import { executeContract, signTypedDataFor, type AgentWallet } from './circleWallets.ts'
 import { httpError } from '../http.ts'
 
@@ -215,6 +233,46 @@ export async function submitBurnIntent(
   }
 }
 
+/**
+ * Submit a Gateway attestation, paid for by the keeper.
+ *
+ * The mint lands on the destination chain and costs gas there. Charging that to
+ * the wallet receiving the funds is exactly backwards: the common case is a
+ * user moving USDC to a chain they have never touched and therefore hold no
+ * native token on, which is precisely when they cannot pay for it.
+ *
+ * The keeper already does this for CCTP mints and exists for nothing else. It
+ * is safe here for the same reason: `destinationCaller` is zero, so anyone may
+ * submit, and the attestation names the recipient, so an open caller cannot
+ * redirect a single cent of it.
+ */
+export async function mintGatewayAttestation(
+  chain: SupportedChainName,
+  attestation: string,
+  attestationSignature: string,
+): Promise<string> {
+  const keeper = keeperAccount()
+  const config = chainConfig(chain)
+  const transport = http(rpcUrlFor(chain))
+  const publicClient = createPublicClient({ chain: config.chain, transport })
+  const wallet = createWalletClient({ account: keeper, chain: config.chain, transport })
+
+  const hash = await wallet.writeContract({
+    address: config.gatewayMinter,
+    abi: GATEWAY_MINTER_ABI,
+    functionName: 'gatewayMint',
+    args: [attestation as `0x${string}`, attestationSignature as `0x${string}`],
+  })
+
+  // A receipt is not success: it resolves for a reverted transaction too, and a
+  // reverted mint means the funds were attested but never delivered.
+  const receipt = await publicClient.waitForTransactionReceipt({ hash })
+  if (receipt.status !== 'success') {
+    throw httpError(502, `The Gateway mint reverted on ${chain} (${hash}). Nothing was credited.`)
+  }
+  return hash
+}
+
 export interface WithdrawOutcome {
   mintTxHash: string
   amountUsdc: string
@@ -242,7 +300,6 @@ export async function withdrawFromGateway(
   },
 ): Promise<WithdrawOutcome> {
   const toChain = opts.toChain ?? fromChain
-  const to = chainConfig(toChain)
   const value = toAtomicUsdc(opts.amountUsdc)
   if (value <= 0n) throw httpError(400, 'Withdrawal amount must be greater than zero.')
 
@@ -273,19 +330,17 @@ export async function withdrawFromGateway(
 
   /*
    * The only on-chain step, and it lands on the destination rather than the
-   * source. Until this succeeds the funds are attested but not minted, so a
-   * failure here is recoverable by resubmitting the same attestation and must
-   * not be reported as money lost.
+   * source. Paid for by the keeper, so withdrawing to a chain the user holds no
+   * gas on works, which is most of the point of withdrawing to another chain.
+   *
+   * Until this succeeds the funds are attested but not minted, so a failure
+   * here is recoverable by resubmitting the same attestation and must not be
+   * reported as money lost.
    */
-  const mint = await executeContract({
-    wallet,
-    contractAddress: to.gatewayMinter,
-    abiFunctionSignature: 'gatewayMint(bytes,bytes)',
-    abiParameters: [attestation, attestationSignature],
-  })
+  const mintTxHash = await mintGatewayAttestation(toChain, attestation, attestationSignature)
 
   return {
-    mintTxHash: mint.txHash,
+    mintTxHash,
     amountUsdc: fromAtomicUsdc(value),
     sourceChain: fromChain,
     destinationChain: toChain,

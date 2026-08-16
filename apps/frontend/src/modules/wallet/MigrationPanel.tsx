@@ -51,6 +51,7 @@ export function MigrationPanel() {
   if (!status?.oldAddress || status.state === 'complete') return null
 
   const remainingGateway = Number(status.remaining.gatewayUsdc)
+  const gatewayChains = status.remaining.gatewayByChain ?? []
   const remainingWallet = status.remaining.walletByChain
   const nothingLeft = remainingGateway <= 0 && remainingWallet.length === 0
 
@@ -207,19 +208,29 @@ export function MigrationPanel() {
         </Step>
 
         <Step n={2} done={remainingGateway <= 0} title="Move the Gateway balance">
-          {remainingGateway > 0 ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-slate-400">{status.remaining.gatewayUsdc} USDC</span>
-              <button
-                className="btn-ghost"
-                disabled={busy !== null || !status.newAddress}
-                onClick={() => void moveGateway('base', status!.remaining.gatewayUsdc)}
-              >
-                {busy?.startsWith('gateway:') ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : null}
-                Move it
-              </button>
+          {/*
+            One row per chain. A Gateway balance is a ledger per network, not a
+            single pot, so a button offering the total against one chain asks
+            for more than that chain holds and is refused.
+          */}
+          {gatewayChains.length > 0 ? (
+            <div className="flex flex-col gap-2">
+              {gatewayChains.map((b) => (
+                <div key={b.chain} className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-xs text-slate-300">{b.chain}</span>
+                  <span className="text-xs text-slate-400">{b.usdc} USDC</span>
+                  <button
+                    className="btn-ghost"
+                    disabled={busy !== null || !status!.newAddress}
+                    onClick={() => void moveGateway(b.chain, b.usdc)}
+                  >
+                    {busy === `gateway:${b.chain}` ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : null}
+                    Move it
+                  </button>
+                </div>
+              ))}
             </div>
           ) : (
             <span className="text-xs text-slate-500">Nothing in Gateway.</span>

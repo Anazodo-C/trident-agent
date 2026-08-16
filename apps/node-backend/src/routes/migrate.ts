@@ -14,9 +14,9 @@ import {
   walletUsdcByChain,
 } from '../circle/gatewayService.ts'
 import {
+  jsonWithBigints,
   circleEnabled,
   circleEnvFor,
-  executeContract,
   provisionWallet,
   walletForChain,
   type CircleEnv,
@@ -25,6 +25,7 @@ import {
   buildBurnIntent,
   BURN_INTENT_TYPES,
   gatewayApiBase,
+  mintGatewayAttestation,
   submitBurnIntent,
 } from '../circle/gatewayMoves.ts'
 import { GATEWAY_MAINNET_CHAINS, policyFor } from '../circle/chainPolicy.ts'
@@ -70,6 +71,7 @@ router.get(
      * complete while money is still sitting there.
      */
     let walletByChain: { chain: string; usdc: string }[] = []
+    let gatewayByChain: { chain: string; usdc: string }[] = []
     let gatewayUsdc = '0'
     if (oldAddress) {
       const [wallet, gateway] = await Promise.all([
@@ -82,6 +84,16 @@ router.get(
         .filter(([, amount]) => Number(amount) > 0)
         .map(([chain, amount]) => ({ chain, usdc: String(amount) }))
       gatewayUsdc = gateway?.totalUsdc ?? '0'
+      /*
+       * Per chain, because a Gateway balance is not one pot.
+       *
+       * The panel used to offer a single button that asked to move the total
+       * from Base. A ledger holding 0.04 on Base and 0.07 on Polygon cannot
+       * satisfy a request for 0.11 against Base, and Circle rightly refused.
+       */
+      gatewayByChain = (gateway?.byChain ?? [])
+        .filter((b) => Number(b.usdc) > 0)
+        .map((b) => ({ chain: b.chain, usdc: b.usdc }))
     }
 
     res.json({
@@ -92,7 +104,7 @@ router.get(
       hasVerifier: Boolean(row.passphrase_verifier),
       /** True while the old key still exists and can be handed back. */
       keyStillAvailable: Boolean(row.encrypted_payment_key),
-      remaining: { walletByChain, gatewayUsdc },
+      remaining: { walletByChain, gatewayByChain, gatewayUsdc },
     })
   }),
 )
@@ -204,14 +216,29 @@ router.post(
     })
 
     pendingIntents.set(user.id, { intent, chain, at: Date.now() })
-    res.json({
-      typedData: {
-        domain: { name: 'GatewayWallet', version: '1' },
-        types: BURN_INTENT_TYPES,
-        primaryType: 'BurnIntent',
-        message: intent,
-      },
-    })
+
+    /*
+     * Sent with bigints stringified, not through res.json.
+     *
+     * A burn intent carries uint256 values, and JSON.stringify throws on a
+     * bigint rather than coercing it, so res.json produced a 500 for every
+     * attempt. Verified that viem signs a decimal-string uint256 to the exact
+     * same signature as the bigint, so the browser is signing the same digest.
+     *
+     * The copy held server-side keeps its real bigints: submitBurnIntent does
+     * its own bigint-safe serialisation, and the value Circle attests must come
+     * from there rather than from a round trip through the client.
+     */
+    res.type('application/json').send(
+      jsonWithBigints({
+        typedData: {
+          domain: { name: 'GatewayWallet', version: '1' },
+          types: BURN_INTENT_TYPES,
+          primaryType: 'BurnIntent',
+          message: intent,
+        },
+      }),
+    )
   }),
 )
 
@@ -232,7 +259,6 @@ router.post(
       throw httpError(409, 'That transfer request expired. Start the step again.')
     }
 
-    const wallet = walletForChain(row, pending.chain)
     const attestation = await submitBurnIntent(
       gatewayApiBase(pending.chain),
       pending.intent,
@@ -240,23 +266,26 @@ router.post(
     )
 
     /*
-     * The mint is paid for by the new wallet, which is the point of naming a
-     * zero destinationCaller: the old address needs no gas on a chain we are
-     * walking away from.
+     * The keeper pays for the mint, not the wallet receiving the funds.
+     *
+     * A freshly provisioned Circle wallet holds no native token anywhere, so
+     * charging it for its own first delivery would make migration impossible
+     * for exactly the people who need it. Zero destinationCaller means anyone
+     * may submit, and the attestation names the recipient, so this cannot be
+     * redirected.
      */
-    const mint = await executeContract({
-      wallet,
-      contractAddress: chainConfig(pending.chain).gatewayMinter,
-      abiFunctionSignature: 'gatewayMint(bytes,bytes)',
-      abiParameters: [attestation.attestation, attestation.signature],
-    })
+    const mintTxHash = await mintGatewayAttestation(
+      pending.chain,
+      attestation.attestation,
+      attestation.signature,
+    )
 
     pendingIntents.delete(user.id)
     db.prepare(
       `UPDATE users SET migration_state = 'gateway-withdrawn' WHERE id = ? AND migration_state = 'provisioned'`,
     ).run(user.id)
 
-    res.json({ mintTxHash: mint.txHash })
+    res.json({ mintTxHash })
   }),
 )
 
