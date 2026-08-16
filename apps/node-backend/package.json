@@ -19,6 +19,7 @@
     "test:funding": "CIRCLE_API_KEY= CIRCLE_ENTITY_SECRET= CIRCLE_WALLET_SET_ID= node --experimental-strip-types test/funding.ts",
     "test:circle": "CIRCLE_API_KEY= CIRCLE_ENTITY_SECRET= CIRCLE_WALLET_SET_ID= node --experimental-strip-types test/circleWallets.ts",
     "test:gateway-moves": "CIRCLE_API_KEY= CIRCLE_ENTITY_SECRET= CIRCLE_WALLET_SET_ID= node --experimental-strip-types test/gatewayMoves.ts",
+    "circle:preflight": "node --experimental-strip-types scripts/circlePreflight.ts",
     "test:cross-package": "CIRCLE_API_KEY= CIRCLE_ENTITY_SECRET= CIRCLE_WALLET_SET_ID= node --experimental-strip-types test/crossPackage.ts"
   },
   "dependencies": {
