@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { statusPayload } from '../circle/statusProber.ts'
+import { statusPayload, statusSummaryPayload } from '../circle/statusProber.ts'
 
 /**
  * Public reachability data for status.tridentagent.xyz.
@@ -16,7 +16,15 @@ import { statusPayload } from '../circle/statusProber.ts'
 const router = Router()
 
 router.get('/', (req, res) => {
-  const { json, etag } = statusPayload()
+  /*
+   * `?summary=1` drops the endpoint list, leaving the counts.
+   *
+   * For callers that want the headline rather than the table, chiefly the
+   * landing page, where the full body would be ~205KB of records to render
+   * four numbers. Same caching, same 304 path, its own ETag.
+   */
+  const { json, etag } =
+    req.query['summary'] === '1' ? statusSummaryPayload() : statusPayload()
 
   res.setHeader('ETag', etag)
   // Five seconds, matching the client's poll: a shared cache in front of this

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, KeyRound, Radar, Receipt, Wallet } from 'lucide-react'
-import { api } from '../../lib/api.ts'
+import { Activity, ArrowRight, KeyRound, Radar, Receipt, Wallet } from 'lucide-react'
+import { api, apiUrl } from '../../lib/api.ts'
 import type { ShowcaseCard } from '../../lib/types.ts'
 import { useAuthStore } from '../../store/authStore.ts'
 import { TridentMark } from '../layout/TridentMark.tsx'
@@ -125,6 +125,11 @@ export function LandingPage() {
         </div>
       </section>
 
+      {/* ------------------------------------------------------------ status */}
+      <section className="mx-auto w-full max-w-6xl px-5 pb-20 sm:px-8 sm:pb-28">
+        <StatusTeaser />
+      </section>
+
       {/* --------------------------------------------------------------- cta */}
       <section className="mx-auto w-full max-w-6xl px-5 pb-24 sm:px-8">
         <div className="panel flex flex-col items-start gap-6 p-8 sm:flex-row sm:items-center sm:justify-between sm:p-10">
@@ -242,5 +247,112 @@ function Step({
       </div>
       <p className="mt-3 text-sm leading-relaxed text-slate-400">{body}</p>
     </div>
+  )
+}
+
+/**
+ * A pointer to the status page, with live figures.
+ *
+ * A section claiming continuous monitoring that shows nothing live is just an
+ * assertion, so it reads the real counts. It asks for the summary variant,
+ * which is a few hundred bytes: the full body carries about a thousand endpoint
+ * records and this needs three numbers from it.
+ *
+ * Bypasses `api.request` deliberately. That attaches auth and throws on a
+ * non-2xx, and this is a decorative read on a public page that is allowed to
+ * fail quietly. The section renders either way, with the numbers omitted rather
+ * than an error shown: a landing page reporting that the status endpoint is
+ * unreachable would advertise the opposite of what it is claiming.
+ */
+function StatusTeaser() {
+  const [counts, setCounts] = useState<{
+    total: number
+    reachable: number
+    providers: number
+  } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    fetch(apiUrl('/api/status?summary=1'))
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return
+        const { total, reachable, providers } = data as Record<string, unknown>
+        if (
+          typeof total === 'number' &&
+          typeof reachable === 'number' &&
+          typeof providers === 'number'
+        ) {
+          setCounts({ total, reachable, providers })
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return (
+    <div className="panel flex flex-col gap-6 p-8 sm:flex-row sm:items-center sm:justify-between sm:p-10">
+      <div className="min-w-0">
+        <p className="heading-mono flex items-center gap-2">
+          <Activity className="h-3.5 w-3.5 text-[#00FF88]" />
+          Live endpoint reachability
+        </p>
+        <h2 className="mt-3 font-mono text-xl uppercase tracking-widest text-slate-100">
+          See what is answering
+        </h2>
+        {/*
+          Worded against what the prober actually does. It runs 16 endpoints
+          every five seconds, so a full pass takes minutes; the page refreshes
+          every five seconds but an endpoint is not rechecked that often.
+          "Reachable" is also not "selling": it means the endpoint answered.
+        */}
+        <p className="mt-3 max-w-lg text-sm leading-relaxed text-slate-400">
+          Every endpoint in the catalog is probed around the clock, each one rechecked every few
+          minutes. The results are public and need no account, so you can see which providers are
+          answering before you spend anything.
+        </p>
+
+        {/*
+          Reserved height, so the row does not appear and shove the layout down
+          once the fetch lands.
+        */}
+        <div className="mt-5 flex min-h-[1.75rem] flex-wrap items-center gap-x-6 gap-y-2">
+          {counts && (
+            <>
+              <Figure value={`${counts.reachable.toLocaleString()}/${counts.total.toLocaleString()}`} label="reachable" />
+              <Figure value={counts.providers.toLocaleString()} label="providers" />
+            </>
+          )}
+        </div>
+      </div>
+
+      {/*
+        rel="noreferrer noopener" for the same reasons as the footer links:
+        noopener so the opened tab cannot reach back through window.opener,
+        noreferrer so leaving does not announce which page they left.
+      */}
+      <a
+        href="https://status.tridentagent.xyz"
+        target="_blank"
+        rel="noreferrer noopener"
+        className="btn-ghost shrink-0"
+      >
+        View status
+        <ArrowRight className="h-4 w-4" />
+      </a>
+    </div>
+  )
+}
+
+function Figure({ value, label }: { value: string; label: string }) {
+  return (
+    <span className="flex items-baseline gap-2">
+      <span className="font-mono text-lg text-[#00D4FF]">{value}</span>
+      <span className="font-mono text-[11px] uppercase tracking-widest text-slate-500">
+        {label}
+      </span>
+    </span>
   )
 }

@@ -344,6 +344,7 @@ export interface StatusSnapshot {
 }
 
 let cached: { json: string; etag: string } | null = null
+let cachedSummary: { json: string; etag: string } | null = null
 
 function pathOf(resource: string, host: string): string {
   try {
@@ -423,12 +424,46 @@ function build(): StatusSnapshot {
  * request after a tick, so an idle page costs nothing at all.
  */
 export function statusPayload(): { json: string; etag: string } {
-  if (!cached || snapshotDirty) {
-    const json = JSON.stringify(build())
-    cached = { json, etag: `W/"${json.length.toString(36)}-${Date.now().toString(36)}"` }
-    snapshotDirty = false
-  }
-  return cached
+  rebuildIfStale()
+  return cached!
+}
+
+/**
+ * The same figures without the endpoint list.
+ *
+ * The full body is roughly 205KB because of ~1,000 endpoint records. The
+ * landing page wants four integers from it, and making every visitor to the
+ * busiest public page download a thousand rows to render four numbers is not a
+ * trade worth making.
+ *
+ * Built in the same pass as the full payload and invalidated by the same flag,
+ * so a reader still never pays for serialisation. Its ETag is derived from its
+ * own bytes: sharing one with the full payload would tell a client that had
+ * seen the summary that the full body was unchanged, and it would render the
+ * counts with no endpoints at all.
+ */
+export function statusSummaryPayload(): { json: string; etag: string } {
+  rebuildIfStale()
+  return cachedSummary!
+}
+
+function rebuildIfStale(): void {
+  if (cached && cachedSummary && !snapshotDirty) return
+
+  const snapshot = build()
+  const json = JSON.stringify(snapshot)
+  cached = { json, etag: etagFor('f', json) }
+
+  const { endpoints: _endpoints, ...summary } = snapshot
+  const summaryJson = JSON.stringify(summary)
+  cachedSummary = { json: summaryJson, etag: etagFor('s', summaryJson) }
+
+  snapshotDirty = false
+}
+
+/** Prefixed per variant so two bodies of equal length cannot collide. */
+function etagFor(kind: string, json: string): string {
+  return `W/"${kind}${json.length.toString(36)}-${Date.now().toString(36)}"`
 }
 
 /** Uncached, for tests and for callers that want the object rather than bytes. */
