@@ -17,9 +17,14 @@ import {
   spendableTotalUsdc,
   transportFor,
 } from '../circle/gatewayService.ts'
-import { GATEWAY_MAINNET_CHAINS, policyFor } from '../circle/chainPolicy.ts'
+import { GATEWAY_MAINNET_CHAINS, policyFor, walletChainsFor } from '../circle/chainPolicy.ts'
 import { canBridgeTo } from '../circle/deployments.ts'
-import { executeContract, walletForChain } from '../circle/circleWallets.ts'
+import {
+  circleEnabled,
+  executeContract,
+  provisionWallet,
+  walletForChain,
+} from '../circle/circleWallets.ts'
 import { depositToGateway, withdrawFromGateway } from '../circle/gatewayMoves.ts'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import type { UserRow } from '../db.ts'
@@ -106,7 +111,7 @@ router.all(
     }
     const user = currentUser(req)
     const row = findUserById(user.id)
-    if (!row?.eoa_address) throw httpError(409, 'No agent wallet has been set up for this account')
+    if (!row) throw httpError(401, 'User no longer exists')
 
     // ?chain= on GET, or { chain } in the POST body.
     const requestedChain =
@@ -117,13 +122,15 @@ router.all(
     const chain = walletChain(row, requestedChain)
     const config = chainConfig(chain)
     /*
-     * The Circle wallet once there is one, the old EOA until then.
+     * The wallet for this chain, not a single stored address.
      *
-     * A user part way through migration still holds funds at the old address,
-     * and showing them a zero balance because we read only the new one would
-     * look exactly like their money had vanished.
+     * Sandbox and production are separate Circle environments with separate
+     * wallets at separate addresses, so reading one column for every chain
+     * shows the mainnet balance on a testnet page and vice versa. This gate
+     * also used to test `eoa_address`, which no account has had since signup
+     * stopped creating one, so every new user was told they had no wallet.
      */
-    const address = (row.circle_wallet_address ?? row.eoa_address) as `0x${string}`
+    const address = walletForChain(row, chain).address
 
     const publicClient = createPublicClient({
       chain: config.chain,
@@ -214,7 +221,7 @@ router.all(
     }
 
     res.json({
-      eoaAddress: row.eoa_address,
+      eoaAddress: address,
       // The chain this balance is FOR — not the stored default, which is set
       // once at signup and would misreport every explicit request.
       chain,
@@ -362,14 +369,17 @@ router.post(
 
 router.get('/deposit-address', requireAuth, (req, res) => {
   const row = findUserById(currentUser(req).id)
-  if (!row?.eoa_address) {
-    res.status(409).json({ error: 'No agent wallet has been set up for this account' })
+  if (!row) {
+    res.status(401).json({ error: 'User no longer exists' })
     return
   }
   const requested = typeof req.query['chain'] === 'string' ? req.query['chain'] : null
   const chain = walletChain(row, requested)
   res.json({
-    address: row.eoa_address,
+    // Per chain, because the testnet and mainnet wallets are different
+    // addresses. Sending a mainnet deposit to the sandbox address would put
+    // real funds somewhere the production key cannot sign for.
+    address: walletForChain(row, chain).address,
     chain,
     chainId: chainConfig(chain).chain.id,
     /**
@@ -417,7 +427,10 @@ const MainnetBody = z.object({
  * autonomous execution starts spending actual USDC, so it is a deliberate,
  * separate action rather than a side effect of funding a wallet.
  */
-router.patch('/user/mainnet', requireAuth, (req, res) => {
+router.patch(
+  '/user/mainnet',
+  requireAuth,
+  asyncRoute(async (req, res) => {
   const user = currentUser(req)
   const parsed = MainnetBody.safeParse(req.body)
   if (!parsed.success) {
@@ -429,6 +442,35 @@ router.patch('/user/mainnet', requireAuth, (req, res) => {
     parsed.data.chain ?? 'BASE',
     user.id,
   )
+
+  /*
+   * Opting in has to create the wallet it enables.
+   *
+   * Signup provisions only the environments the account needed at the time,
+   * which for a testnet-only account is sandbox alone. Flipping this flag
+   * without provisioning left every mainnet payment refusing with "no mainnet
+   * agent wallet yet, finish setting one up in Wallet", pointing at a flow that
+   * does not exist. This is that flow.
+   *
+   * Failure to provision does not undo the opt-in: the flag is the user's
+   * choice, the wallet is our job, and the next attempt retries it.
+   */
+  const afterFlag = findUserById(user.id)!
+  if (parsed.data.enabled && !afterFlag.circle_wallet_id && circleEnabled('mainnet')) {
+    try {
+      const wallet = await provisionWallet('mainnet', walletChainsFor(afterFlag))
+      db.prepare(
+        'UPDATE users SET circle_wallet_id = ?, circle_wallet_address = ? WHERE id = ?',
+      ).run(wallet.walletId, wallet.address, user.id)
+    } catch (err) {
+      throw httpError(
+        502,
+        `Mainnet is enabled but the wallet could not be created: ${safeErrorMessage(err)}. ` +
+          'Try again from Wallet.',
+      )
+    }
+  }
+
   const row = findUserById(user.id)!
   res.json({
     ok: true,
@@ -436,7 +478,8 @@ router.patch('/user/mainnet', requireAuth, (req, res) => {
     mainnetChain: row.mainnet_chain,
     user: publicUser(row),
   })
-})
+  }),
+)
 
 const CapBody = z.object({ cap: z.number().positive().max(100_000) })
 

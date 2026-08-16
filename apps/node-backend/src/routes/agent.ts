@@ -364,7 +364,15 @@ router.post(
     }
 
     const fresh = findUserById(user.id)
-    if (!fresh?.eoa_address) throw httpError(409, 'No agent wallet has been set up for this account')
+    /*
+     * A wallet for the chain the free tier meters on. Gated here rather than
+     * per step so a run refuses before it starts, and keyed on the Circle
+     * wallet: this tested `eoa_address` until signup stopped writing one, which
+     * refused every new account's very first run.
+     */
+    if (!fresh?.circle_wallet_id_testnet && !fresh?.circle_wallet_id) {
+      throw httpError(409, 'No agent wallet has been set up for this account')
+    }
 
     // Reject the whole run if any step needs a chain the user has not enabled,
     // rather than discovering it mid-execution after money has already moved.

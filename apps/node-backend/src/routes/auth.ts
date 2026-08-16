@@ -145,7 +145,18 @@ router.post(
      * visiting this route rather than being stuck between two states.
      */
     const salt = fresh.payment_key_salt ?? randomBytes(32).toString('hex')
-    const iterations = fresh.kdf_iterations || PBKDF2_ITERATIONS
+    /*
+     * Always the current count for a new setup.
+     *
+     * This read `fresh.kdf_iterations || PBKDF2_ITERATIONS`, and the column
+     * carries DEFAULT 200000, so the value was never falsy and the 600,000
+     * fallback could not fire. Every account was silently set up at a third of
+     * the intended work factor, against a verifier that gates spending.
+     *
+     * An existing salt means an existing verifier derived at whatever count is
+     * recorded, so that case keeps its own number rather than being invalidated.
+     */
+    const iterations = fresh.payment_key_salt ? fresh.kdf_iterations : PBKDF2_ITERATIONS
     const verifier = derivePassphraseVerifier(parsed.data.passphrase, salt, iterations)
 
     const chains = walletChainsFor(fresh)
