@@ -19,14 +19,13 @@
  * holds real money.
  */
 import { initiateDeveloperControlledWalletsClient } from '@circle-fin/developer-controlled-wallets'
+import { CIRCLE_API_KEY, CIRCLE_API_KEY_MAINNET } from '../src/env.ts'
 import {
-  CIRCLE_API_KEY,
-  CIRCLE_API_KEY_MAINNET,
-  CIRCLE_ENTITY_SECRET,
-  CIRCLE_WALLET_SET_ID,
-  CIRCLE_WALLET_SET_ID_MAINNET,
-} from '../src/env.ts'
-import { circleEnabled, walletSetFor, type CircleEnv } from '../src/circle/circleWallets.ts'
+  circleEnabled,
+  entitySecretFor,
+  walletSetFor,
+  type CircleEnv,
+} from '../src/circle/circleWallets.ts'
 
 const WRITE = process.argv.includes('--write')
 
@@ -52,12 +51,19 @@ async function checkEnv(env: CircleEnv): Promise<void> {
   console.log(`\n\x1b[1m${env}\x1b[0m`)
 
   const key = env === 'mainnet' ? CIRCLE_API_KEY_MAINNET : CIRCLE_API_KEY
+  const secret = entitySecretFor(env)
   const setId = walletSetFor(env)
   const keyVar = env === 'mainnet' ? 'CIRCLE_API_KEY_MAINNET' : 'CIRCLE_API_KEY'
   const setVar = env === 'mainnet' ? 'CIRCLE_WALLET_SET_ID_MAINNET' : 'CIRCLE_WALLET_SET_ID'
 
   if (!key) return fail(`${keyVar} is not set`)
-  if (!CIRCLE_ENTITY_SECRET) return fail('CIRCLE_ENTITY_SECRET is not set')
+  if (!secret) {
+    return fail(
+      env === 'mainnet'
+        ? 'no entity secret for mainnet (CIRCLE_ENTITY_SECRET_MAINNET or CIRCLE_ENTITY_SECRET)'
+        : 'CIRCLE_ENTITY_SECRET is not set',
+    )
+  }
   if (!setId) {
     return fail(
       `${setVar} is not set`,
@@ -81,10 +87,7 @@ async function checkEnv(env: CircleEnv): Promise<void> {
 
   if (!circleEnabled(env)) return fail(`${env} is not enabled despite the variables above`)
 
-  const client = initiateDeveloperControlledWalletsClient({
-    apiKey: key,
-    entitySecret: CIRCLE_ENTITY_SECRET,
-  })
+  const client = initiateDeveloperControlledWalletsClient({ apiKey: key, entitySecret: secret })
 
   let sets: { id?: string; name?: string }[]
   try {

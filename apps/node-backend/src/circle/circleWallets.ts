@@ -6,6 +6,7 @@ import {
   CIRCLE_API_KEY,
   CIRCLE_API_KEY_MAINNET,
   CIRCLE_ENTITY_SECRET,
+  CIRCLE_ENTITY_SECRET_MAINNET,
   CIRCLE_MAINNET_ENABLED,
   CIRCLE_TESTNET_ENABLED,
   CIRCLE_WALLET_SET_ID,
@@ -102,6 +103,11 @@ export function walletSetFor(env: CircleEnv): string {
   return env === 'mainnet' ? CIRCLE_WALLET_SET_ID_MAINNET : CIRCLE_WALLET_SET_ID
 }
 
+/** The secret that authorises signing in this environment. */
+export function entitySecretFor(env: CircleEnv): string {
+  return env === 'mainnet' ? CIRCLE_ENTITY_SECRET_MAINNET : CIRCLE_ENTITY_SECRET
+}
+
 export function circleEnabled(env: CircleEnv): boolean {
   return env === 'mainnet' ? CIRCLE_MAINNET_ENABLED : CIRCLE_TESTNET_ENABLED
 }
@@ -123,8 +129,8 @@ export function circleClient(env: CircleEnv): CircleClient {
     throw httpError(
       503,
       `${env} wallet operations are not configured: CIRCLE_API_KEY${suffix}, ` +
-        `CIRCLE_WALLET_SET_ID${suffix} and CIRCLE_ENTITY_SECRET must all be set, and the ` +
-        `entity secret must be registered in Circle's ${env} environment.`,
+        `CIRCLE_WALLET_SET_ID${suffix} and an entity secret must all be set, and that secret ` +
+        `must be registered in Circle's ${env} environment.`,
     )
   }
   const existing = clients[env]
@@ -132,7 +138,7 @@ export function circleClient(env: CircleEnv): CircleClient {
 
   const built = initiateDeveloperControlledWalletsClient({
     apiKey: env === 'mainnet' ? CIRCLE_API_KEY_MAINNET : CIRCLE_API_KEY,
-    entitySecret: CIRCLE_ENTITY_SECRET,
+    entitySecret: entitySecretFor(env),
   })
   clients[env] = built
   return built

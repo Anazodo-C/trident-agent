@@ -31,6 +31,7 @@ const KNOWN_VARS = [
   'CIRCLE_API_KEY',
   'CIRCLE_API_KEY_MAINNET',
   'CIRCLE_ENTITY_SECRET',
+  'CIRCLE_ENTITY_SECRET_MAINNET',
   'CIRCLE_WALLET_SET_ID',
   'CIRCLE_WALLET_SET_ID_MAINNET',
 ] as const
@@ -251,6 +252,21 @@ export const KEEPER_PRIVATE_KEY = optional('KEEPER_PRIVATE_KEY')
 export const CIRCLE_API_KEY = optional('CIRCLE_API_KEY')
 export const CIRCLE_API_KEY_MAINNET = optional('CIRCLE_API_KEY_MAINNET')
 export const CIRCLE_ENTITY_SECRET = optional('CIRCLE_ENTITY_SECRET')
+/**
+ * A separate entity secret for production, when there is one.
+ *
+ * Registration is per environment, so the same 32-byte value may legitimately
+ * be registered in both, and that setup needs no override. Two independent
+ * secrets is the stronger arrangement though: a sandbox compromise then reaches
+ * nothing real. Falls back to the shared one so both shapes work.
+ *
+ * The fallback is safe because it cannot silently half-work. A secret that is
+ * not registered in the environment it is used against is rejected outright by
+ * Circle on the first signing call, which `npm run circle:preflight --write`
+ * surfaces deliberately.
+ */
+export const CIRCLE_ENTITY_SECRET_MAINNET =
+  optional('CIRCLE_ENTITY_SECRET_MAINNET') || CIRCLE_ENTITY_SECRET
 export const CIRCLE_WALLET_SET_ID = optional('CIRCLE_WALLET_SET_ID')
 export const CIRCLE_WALLET_SET_ID_MAINNET = optional('CIRCLE_WALLET_SET_ID_MAINNET')
 
@@ -260,5 +276,5 @@ export const CIRCLE_TESTNET_ENABLED = Boolean(
 )
 /** Mainnet signing is available. Gates every payment that costs real money. */
 export const CIRCLE_MAINNET_ENABLED = Boolean(
-  CIRCLE_API_KEY_MAINNET && CIRCLE_ENTITY_SECRET && CIRCLE_WALLET_SET_ID_MAINNET,
+  CIRCLE_API_KEY_MAINNET && CIRCLE_ENTITY_SECRET_MAINNET && CIRCLE_WALLET_SET_ID_MAINNET,
 )
