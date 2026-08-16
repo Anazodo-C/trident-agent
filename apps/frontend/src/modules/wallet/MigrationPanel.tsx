@@ -107,15 +107,38 @@ export function MigrationPanel() {
    */
   async function moveGateway(chain: string, amountUsdc: string) {
     await withKey(`gateway:${chain}`, async (key) => {
-      const { typedData } = await api.migrateGatewayIntent(chain, amountUsdc)
       const account = privateKeyToAccount(key as `0x${string}`)
-      const signature = await account.signTypedData(
-        typedData as Parameters<typeof account.signTypedData>[0],
-      )
-      const res = await api.migrateGatewayTransfer(signature)
+
+      const attempt = async (amount: string) => {
+        const { typedData } = await api.migrateGatewayIntent(chain, amount)
+        const signature = await account.signTypedData(
+          typedData as Parameters<typeof account.signTypedData>[0],
+        )
+        return { res: await api.migrateGatewayTransfer(signature), amount }
+      }
+
+      /*
+       * One automatic retry, because moving the whole balance cannot work.
+       *
+       * Circle takes its fee from the same ledger, so it needs value plus fee
+       * and only value is there. The fee is published nowhere, differs by
+       * chain, and the rejection states it exactly, so the server reads it back
+       * and names the movable amount. Retrying with that empties the balance,
+       * which is what finishing requires. Each attempt is signed separately:
+       * a different amount is a different digest.
+       */
+      let out: Awaited<ReturnType<typeof attempt>>
+      try {
+        out = await attempt(amountUsdc)
+      } catch (err) {
+        const movable = (err as { details?: Record<string, unknown> })?.details?.['movableUsdc']
+        if (typeof movable !== 'string') throw err
+        out = await attempt(movable)
+      }
+
       setMessage({
         tone: 'ok',
-        text: `Moved ${amountUsdc} USDC out of Gateway on ${chain}. Mint ${res.mintTxHash.slice(0, 14)}…`,
+        text: `Moved ${out.amount} USDC out of Gateway on ${chain}. Mint ${out.res.mintTxHash.slice(0, 14)}…`,
       })
     })
   }

@@ -10,7 +10,7 @@ import {
   PORT,
   isOriginAllowed,
 } from './env.ts'
-import { messageOf, statusOf } from './http.ts'
+import { messageOf, statusOf, detailsOf } from './http.ts'
 import { scrubSecrets } from './circle/gatewayService.ts'
 import { STORAGE_PERSISTENT } from './db.ts'
 import {
@@ -90,7 +90,7 @@ app.use((err: unknown, _req: Request, res: Response, next: NextFunction) => {
     next(err)
     return
   }
-  res.status(status).json({ error: messageOf(err) })
+  res.status(status).json({ error: messageOf(err), ...detailsOf(err) })
 })
 
 const server = app.listen(PORT, () => {

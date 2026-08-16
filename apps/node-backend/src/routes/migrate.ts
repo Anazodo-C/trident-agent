@@ -10,6 +10,7 @@ import {
   rpcUrlFor,
   safeErrorMessage,
   fromAtomicUsdc,
+  toAtomicUsdc,
   unifiedGatewayBalance,
   walletUsdcByChain,
 } from '../circle/gatewayService.ts'
@@ -168,6 +169,32 @@ router.post(
   }),
 )
 
+/**
+ * Read the fee back out of a rejection.
+ *
+ * Circle reports "available X, required Y" in USDC decimals. Y exceeds the
+ * requested value by exactly the fee, so the largest movable amount is
+ * available minus that fee, and moving it empties the ledger.
+ *
+ * Returns null for any other failure, so an unrelated error is never
+ * misreported as a fee problem.
+ */
+export function parseShortfall(
+  err: unknown,
+  requestedAtomic: bigint,
+): { movableUsdc: string; feeUsdc: string } | null {
+  const message = err instanceof Error ? err.message : String(err)
+  const match = /available\s+([\d.]+),\s*required\s+([\d.]+)/i.exec(message)
+  if (!match?.[1] || !match[2]) return null
+
+  const available = toAtomicUsdc(match[1])
+  const required = toAtomicUsdc(match[2])
+  const fee = required - requestedAtomic
+  if (fee <= 0n || fee >= available) return null
+
+  return { movableUsdc: fromAtomicUsdc(available - fee), feeUsdc: fromAtomicUsdc(fee) }
+}
+
 /* --------------------------------------------------- gateway balance out */
 
 /**
@@ -181,7 +208,10 @@ router.post(
  *
  * In memory and short lived: a lost one costs a retry, nothing more.
  */
-const pendingIntents = new Map<string, { intent: unknown; chain: SupportedChainName; at: number }>()
+const pendingIntents = new Map<
+  string,
+  { intent: unknown; chain: SupportedChainName; requestedAtomic: bigint; at: number }
+>()
 const INTENT_TTL_MS = 10 * 60_000
 
 router.post(
@@ -206,16 +236,17 @@ router.post(
      * abandoning, and one more place for a half-finished migration to strand
      * funds.
      */
+    const value = BigInt(Math.round(Number(parsed.data.amountUsdc) * 1_000_000))
     const intent = buildBurnIntent({
       fromChain: chain,
       toChain: chain,
       depositor: row.eoa_address,
       recipient: wallet.address,
-      value: BigInt(Math.round(Number(parsed.data.amountUsdc) * 1_000_000)),
+      value,
       maxFee: 2_010_000n,
     })
 
-    pendingIntents.set(user.id, { intent, chain, at: Date.now() })
+    pendingIntents.set(user.id, { intent, chain, requestedAtomic: value, at: Date.now() })
 
     /*
      * Sent with bigints stringified, not through res.json.
@@ -259,11 +290,38 @@ router.post(
       throw httpError(409, 'That transfer request expired. Start the step again.')
     }
 
-    const attestation = await submitBurnIntent(
-      gatewayApiBase(pending.chain),
-      pending.intent,
-      parsed.data.signature,
-    )
+    /*
+     * Circle takes its fee out of the same ledger, so a request to move the
+     * whole balance can never be satisfied: it needs value + fee and only
+     * value is there.
+     *
+     * The fee is not published anywhere. It is not in /v1/info, the SDK has no
+     * endpoint for it, and it differs per chain (0.01 on Base, 0.0015 on
+     * Polygon when this was written). The rejection states it exactly though,
+     * so rather than hardcode a number that will drift, read it back and tell
+     * the caller precisely how much is movable. Requesting available minus fee
+     * consumes the balance to zero, which is what finishing requires.
+     */
+    let attestation: { attestation: string; signature: string }
+    try {
+      attestation = await submitBurnIntent(
+        gatewayApiBase(pending.chain),
+        pending.intent,
+        parsed.data.signature,
+      )
+    } catch (err) {
+      const shortfall = parseShortfall(err, pending.requestedAtomic)
+      if (shortfall) {
+        pendingIntents.delete(user.id)
+        throw httpError(
+          409,
+          `Circle charges a fee from the same balance, so the whole amount cannot move at ` +
+            `once. Retry with ${shortfall.movableUsdc} USDC.`,
+          { movableUsdc: shortfall.movableUsdc, feeUsdc: shortfall.feeUsdc },
+        )
+      }
+      throw err
+    }
 
     /*
      * The keeper pays for the mint, not the wallet receiving the funds.

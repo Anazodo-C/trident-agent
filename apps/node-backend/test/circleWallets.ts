@@ -18,6 +18,8 @@ import {
   jsonWithBigints,
   CIRCLE_SUPPORTED_CHAINS,
 } from '../src/circle/circleWallets.ts'
+import { toAtomicUsdc } from '../src/circle/gatewayService.ts'
+import { parseShortfall } from '../src/routes/migrate.ts'
 
 let failures = 0
 
@@ -184,6 +186,59 @@ check(
   '{"value":"1208925819614629174706176"}',
 )
 check('ordinary fields are untouched', jsonWithBigints({ to: '0xabc', n: 2 }), '{"to":"0xabc","n":2}')
+
+console.log('\n  reading Circle\u2019s fee back out of a rejection\n')
+
+/*
+ * Both cases below are verbatim from a real migration. Circle takes its fee
+ * from the same ledger, so moving the whole balance is always refused, and the
+ * fee is published nowhere: not in /v1/info, not in the SDK, and it differs per
+ * chain. The rejection is the only source, which makes parsing it load-bearing.
+ */
+check(
+  'Base: 0.03996 available, 0.04996 required, so 0.01 is the fee',
+  parseShortfall(
+    new Error(
+      'Insufficient balance for depositor 0x236a: available 0.039960, required 0.04996',
+    ),
+    39_960n,
+  ),
+  { movableUsdc: '0.02996', feeUsdc: '0.01' },
+)
+check(
+  'Polygon: a different fee on the same code path',
+  parseShortfall(
+    new Error(
+      'Insufficient balance for depositor 0x236a: available 0.074991, required 0.076491',
+    ),
+    74_991n,
+  ),
+  { movableUsdc: '0.073491', feeUsdc: '0.0015' },
+)
+
+/* Moving the named amount must consume the balance exactly, or finishing the
+ * migration is impossible: it requires a zero balance. */
+check(
+  'the movable amount plus the fee equals what was available',
+  (() => {
+    const r = parseShortfall(
+      new Error('Insufficient balance for depositor 0x0: available 0.074991, required 0.076491'),
+      74_991n,
+    )!
+    // As a string: this harness compares with JSON.stringify, which throws on
+    // a bigint, which is the very fault being fixed here.
+    return String(toAtomicUsdc(r.movableUsdc) + toAtomicUsdc(r.feeUsdc))
+  })(),
+  '74991',
+)
+
+/* Anything that is not a fee shortfall must not be dressed up as one. */
+check('an unrelated error is not a shortfall', parseShortfall(new Error('boom'), 1n), null)
+check(
+  'a fee larger than the balance is not actionable',
+  parseShortfall(new Error('available 0.001, required 5.001'), 1_000n),
+  null,
+)
 
 console.log(failures === 0 ? '\nall Circle wallet tests passed\n' : `\n${failures} FAILED\n`)
 process.exit(failures === 0 ? 0 : 1)

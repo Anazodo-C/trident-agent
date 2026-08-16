@@ -36,6 +36,13 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /**
+     * Structured companions to the message, when the server sent any.
+     *
+     * Lets a caller act on a refusal without reading its prose, which is how a
+     * retry ends up depending on wording that later changes.
+     */
+    readonly details: Record<string, unknown> = {},
   ) {
     super(message)
     this.name = 'ApiError'
@@ -70,7 +77,9 @@ async function request<T>(
       (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
         ? body.error
         : null) ?? `Request failed (${res.status})`
-    throw new ApiError(message, res.status)
+    const details =
+      body && typeof body === 'object' ? (body as Record<string, unknown>) : {}
+    throw new ApiError(message, res.status, details)
   }
 
   // A 2xx that isn't JSON is not a valid response, and must not be handed back
