@@ -12,6 +12,7 @@ import {
   readOnlyGatewayClient,
   strictChain,
   safeErrorMessage,
+  withContext,
   unifiedGatewayBalance,
   walletUsdcByChain,
   spendableTotalUsdc,
@@ -281,7 +282,7 @@ router.post(
         newGatewayBalance: balances.gateway.formattedTotal,
       })
     } catch (err) {
-      throw httpError(502, `Gateway deposit failed: ${safeErrorMessage(err)}`)
+      throw withContext(err, 'Gateway deposit failed')
     }
   }),
 )
@@ -310,7 +311,7 @@ router.post(
         newWalletUsdc: balances.wallet.formatted,
       })
     } catch (err) {
-      throw httpError(502, `Gateway withdrawal failed: ${safeErrorMessage(err)}`)
+      throw withContext(err, 'Gateway withdrawal failed')
     }
   }),
 )
@@ -349,7 +350,7 @@ router.post(
       })
       res.json({ txHash, explorerBase: config.chain.blockExplorers?.default.url ?? null })
     } catch (err) {
-      throw httpError(502, `Withdrawal failed: ${safeErrorMessage(err)}`)
+      throw withContext(err, 'Withdrawal failed')
     }
   }),
 )

@@ -79,30 +79,50 @@ export function DocsPage() {
             gives Trident access to that wallet.
           </li>
           <li className="doc-step">
-            <strong>Set a passphrase.</strong> Trident generates a fresh wallet for your
-            agent and encrypts its key with this passphrase. Write it down somewhere safe
-            before you continue. <a className="doc-a" href="#security">Security</a> explains
-            why.
+            <strong>Set a passphrase.</strong> Trident creates a wallet for your agent and
+            stores a check derived from this passphrase. The passphrase is what confirms a
+            spend is you; it does not unlock a key, because there is no key on your side to
+            unlock. Write it down somewhere safe.{' '}
+            <a className="doc-a" href="#security">Security</a> explains exactly where the
+            key lives.
           </li>
           <li className="doc-step">
-            <strong>Run something free.</strong> Ask for the weather, or a token price.
-            Free-tier services cost you nothing, and answer immediately.
+            <strong>Fund the testnet wallet from the faucet.</strong> This comes before your
+            first run, not after it. Open Deposit in Wallet, select Arc Testnet, and send
+            that address testnet USDC from the{' '}
+            <a
+              className="doc-a"
+              href="https://faucet.circle.com"
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              Circle faucet
+            </a>
+            . An unfunded wallet cannot complete a single call, free ones included.
           </li>
           <li className="doc-step">
-            <strong>Fund the agent</strong> when you want the paid catalog. Send USDC to the
-            agent&apos;s address on the network shown in Wallet.
+            <strong>Run something from the free tier.</strong> Ask for the weather, or a
+            token price. These cost you no real money, but they are not free of mechanics:
+            each one settles a testnet transfer, which is what the faucet is for.
           </li>
           <li className="doc-step">
-            <strong>Turn on mainnet spending.</strong> It is off until you switch it on, so
-            nothing can cost real money before you decide it can.
+            <strong>Turn on mainnet spending</strong> when you want the paid catalog. It is
+            off until you switch it on, so nothing can cost real money before you decide it
+            can. Enabling it creates a second wallet, on mainnet, at a different address.
+          </li>
+          <li className="doc-step">
+            <strong>Fund that mainnet wallet</strong> from the same Deposit panel, with the
+            network switched to mainnet. Check the address each time: the two wallets are
+            separate and a deposit to the wrong one cannot be recovered from Trident.
           </li>
         </ol>
         <Note tag="The free tier is not a simulation" tone="free">
           <p>
             Every free call still settles a real transfer on Arc testnet, one millionth of
-            a dollar, <code className="font-mono text-[#00D4FF]">0.000001 USDC</code>. The
-            whole payment path runs exactly as it will with real money, which is the point:
-            by the time you fund anything, you have already done it once.
+            a dollar, <code className="font-mono text-[#00D4FF]">0.000001 USDC</code>. That
+            is why funding comes first: the meter is what stops an empty wallet from calling
+            anything, and it is the same payment path that will later move real money. By
+            the time you fund anything on mainnet, you have already done it once.
           </p>
         </Note>
       </Section>
@@ -127,8 +147,9 @@ export function DocsPage() {
               <tr>
                 <td className="k">Agent wallet</td>
                 <td>
-                  A wallet Trident creates for your agent, controlled by your passphrase. It
-                  holds the USDC the agent spends.
+                  A wallet Trident creates for your agent through Circle, which holds the
+                  signing key. Your passphrase gates spending from it. Two of them once you
+                  enable mainnet, one per network, at different addresses.
                 </td>
               </tr>
               <tr>
@@ -449,11 +470,13 @@ export function DocsPage() {
           a position to spend. Neither is free of risk; they are different risks.
         </p>
 
-        <h3 className="doc-h3">If you had an account before this change</h3>
+        <h3 className="doc-h3">Two wallets, once mainnet is on</h3>
         <p className="doc-p">
-          Wallet shows a one-time move to the new arrangement. It transfers your funds, and it
-          offers you a copy of your original wallet key to keep. That address stays yours, and
-          after the move you will be the only one able to sign for it.
+          Circle keeps sandbox and production entirely separate, and a wallet in one cannot be
+          reached from the other. So an account with mainnet enabled has two agent wallets at
+          two different addresses, one per network. Deposit shows the address for whichever
+          network you select there, and only that one. USDC sent to the other address is not
+          recoverable through Trident.
         </p>
 
         <h3 className="doc-h3">Staying unlocked</h3>

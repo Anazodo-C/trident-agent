@@ -2,7 +2,7 @@ import { GatewayClient, CHAIN_CONFIGS } from '@circle-fin/x402-batching/client'
 import { generatePrivateKey } from 'viem/accounts'
 import { createPublicClient, fallback, http, erc20Abi, type Transport } from 'viem'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
-import { httpError } from '../http.ts'
+import { httpError, isExposed } from '../http.ts'
 import { rpcOverridesFor } from '../env.ts'
 
 export const DEFAULT_CHAIN: SupportedChainName = 'arcTestnet'
@@ -427,6 +427,28 @@ export function safeErrorMessage(err: unknown): string {
   const combined = detail && !raw.includes(detail) ? `${raw} ${detail}` : raw
 
   return scrubSecrets(combined).slice(0, 600)
+}
+
+/**
+ * Add context to a failure without stacking another prefix on it.
+ *
+ * A deposit that ran out of funds used to surface as:
+ *
+ *   Gateway deposit failed: Could not submit the transaction: the asset amount
+ *   owned by the wallet is insufficient for the transaction.
+ *
+ * Three prefixes, each added by a caller that knew less than the one below it,
+ * and no statement of what to do about any of it. Every layer past the first is
+ * noise: the innermost is the only one that saw what actually went wrong, and
+ * it is the one written for a person to read.
+ *
+ * So an error already shaped for the user passes through untouched, and only an
+ * unrecognised one takes `context` in front of it, which is the case where the
+ * message alone would not say which operation failed.
+ */
+export function withContext(err: unknown, context: string): Error {
+  if (isExposed(err)) return err as Error
+  return httpError(502, `${context}: ${safeErrorMessage(err)}`)
 }
 
 /** JSON for the parts of a thrown value that String() would flatten away. */

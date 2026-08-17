@@ -16,9 +16,10 @@ import {
   circleChainFor,
   isCircleChain,
   jsonWithBigints,
+  refusalFor,
   CIRCLE_SUPPORTED_CHAINS,
 } from '../src/circle/circleWallets.ts'
-import { toAtomicUsdc } from '../src/circle/gatewayService.ts'
+import { toAtomicUsdc, withContext } from '../src/circle/gatewayService.ts'
 import { parseShortfall } from '../src/circle/gatewayMoves.ts'
 
 let failures = 0
@@ -239,6 +240,50 @@ check(
   parseShortfall(new Error('available 0.001, required 5.001'), 1_000n),
   null,
 )
+
+console.log('\n  what a refusal tells the user to do\n')
+
+/*
+ * The message a user sees when a transaction is declined, which for a while was
+ * three prefixes deep and ended in Circle's phrasing about "the asset amount
+ * owned by the wallet". Accurate, and it says nothing about what to do next.
+ *
+ * The two cases below need different actions from the user, so they must not
+ * collapse into one sentence: topping up USDC does not fix a gas shortfall.
+ */
+{
+  const usdc = refusalFor(
+    new Error('the asset amount owned by the wallet is insufficient for the transaction'),
+  )
+  check('a token shortfall names USDC', /USDC/.test(usdc.message), true)
+  check('and says where to fix it', /Deposit/.test(usdc.message), true)
+  check('and confirms nothing was taken', /Nothing was charged/.test(usdc.message), true)
+
+  const gas = refusalFor(new Error('insufficient funds for gas * price + value'))
+  check('a gas shortfall is told apart from a token one', /gas/.test(gas.message), true)
+  check('and does not send the user to top up USDC', /enough USDC/.test(gas.message), false)
+
+  /* Anything unrecognised keeps Circle's own words. A wrong diagnosis is worse
+   * than an unfamiliar one. */
+  const unknown = refusalFor(new Error('contract reverted: Pausable: paused'))
+  check('an unknown refusal is not guessed at', /Pausable: paused/.test(unknown.message), true)
+}
+
+/*
+ * And the layer above must not add another prefix to any of them. This is the
+ * whole of the fix: the innermost error is the only one that saw what happened.
+ */
+{
+  const inner = refusalFor(new Error('the asset amount owned by the wallet is insufficient'))
+  const wrapped = withContext(inner, 'Gateway deposit failed')
+  check('an actionable error passes through untouched', wrapped.message, inner.message)
+  check('so no prefix is stacked on it', wrapped.message.includes('Gateway deposit failed'), false)
+
+  /* An error from somewhere unexpected still needs to say which operation
+   * failed, because its own message will not. */
+  const opaque = withContext(new Error('socket hang up'), 'Gateway deposit failed')
+  check('an unrecognised error gains the context', opaque.message, 'Gateway deposit failed: socket hang up')
+}
 
 console.log(failures === 0 ? '\nall Circle wallet tests passed\n' : `\n${failures} FAILED\n`)
 process.exit(failures === 0 ? 0 : 1)

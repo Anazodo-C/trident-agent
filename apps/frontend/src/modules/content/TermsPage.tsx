@@ -159,10 +159,11 @@ export function TermsPage() {
             time, and nothing in these terms gives us a claim over them.
           </li>
           <li>
-            Accounts created before this change had a wallet whose key was encrypted with your
-            passphrase. Moving to the new arrangement is a one-time step in Wallet, and it offers
-            you a copy of that original key to keep. That address remains yours and only you will
-            be able to sign for it afterwards.
+            An account with mainnet spending enabled has two agent wallets, one on testnet and
+            one on mainnet, at different addresses. Circle keeps the two environments separate
+            and neither can sign for the other, so a deposit sent to the wrong one cannot be
+            moved or recovered through Trident. Deposit in Wallet names the network beside every
+            address it shows.
           </li>
         </ol>
         <p className="doc-plainly">

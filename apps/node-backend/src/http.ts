@@ -21,6 +21,11 @@ export function httpError(
   return Object.assign(new Error(message), { status, expose: true, ...(details ? { details } : {}) })
 }
 
+/** Whether an error already carries a message written for the user to read. */
+export function isExposed(err: unknown): boolean {
+  return (err as HttpError | undefined)?.expose === true
+}
+
 /** Extra fields to send alongside the message, when the error carries any. */
 export function detailsOf(err: unknown): Record<string, unknown> {
   const details = (err as HttpError | undefined)?.details

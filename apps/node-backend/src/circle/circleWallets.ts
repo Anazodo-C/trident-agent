@@ -458,8 +458,43 @@ export async function estimateContractCall(call: ContractCall): Promise<void> {
       ...(call.amount ? { amount: call.amount } : {}),
     })
   } catch (err) {
-    throw httpError(400, `This transaction would not succeed: ${safeErrorMessage(err)}`)
+    throw refusalFor(err)
   }
+}
+
+/**
+ * What Circle refused, said as something the user can act on.
+ *
+ * Circle answers a call it cannot run with a sentence about the wallet's asset
+ * amount, which is accurate and tells nobody what to do. These two cases are
+ * the ones that actually happen, and they need different actions: one is a
+ * shortfall in the token being moved, the other in the gas to move it, and a
+ * user who tops up the wrong one is no better off.
+ *
+ * Anything unrecognised keeps Circle's own words rather than being flattened
+ * into a guess. A wrong diagnosis is worse than an unfamiliar one.
+ */
+export function refusalFor(err: unknown): Error {
+  const message = safeErrorMessage(err)
+
+  if (/insufficient/i.test(message) && /gas|native/i.test(message)) {
+    return httpError(
+      400,
+      'The agent wallet does not hold enough native currency to pay the gas for this ' +
+        'transaction. Send a small amount of it to the wallet address shown in Deposit, ' +
+        'on the same network. Nothing was charged.',
+    )
+  }
+
+  if (/insufficient/i.test(message)) {
+    return httpError(
+      400,
+      'The agent wallet does not hold enough USDC for this transaction and its fee. Top it ' +
+        'up from Deposit, checking the network matches, and try again. Nothing was charged.',
+    )
+  }
+
+  return httpError(400, `This transaction would not succeed: ${message}`)
 }
 
 /**
@@ -491,7 +526,9 @@ export async function executeContract(
     if (!id) throw new Error('Circle returned no transaction id')
     txId = id
   } catch (err) {
-    throw httpError(502, `Could not submit the transaction: ${safeErrorMessage(err)}`)
+    // Same treatment as the estimate above: a submission can be refused for the
+    // same reasons, and the user needs the same instruction either way.
+    throw refusalFor(err)
   }
 
   return { txHash: await awaitTerminal(call.wallet.env, txId), txId }

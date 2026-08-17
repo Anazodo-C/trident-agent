@@ -93,9 +93,19 @@ export function UnlockModal() {
         throw new Error('Wrong passphrase')
       }
 
-      // Unlock first. Both jobs below are housekeeping and must never be the
-      // reason someone cannot get into their own wallet.
-      unlock(key)
+      /*
+       * Unlock, and do not keep the key.
+       *
+       * It used to be handed to the store for the migration sweep to use. That
+       * flow is gone, nothing reads it any more, and a decrypted private key
+       * sitting in application state with no consumer can only ever be a
+       * liability. It stays a local here, used to sign the two housekeeping
+       * calls below and then dropped with the scope.
+       *
+       * Both of those are housekeeping and must never be the reason someone
+       * cannot get into their own wallet, so neither is awaited.
+       */
+      unlock()
       void upgradeKdf(material, passphrase, key, account)
       void ensureVerifier(material, passphrase, account)
     } catch (err) {

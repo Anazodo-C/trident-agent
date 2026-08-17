@@ -14,28 +14,20 @@ interface AgentState {
    */
   unlocked: boolean
 
-  /**
-   * The decrypted EOA key, for migration and nothing else.
-   *
-   * Only ever set while an unmigrated wallet still has ciphertext to decrypt,
-   * and only used to sweep the old address and hand the key back to its owner.
-   * Once a user has migrated this stays null forever.
-   *
-   * In memory only, never localStorage, sessionStorage, cookies, or a URL. A
-   * page refresh loses it, which is correct: it should be the hardest thing in
-   * the app to still have lying around.
+  /*
+   * `unlockedKey` used to live here: the decrypted EOA key, held in memory for
+   * the migration sweep. Migration is gone and nothing ever read it afterwards,
+   * so it was a private key kept in application state for no purpose at all.
+   * Removed rather than left "just in case", because the only thing it could
+   * still do is leak.
    */
-  unlockedKey: string | null
 
   unlockModalOpen: boolean
   /** Runs once the wallet is unlocked, so an interrupted action can resume. */
   pendingAction: (() => void) | null
 
-  /**
-   * Record a confirmed passphrase. `key` is passed only by the pre-migration
-   * path that actually decrypted one.
-   */
-  unlock: (key?: string | null) => void
+  /** Record a confirmed passphrase for this session. */
+  unlock: () => void
   lock: () => void
   requestUnlock: (onUnlocked?: () => void) => void
   closeUnlockModal: () => void
@@ -43,22 +35,16 @@ interface AgentState {
 
 export const useAgentStore = create<AgentState>((set, get) => ({
   unlocked: false,
-  unlockedKey: null,
   unlockModalOpen: false,
   pendingAction: null,
 
-  unlock: (key) => {
+  unlock: () => {
     const { pendingAction } = get()
-    set({
-      unlocked: true,
-      unlockedKey: key ?? null,
-      unlockModalOpen: false,
-      pendingAction: null,
-    })
+    set({ unlocked: true, unlockModalOpen: false, pendingAction: null })
     pendingAction?.()
   },
 
-  lock: () => set({ unlocked: false, unlockedKey: null }),
+  lock: () => set({ unlocked: false }),
 
   requestUnlock: (onUnlocked) => {
     if (get().unlocked) {
