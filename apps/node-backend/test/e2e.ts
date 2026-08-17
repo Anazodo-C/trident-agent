@@ -450,16 +450,26 @@ async function main(): Promise<void> {
    * and the runner's payment path is never exercised. The wallet here is
    * freshly created and unfunded, so enabling this risks nothing: the run still
    * fails on balance, which is exactly what the checks below assert.
+   *
+   * Not against a production backend, though. Opting in creates a real Circle
+   * production wallet, and a throwaway test account would leave one behind in
+   * an account that holds real money. Same rule as circlePreflight's --write,
+   * for the same reason. Set E2E_MAINNET_OPT_IN=1 to do it deliberately.
    */
   section('Mainnet opt-in')
-  const optIn = await json<{ mainnetEnabled: boolean; error?: string }>(
-    '/api/wallet/user/mainnet',
-    {
-      method: 'PATCH',
-      headers: auth,
-      body: JSON.stringify({ enabled: true, chain: 'BASE' }),
-    },
-  )
+  const localBackend = /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/.test(BASE)
+  const optIn =
+    localBackend || process.env['E2E_MAINNET_OPT_IN'] === '1'
+      ? await json<{ mainnetEnabled: boolean; error?: string }>('/api/wallet/user/mainnet', {
+          method: 'PATCH',
+          headers: auth,
+          body: JSON.stringify({ enabled: true, chain: 'BASE' }),
+        })
+      : (console.log(
+          '  \x1b[33m•\x1b[0m skipped against a remote backend, which would leave a real ' +
+            'production wallet behind (E2E_MAINNET_OPT_IN=1 to force)',
+        ),
+        { status: 0, body: { mainnetEnabled: false } })
 
   /*
    * Either it worked and there is a mainnet wallet, or it refused and mainnet
@@ -493,7 +503,7 @@ async function main(): Promise<void> {
       'and it is a different address from the testnet one',
       mainnetDeposit.body?.address?.toLowerCase() !== agentAddress.toLowerCase(),
     )
-  } else {
+  } else if (optIn.status !== 0) {
     check(
       'a refused opt-in explains itself',
       (optIn.body?.error?.length ?? 0) > 30,
