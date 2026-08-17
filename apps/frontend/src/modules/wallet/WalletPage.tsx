@@ -49,8 +49,16 @@ export function WalletPage() {
       <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-mono text-lg uppercase tracking-widest text-slate-100">Wallet</h1>
+          {/*
+            Was "One agent address". It is not one address: testnet and mainnet
+            are separate Circle environments, so an account that has opted in
+            holds two wallets, and saying otherwise here is what makes a wrong
+            deposit feel safe.
+          */}
           <p className="mt-2 text-sm text-slate-400">
-            One agent address, {networks.length > 1 ? 'on testnet and mainnet' : 'on testnet'}.
+            {networks.length > 1
+              ? 'Two agent wallets, one on testnet and one on mainnet, at different addresses.'
+              : 'Your agent wallet, on testnet.'}
           </p>
         </div>
         <button

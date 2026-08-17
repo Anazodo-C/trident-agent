@@ -62,10 +62,41 @@ export const useWalletStore = create<WalletState>((set, get) => ({
   refreshAll: async () => {
     set({ loading: true, error: null })
     try {
-      const info = get().depositInfo ?? (await api.depositInfo())
+      /*
+       * Always refetched, never reused.
+       *
+       * This used to keep the first response for the whole session, which meant
+       * opting into mainnet added a wallet the panel could not see until a
+       * reload, and the deposit panel drew its address from a payload fetched
+       * before that wallet existed. The response is a few hundred bytes and
+       * carries every address; a stale one is a wrong address.
+       */
+      const info = await api.depositInfo()
       const chains: ChainOption[] = info.availableChains?.length
         ? info.availableChains
-        : [{ chain: info.chain, label: info.chain, chainId: info.chainId, isTestnet: true }]
+        : [
+            {
+              chain: info.chain,
+              label: info.chain,
+              chainId: info.chainId,
+              isTestnet: true,
+              address: info.address,
+            },
+          ]
+
+      /*
+       * Published before the balances, not with them.
+       *
+       * Balances are RPC reads across every fundable chain and take seconds
+       * when a public endpoint is throttling. The deposit address is already in
+       * hand by this point and depends on none of it, so holding it back until
+       * the slowest chain answers left the panel reading "Loading your deposit
+       * address" for a value it had.
+       */
+      set((state) => ({
+        depositInfo: info,
+        activeChain: state.activeChain ?? chains[0]?.chain ?? null,
+      }))
 
       // One failing chain must not blank the others, a mainnet RPC hiccup
       // should not hide the testnet balance the user is actually working with.
@@ -97,7 +128,10 @@ export const useWalletStore = create<WalletState>((set, get) => ({
     try {
       set({ depositInfo: await api.depositInfo() })
     } catch {
-      /* the deposit panel degrades to showing the address from the user record */
+      /*
+       * Left null on purpose. There is no second source for the address, and
+       * there must not be: the panel shows nothing rather than guessing.
+       */
     }
   },
 }))

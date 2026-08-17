@@ -1,41 +1,55 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import QRCode from 'qrcode'
 import { AlertTriangle, Check, Clipboard, ExternalLink } from 'lucide-react'
-import { useAuthStore } from '../../store/authStore.ts'
 import { useWalletStore } from '../../store/walletStore.ts'
 import { copyToClipboard } from '../../lib/format.ts'
 
 /**
- * Fallback only. The destination is whichever chain the Wallet page has
- * selected, hardcoding it meant this panel told people to "Send USDC on
- * ARC-TESTNET" while the Gateway panel beside it was operating on Base. Of
- * every string on this page, this is the one that must not be wrong.
+ * Where to send funds, and to which of two wallets.
+ *
+ * This panel is the only place in the product where getting a string wrong
+ * loses money that cannot be recovered, so it is built to have no way of
+ * showing an address that belongs to a network other than the selected one.
+ *
+ * Three rules follow from that, and none of them are stylistic:
+ *
+ *  - The address travels with the chain in one payload. There is no refetch on
+ *    toggle, so there is no window in which a slow response labels one
+ *    network's address with another's.
+ *  - There is no fallback. A missing address renders as a missing address. The
+ *    previous version fell back to `user.eoaAddress`, a legacy field that is
+ *    null for every new account and, for the one migrated account, points at
+ *    the wallet its owner migrated *out of*.
+ *  - The network is chosen here, at the point of deposit, rather than inherited
+ *    silently from a chip elsewhere on the page.
  */
-const FALLBACK_CHAIN = 'ARC-TESTNET'
-
 export function DepositPanel() {
   const depositInfo = useWalletStore((s) => s.depositInfo)
   const activeChain = useWalletStore((s) => s.activeChain)
-  const activeIsTestnet = useWalletStore((s) =>
-    s.activeChain ? s.balances[s.activeChain]?.isTestnet : undefined,
-  )
-  /**
-   * Where funds must land, resolved to the label a user would see on their own
-   * wallet rather than the SDK's key for it. The store holds keys like `base`;
-   * printing one of those in "Send USDC on ..." asks somebody to match a string
-   * against their wallet's network list and hope.
-   */
-  const homeChain =
-    depositInfo?.availableChains?.find((c) => c.chain === activeChain)?.label ??
-    activeChain ??
-    FALLBACK_CHAIN
-  const user = useAuthStore((s) => s.user)
 
   const [tab, setTab] = useState<'crypto' | 'faucet'>('crypto')
   const [copied, setCopied] = useState(false)
   const [qr, setQr] = useState<string | null>(null)
+  /** Null until the user picks, so the page's selection leads until then. */
+  const [picked, setPicked] = useState<string | null>(null)
 
-  const address = depositInfo?.address ?? user?.eoaAddress ?? ''
+  const chains = useMemo(() => depositInfo?.availableChains ?? [], [depositInfo])
+
+  /*
+   * Resolved in this order, and it matters: an explicit choice here, then
+   * whatever the page is showing, then the first fundable chain. Each step is a
+   * lookup in the list rather than a value carried alongside it, so a selection
+   * that no longer exists (mainnet turned back off, say) degrades to a real
+   * entry instead of leaving a stale address on screen.
+   */
+  const selected =
+    chains.find((c) => c.chain === picked) ??
+    chains.find((c) => c.chain === activeChain) ??
+    chains[0] ??
+    null
+
+  const address = selected?.address ?? ''
+  const hasBothNetworks = chains.some((c) => c.isTestnet) && chains.some((c) => !c.isTestnet)
 
   useEffect(() => {
     if (!address) {
@@ -54,6 +68,10 @@ export function DepositPanel() {
       cancelled = true
     }
   }, [address])
+
+  // Copying is per address; a tick left over from the previous network reads as
+  // confirmation of the wrong thing.
+  useEffect(() => setCopied(false), [address])
 
   return (
     <section className="panel p-5">
@@ -76,8 +94,9 @@ export function DepositPanel() {
       {tab === 'faucet' ? (
         <div>
           <p className="mb-4 text-sm leading-relaxed text-slate-400">
-            Fund this address from the Circle faucet on testnet, or send USDC to it from any
-            wallet. Card payments are not supported yet.
+            The Circle faucet funds the testnet wallet, which is the one the agent spends from
+            until you enable mainnet. Send it to the Arc Testnet address below, not the mainnet
+            one.
           </p>
           <a
             href={depositInfo?.faucet.testnetFaucetUrl ?? 'https://faucet.circle.com'}
@@ -92,63 +111,122 @@ export function DepositPanel() {
       ) : (
         <div>
           {/*
-            One destination, stated plainly.
+            The network picker sits above the address deliberately.
 
-            The network picker used to sit here, above the address, which made
-            choosing a chain the first thing a user did with real money. The
-            agent moves funds to whatever network a service settles on, so that
-            choice never needed to be theirs, and every option in a list above
-            an address is a way to lose funds by picking wrong.
+            It was removed once, on the reasoning that the agent moves funds
+            wherever a service settles so the choice was never the user's. That
+            held while there was one wallet. There are now two, in separate
+            Circle environments at separate addresses, and neither key can sign
+            for the other, so the choice is unavoidable and belongs in front of
+            the address rather than implied by a chip further up the page.
           */}
+          {chains.length > 1 && (
+            <label className="mb-3 block">
+              <span className="mb-1.5 block font-mono text-[11px] uppercase tracking-wider text-slate-500">
+                Network
+              </span>
+              <select
+                value={selected?.chain ?? ''}
+                onChange={(e) => setPicked(e.target.value)}
+                className="w-full rounded-lg border border-[#1A7FFF]/25 bg-[#0A0E1A] px-3 py-2 font-mono text-xs text-slate-200 focus:border-[#00D4FF]/60 focus:outline-none"
+              >
+                {chains.map((c) => (
+                  <option key={c.chain} value={c.chain}>
+                    {c.label} {c.isTestnet ? '(testnet)' : '(mainnet, real funds)'}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
           <p className="mb-3 text-sm text-slate-400">
-            Send USDC on <span className="font-mono text-slate-200">{homeChain}</span> to
-            your agent wallet:
+            Send USDC on{' '}
+            <span className="font-mono text-slate-200">{selected?.label ?? '—'}</span> to your
+            agent wallet:
           </p>
 
-          {activeIsTestnet === false && (
-            <p className="mb-3 flex items-start gap-2 rounded-lg border border-[#FFA040]/40 bg-[#FFA040]/10 p-2.5 text-xs leading-relaxed text-[#FFA040]">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          {/*
+            The sharper of the two risks, and the one nothing else on this page
+            covers. The mainnet warning below is about sending on the wrong
+            chain; this is about sending on the right chain to the other
+            wallet, which looks identical and fails just as completely.
+          */}
+          {hasBothNetworks && (
+            <p className="mb-3 flex items-start gap-2 rounded-lg border border-[#1A7FFF]/30 bg-[#1A7FFF]/10 p-2.5 text-xs leading-relaxed text-slate-300">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#00D4FF]" />
               <span>
-                <strong className="font-semibold">{homeChain} is a mainnet.</strong> Funds
-                sent here are real. Send on {homeChain}. USDC sent on another EVM network is
-                still yours but may not be reachable here; USDC sent on a non-EVM network is
-                lost for good.
+                Testnet and mainnet are <strong className="font-semibold">separate wallets at
+                different addresses</strong>. Check the network above matches the one you are
+                sending from. Funds sent to the other address cannot be moved or recovered from
+                here.
               </span>
             </p>
           )}
 
-          {qr && (
-            <div className="mb-4 flex justify-center">
-              <img
-                src={qr}
-                alt="QR code for the agent wallet address"
-                className="h-40 w-40 rounded-lg border border-[#1A7FFF]/25"
-              />
-            </div>
+          {selected && selected.isTestnet === false && (
+            <p className="mb-3 flex items-start gap-2 rounded-lg border border-[#FFA040]/40 bg-[#FFA040]/10 p-2.5 text-xs leading-relaxed text-[#FFA040]">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                <strong className="font-semibold">{selected.label} is a mainnet.</strong> Funds
+                sent here are real. Send on {selected.label}. USDC sent on another EVM network is
+                still yours but may not be reachable here; USDC sent on a non-EVM network is lost
+                for good.
+              </span>
+            </p>
           )}
 
-          <div className="flex items-center gap-2 rounded-lg border border-[#1A7FFF]/25 bg-[#0A0E1A] p-3">
-            <code className="min-w-0 flex-1 break-all font-mono text-[11px] text-slate-300">
-              {address || '—'}
-            </code>
-            <button
-              onClick={async () => setCopied(await copyToClipboard(address))}
-              className="shrink-0 text-slate-500 transition-colors hover:text-[#00D4FF]"
-              aria-label="Copy deposit address"
-            >
-              {copied ? (
-                <Check className="h-4 w-4 text-[#00FF88]" />
-              ) : (
-                <Clipboard className="h-4 w-4" />
+          {address ? (
+            <>
+              {qr && (
+                <div className="mb-4 flex justify-center">
+                  <img
+                    src={qr}
+                    alt={`QR code for the ${selected?.label ?? ''} agent wallet address`}
+                    className="h-40 w-40 rounded-lg border border-[#1A7FFF]/25"
+                  />
+                </div>
               )}
-            </button>
-          </div>
 
-          {activeIsTestnet === false && (
+              <div className="flex items-center gap-2 rounded-lg border border-[#1A7FFF]/25 bg-[#0A0E1A] p-3">
+                <code className="min-w-0 flex-1 break-all font-mono text-[11px] text-slate-300">
+                  {address}
+                </code>
+                <button
+                  onClick={async () => setCopied(await copyToClipboard(address))}
+                  className="shrink-0 text-slate-500 transition-colors hover:text-[#00D4FF]"
+                  aria-label={`Copy ${selected?.label ?? ''} deposit address`}
+                >
+                  {copied ? (
+                    <Check className="h-4 w-4 text-[#00FF88]" />
+                  ) : (
+                    <Clipboard className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+            </>
+          ) : (
+            /*
+              No address, and nothing put in its place. Every alternative here
+              is another network's address, which is the failure this panel
+              exists to prevent.
+            */
+            <p className="rounded-lg border border-[#1A7FFF]/25 bg-[#0A0E1A] p-3 text-xs leading-relaxed text-slate-400">
+              {/*
+                A network only appears in this list once it is enabled, so a
+                missing address here means provisioning did not finish rather
+                than that the user has not opted in. Saying "enable mainnet"
+                would send them to a switch already in the position they need.
+              */}
+              {selected
+                ? `No ${selected.label} wallet on this account yet, so provisioning did not finish. Switch mainnet spending off and back on below to try again.`
+                : 'Loading your deposit address.'}
+            </p>
+          )}
+
+          {selected && selected.isTestnet === false && address && (
             <p className="mt-3 text-[11px] leading-relaxed text-slate-500">
-              This is the only network you need to fund. When a service settles
-              somewhere else, the agent moves what that call needs and pays the
-              fee on the far side.
+              This is the only mainnet network you need to fund. When a service settles somewhere
+              else, the agent moves what that call needs and pays the fee on the far side.
             </p>
           )}
         </div>

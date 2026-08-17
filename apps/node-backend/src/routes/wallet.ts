@@ -23,6 +23,7 @@ import {
   circleEnabled,
   executeContract,
   provisionWallet,
+  walletAddressForChain,
   walletForChain,
 } from '../circle/circleWallets.ts'
 import { depositToGateway, withdrawFromGateway } from '../circle/gatewayMoves.ts'
@@ -379,13 +380,21 @@ router.get('/deposit-address', requireAuth, (req, res) => {
     // Per chain, because the testnet and mainnet wallets are different
     // addresses. Sending a mainnet deposit to the sandbox address would put
     // real funds somewhere the production key cannot sign for.
-    address: walletForChain(row, chain).address,
+    //
+    // Nullable, and deliberately not a refusal: an account that has not opted
+    // into mainnet has no wallet there, which is an ordinary state. The panel
+    // says so rather than showing some other network's address.
+    address: walletAddressForChain(row, chain),
     chain,
     chainId: chainConfig(chain).chain.id,
     /**
-     * One key, one address, every EVM chain — but the deposit has to land on
-     * the chain the agent will actually spend from, so the caller needs to
-     * know which ones this account can use.
+     * Every fundable chain, each carrying its own address.
+     *
+     * The address travels with the chain rather than being fetched per
+     * selection, because a refetch on toggle can resolve out of order and
+     * label one network's address with another's. Carrying both means the
+     * client never has to ask again, and never has a window in which the
+     * pairing is wrong.
      */
     availableChains: walletChains(row).map((c) => ({
       chain: c,
@@ -394,6 +403,7 @@ router.get('/deposit-address', requireAuth, (req, res) => {
       label: chainLabel(c),
       chainId: chainConfig(c).chain.id,
       isTestnet: chainConfig(c).chain.testnet === true,
+      address: walletAddressForChain(row, c),
     })),
     /**
      * ASSUMPTION #6 resolved: Circle exposes no public API for minting a fiat
@@ -409,7 +419,9 @@ router.get('/deposit-address', requireAuth, (req, res) => {
      */
     faucet: {
       testnetFaucetUrl: 'https://faucet.circle.com',
-      note: 'Fund this wallet from the Circle faucet on testnet, or send USDC to the address above from any wallet. Card payments are not supported yet.',
+      // Names the network rather than saying "the address above". There are two
+      // addresses now, and "above" no longer identifies one of them.
+      note: 'The Circle faucet funds the Arc Testnet wallet. For mainnet, send USDC from any wallet to the mainnet address shown when that network is selected. Card payments are not supported yet.',
     },
   })
 })

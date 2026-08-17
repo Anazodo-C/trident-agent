@@ -1,9 +1,8 @@
-import { useEffect, useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { BarChart3, Check, Clipboard, Clock, Grid3x3, LogOut, Radar, Wallet } from 'lucide-react'
+import { BarChart3, Clock, Grid3x3, LogOut, Radar, Wallet } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore.ts'
 import { useAgentStore } from '../../store/agentStore.ts'
-import { copyToClipboard, shortAddress } from '../../lib/format.ts'
+import { shortAddress } from '../../lib/format.ts'
 import { TridentMark } from './TridentMark.tsx'
 import { UnlockModal } from '../auth/UnlockModal.tsx'
 
@@ -21,13 +20,6 @@ export function AppShell() {
   const logout = useAuthStore((s) => s.logout)
   const lock = useAgentStore((s) => s.lock)
   const unlocked = useAgentStore((s) => s.unlocked)
-  const [copied, setCopied] = useState(false)
-
-  useEffect(() => {
-    if (!copied) return
-    const t = setTimeout(() => setCopied(false), 1600)
-    return () => clearTimeout(t)
-  }, [copied])
 
   function signOut() {
     lock()
@@ -66,19 +58,18 @@ export function AppShell() {
             {unlocked ? 'Unlocked' : 'Locked'}
           </span>
 
-          <button
-            onClick={async () => setCopied(await copyToClipboard(user?.eoaAddress ?? ''))}
-            disabled={!user?.eoaAddress}
-            className="flex items-center gap-2 rounded-lg border border-[#1A7FFF]/25 px-2.5 py-1.5 font-mono text-xs text-slate-300 transition-colors hover:border-[#00D4FF]/60 hover:text-[#00D4FF] disabled:opacity-40"
-            title="Copy agent wallet address"
-          >
-            {shortAddress(user?.eoaAddress)}
-            {copied ? (
-              <Check className="h-3.5 w-3.5 text-[#00FF88]" />
-            ) : (
-              <Clipboard className="h-3.5 w-3.5" />
-            )}
-          </button>
+          {/*
+            The address chip is gone, and not for room.
+
+            It copied `user.eoaAddress`: null for every account created since
+            signup stopped generating a key, so it rendered blank and disabled,
+            and for the one migrated account it held the address that account
+            migrated *away from*. There is also no longer a single address to
+            show. Testnet and mainnet are separate Circle wallets, so one chip
+            could only ever be right about one of them, and a header is the
+            wrong place to disambiguate a destination for real funds. Wallet
+            names the network beside every address it prints.
+          */}
         </div>
       </header>
 

@@ -350,17 +350,32 @@ export function jsonWithBigints(value: unknown): string {
  * something actionable rather than met with a null dereference somewhere deeper
  * in a payment.
  */
-export function walletForRow(
-  row: {
-    circle_wallet_id: string | null
-    circle_wallet_address: string | null
-    circle_wallet_id_testnet: string | null
-    circle_wallet_address_testnet: string | null
-  },
-  env: CircleEnv,
-): AgentWallet {
+export interface WalletColumns {
+  circle_wallet_id: string | null
+  circle_wallet_address: string | null
+  circle_wallet_id_testnet: string | null
+  circle_wallet_address_testnet: string | null
+}
+
+/**
+ * The address for an environment, or null when this account has no wallet there.
+ *
+ * The nullable half of `walletForRow`, for the one caller that must not refuse:
+ * the deposit panel asks for every environment at once so the network toggle
+ * cannot race, and a missing mainnet wallet is an ordinary state for an account
+ * that has not opted in, not an error.
+ */
+export function walletAddressFor(row: WalletColumns, env: CircleEnv): `0x${string}` | null {
   const id = env === 'mainnet' ? row.circle_wallet_id : row.circle_wallet_id_testnet
   const address = env === 'mainnet' ? row.circle_wallet_address : row.circle_wallet_address_testnet
+  // Both, or neither. An address without its wallet id cannot be signed for,
+  // so showing it would invite a deposit nothing can spend.
+  return id && address ? (address as `0x${string}`) : null
+}
+
+export function walletForRow(row: WalletColumns, env: CircleEnv): AgentWallet {
+  const id = env === 'mainnet' ? row.circle_wallet_id : row.circle_wallet_id_testnet
+  const address = walletAddressFor(row, env)
 
   if (!id || !address) {
     throw httpError(
@@ -369,15 +384,20 @@ export function walletForRow(
         'the agent can pay for anything there.',
     )
   }
-  return { walletId: id, address: address as `0x${string}`, env }
+  return { walletId: id, address, env }
 }
 
 /** The same lookup keyed by chain, which is how most callers know it. */
-export function walletForChain(
-  row: Parameters<typeof walletForRow>[0],
-  chain: SupportedChainName,
-): AgentWallet {
+export function walletForChain(row: WalletColumns, chain: SupportedChainName): AgentWallet {
   return walletForRow(row, circleEnvFor(chain))
+}
+
+/** And the nullable form, keyed by chain. */
+export function walletAddressForChain(
+  row: WalletColumns,
+  chain: SupportedChainName,
+): `0x${string}` | null {
+  return walletAddressFor(row, circleEnvFor(chain))
 }
 
 /**

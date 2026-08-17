@@ -22,6 +22,11 @@ export const CHAIN_LABELS: Record<string, SupportedChainName> = {
   // Testnet instead — including Gateway deposits of real USDC.
   BASE: 'base',
   ARC: 'arc',
+  // Polygon was missing while being offered as a fundable chain, so the deposit
+  // panel labelled it "polygon" beside "BASE" and "ARC-TESTNET". A label a user
+  // has to squint at to match against their wallet's network list is the same
+  // class of hazard as the wrong address, just quieter.
+  POLYGON: 'polygon',
 }
 
 /**

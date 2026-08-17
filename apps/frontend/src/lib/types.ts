@@ -256,10 +256,20 @@ export interface ChainOption {
   label: string
   chainId: number
   isTestnet: boolean
+  /**
+   * The deposit address for this chain, null when no wallet exists there yet.
+   *
+   * Carried per chain rather than fetched on selection. Testnet and mainnet are
+   * separate Circle environments and so separate wallets at separate addresses,
+   * and a deposit sent to the wrong one is unreachable by the key that would
+   * have to spend it.
+   */
+  address: string | null
 }
 
 export interface DepositInfo {
-  address: string
+  /** Null when this account has no wallet on `chain` yet. */
+  address: string | null
   chain: string
   chainId: number
   /** Every chain the account may use, testnet always, mainnet once opted in. */
