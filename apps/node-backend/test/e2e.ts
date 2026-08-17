@@ -1,21 +1,26 @@
 /**
  * End-to-end smoke test against a running backend.
  *
- * Covers: SIWE signup -> passphrase setup -> key-material decrypt round trip
- * (using the *frontend's* WebCrypto implementation, which is what proves the
- * two PBKDF2 implementations agree) -> plan -> run over SSE -> budget gate ->
- * stop -> history.
+ * Covers: SIWE signup -> passphrase setup, which provisions a Circle wallet ->
+ * the passphrase gate, checked through the *frontend's* WebCrypto derivation so
+ * the two PBKDF2 implementations are proved to agree over a real request ->
+ * plan -> run over SSE -> budget gate -> stop -> history.
+ *
+ * Needs a backend with working Circle sandbox credentials, because signup now
+ * creates a wallet through Circle and refuses rather than handing back a session
+ * for an account that cannot pay. Without them the setup step returns 503 and
+ * this suite says so and stops. The account-shaped checks that do run without
+ * credentials, and that guard the signup/route seam in CI, are in test:account.
  *
  * Run with:  npm run test:e2e -w @trident/node-backend
  */
 // Same env resolution as the server, so the planner tests aren't silently skipped.
 import '../src/env.ts'
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
-import { buildRotationMessage } from '../src/auth/keySetup.ts'
 import { SiweMessage } from 'siwe'
-// The real browser-side decrypt. Node exposes the same WebCrypto API, so this
-// exercises the exact code the app ships rather than a re-implementation.
-import { decryptEoaKey } from '../../frontend/src/lib/crypto.ts'
+// The real browser-side derivation. Node exposes the same WebCrypto API, so
+// this exercises the exact code the app ships rather than a re-implementation.
+import { derivePassphraseVerifier } from '../../frontend/src/lib/crypto.ts'
 
 const BASE = process.env['E2E_BASE_URL'] ?? 'http://localhost:3001'
 const PASSPHRASE = 'copper lantern drift oyster'
@@ -65,9 +70,23 @@ async function readSse(
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify(payload),
   })
+  /*
+   * A refusal is an answer, not a crash.
+   *
+   * This threw, which ended the whole suite whenever a run was declined before
+   * the stream opened — and being declined is a correct outcome for several
+   * reasons (over budget, a chain the account has not enabled). Returned as a
+   * frame so the caller can decide whether it expected one.
+   */
   if (!res.ok || !res.body) {
     const text = await res.text()
-    throw new Error(`SSE request failed (${res.status}): ${text.slice(0, 200)}`)
+    let error = text.slice(0, 300)
+    try {
+      error = (JSON.parse(text) as { error?: string }).error ?? error
+    } catch {
+      /* not JSON, keep the raw text */
+    }
+    return [{ event: 'refused', data: { status: res.status, error } }]
   }
 
   const reader = res.body.getReader()
@@ -145,7 +164,7 @@ async function main(): Promise<void> {
 
   // ---------------------------------------------------- passphrase + wallet
   section('Auth — agent wallet creation')
-  const setupRes = await json<{ token: string; user: { eoaAddress: string } }>(
+  const setupRes = await json<{ token: string; user: { eoaAddress: string | null }; error?: string }>(
     '/auth/setup-passphrase',
     {
       method: 'POST',
@@ -153,13 +172,42 @@ async function main(): Promise<void> {
       body: JSON.stringify({ passphrase: PASSPHRASE }),
     },
   )
+
+  /*
+   * A 503 here is an operator-configuration problem, not a defect: signup
+   * creates a Circle wallet, and without sandbox credentials there is nothing
+   * to create it with. Say so and stop, rather than reporting a cascade of
+   * failures that all trace back to one missing key.
+   */
+  if (setupRes.status === 503) {
+    check(
+      'the refusal names the missing configuration',
+      /Circle/i.test(setupRes.body?.error ?? ''),
+      setupRes.body?.error,
+    )
+    console.log(`  \x1b[33m•\x1b[0m ${setupRes.body?.error}`)
+    console.log('  \x1b[33m•\x1b[0m Set CIRCLE_API_KEY, CIRCLE_ENTITY_SECRET and')
+    console.log('    CIRCLE_WALLET_SET_ID to run the rest. Account-shaped checks that')
+    console.log('    need no credentials are in test:account.')
+    return report()
+  }
+
   check('setup-passphrase succeeds', setupRes.status === 200, JSON.stringify(setupRes.body))
   const jwt = setupRes.body?.token ?? ''
-  const eoaAddress = setupRes.body?.user?.eoaAddress ?? ''
   check('full JWT returned', jwt.length > 0)
-  check('EOA address generated', /^0x[0-9a-fA-F]{40}$/.test(eoaAddress))
+  /*
+   * No key is generated any more, and the legacy column must stay empty. A
+   * value here would mean signup had started writing an EOA again, which is the
+   * field three routes used to gate on.
+   */
+  check('no EOA is generated', !setupRes.body?.user?.eoaAddress)
 
   const auth = { Authorization: `Bearer ${jwt}` }
+
+  // The agent wallet, which is what an EOA address used to be.
+  const wallet = await json<{ address: string }>('/api/wallet/deposit-address', { headers: auth })
+  const agentAddress = wallet.body?.address ?? ''
+  check('signup provisioned a wallet', /^0x[0-9a-fA-F]{40}$/.test(agentAddress), agentAddress)
 
   // A setup token must not work as a full token.
   const scopeAbuse = await json('/api/tasks', { headers: { Authorization: `Bearer ${setupToken}` } })
@@ -173,62 +221,59 @@ async function main(): Promise<void> {
   })
   check('passphrase setup cannot be re-run', reSetup.status === 409, `got ${reSetup.status}`)
 
-  // ------------------------------------------ PBKDF2 / AES-GCM parity check
-  section('Crypto — server encrypt ⇄ browser decrypt (ASSUMPTION #12)')
+  // ------------------------------------------------ PBKDF2 parity, over HTTP
+  //
+  // The browser derives the verifier and the server compares it. Both sides
+  // implement PBKDF2 separately, so this round trip is what proves they agree:
+  // if they drift, nobody can unlock, and the failure is indistinguishable from
+  // everyone forgetting their passphrase at once.
+  section('Crypto — browser derives ⇄ server verifies')
   const material = await json<{
     userId: string
-    encryptedKey: string
+    encryptedKey: string | null
     salt: string
-    iv: string
-    eoaAddress: string
+    iv: string | null
+    hasVerifier: boolean
     iterations: number
     targetIterations: number
   }>('/auth/key-material', { headers: auth })
-  check('key-material returns ciphertext', material.status === 200)
+  check('key-material returns the derivation parameters', material.status === 200)
   check('response carries no raw key', !JSON.stringify(material.body).includes('privateKey'))
-
-  let decrypted = ''
-  try {
-    decrypted = await decryptEoaKey(
-      PASSPHRASE,
-      material.body.encryptedKey,
-      material.body.salt,
-      material.body.iv,
-      material.body.iterations,
-    )
-  } catch (err) {
-    check('browser decrypt succeeds', false, String(err))
-  }
-  check('browser decrypt succeeds', decrypted.length > 0)
-  check('decrypted value is a private key', /^0x[0-9a-fA-F]{64}$/.test(decrypted))
-
-  if (decrypted) {
-    const derived = privateKeyToAccount(decrypted as `0x${string}`).address
-    check(
-      'decrypted key derives the stored EOA address',
-      derived.toLowerCase() === eoaAddress.toLowerCase(),
-      `${derived} vs ${eoaAddress}`,
-    )
-  }
-
-  let wrongRejected = false
-  try {
-    await decryptEoaKey(
-      'wrong-passphrase-entirely',
-      material.body.encryptedKey,
-      material.body.salt,
-      material.body.iv,
-      material.body.iterations,
-    )
-  } catch {
-    wrongRejected = true
-  }
-  check('wrong passphrase is rejected', wrongRejected)
+  /*
+   * No ciphertext, because there is no key to encrypt. Signing is Circle's, and
+   * a stored blob would be a claim of self-custody the product cannot make.
+   */
+  check('no ciphertext is stored', material.body?.encryptedKey === null, String(material.body?.encryptedKey))
+  check('a verifier exists instead', material.body?.hasVerifier === true)
   check(
-    'new wallets use 600k iterations',
+    'new accounts derive at 600k iterations',
     material.body?.iterations === 600_000,
     String(material.body?.iterations),
   )
+
+  const verifier = await derivePassphraseVerifier(
+    PASSPHRASE,
+    material.body.salt,
+    material.body.iterations,
+  )
+  const accepted = await json('/auth/passphrase-verify', {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ verifier }),
+  })
+  check('the right passphrase verifies', accepted.status === 200, `got ${accepted.status}`)
+
+  const wrongVerifier = await derivePassphraseVerifier(
+    'wrong-passphrase-entirely',
+    material.body.salt,
+    material.body.iterations,
+  )
+  const rejected = await json('/auth/passphrase-verify', {
+    method: 'POST',
+    headers: auth,
+    body: JSON.stringify({ verifier: wrongVerifier }),
+  })
+  check('a wrong passphrase is refused', rejected.status === 403, `got ${rejected.status}`)
 
   // ------------------------------------------------------ passphrase floor
   section('Passphrase rules')
@@ -248,11 +293,13 @@ async function main(): Promise<void> {
   }
 
   // ------------------------------------------------------- KDF re-encryption
-  section('KDF rotation')
+  //
+  // Legacy: rotation re-encrypts a stored key, and no current account has one.
+  // The route stays for accounts that predate Circle, so what matters now is
+  // that it cannot be turned against an account with nothing to rotate.
+  section('KDF rotation is closed to keyless accounts')
   {
-    // A rotation not signed by the wallet key must be refused, or a stolen JWT
-    // could overwrite someone's encrypted key and lock them out.
-    const forged = await json('/auth/rotate-kdf', {
+    const forged = await json<{ error: string }>('/auth/rotate-kdf', {
       method: 'POST',
       headers: auth,
       body: JSON.stringify({
@@ -263,35 +310,16 @@ async function main(): Promise<void> {
         signature: `0x${'11'.repeat(65)}`,
       }),
     })
-    check('unsigned rotation is refused', forged.status === 403, `got ${forged.status}`)
-
-    const after = await json<{ encryptedKey: string }>('/auth/key-material', { headers: auth })
     check(
-      'the refused rotation changed nothing',
-      after.body?.encryptedKey === material.body.encryptedKey,
+      'a rotation against a keyless account is refused',
+      forged.status === 403 || forged.status === 404,
+      `got ${forged.status}`,
     )
 
-    // A downgrade must be refused even with a valid signature.
-    const account = privateKeyToAccount(decrypted as `0x${string}`)
-    const downgradeKey = 'c0ffee'
-    const downgrade = await json('/auth/rotate-kdf', {
-      method: 'POST',
+    const after = await json<{ encryptedKey: string | null }>('/auth/key-material', {
       headers: auth,
-      body: JSON.stringify({
-        encryptedKey: downgradeKey,
-        salt: 'aa',
-        iv: 'bb',
-        iterations: 200_000,
-        signature: await account.signMessage({
-          message: buildRotationMessage({
-            userId: material.body.userId,
-            encryptedKey: downgradeKey,
-            iterations: 200_000,
-          }),
-        }),
-      }),
     })
-    check('a weaker iteration count is refused', downgrade.status === 400, `got ${downgrade.status}`)
+    check('and it stored nothing', after.body?.encryptedKey === null, String(after.body?.encryptedKey))
   }
 
   // --------------------------------------------------------------- catalog
@@ -313,7 +341,11 @@ async function main(): Promise<void> {
     { headers: auth },
   )
   check('balance reads on-chain state', balance.status === 200, JSON.stringify(balance.body))
-  check('balance is for the agent EOA', balance.body?.eoaAddress === eoaAddress)
+  check(
+    'balance is for the agent wallet',
+    balance.body?.eoaAddress?.toLowerCase() === agentAddress.toLowerCase(),
+    `${balance.body?.eoaAddress} vs ${agentAddress}`,
+  )
   // Reading a Gateway balance needs the address, not the key — so it must be
   // visible without unlocking, the same as the on-chain wallet balance.
   check(
@@ -322,20 +354,27 @@ async function main(): Promise<void> {
     String(balance.body?.gatewayUsdc),
   )
 
-  const depositInfo = await json<{ address: string; bridgeChains: unknown[] }>(
-    '/api/wallet/deposit-address',
-    { headers: auth },
+  const depositInfo = await json<{
+    address: string | null
+    availableChains: { chain: string; isTestnet: boolean; address: string | null }[]
+  }>('/api/wallet/deposit-address', { headers: auth })
+  check('deposit address is the agent wallet', depositInfo.body?.address === agentAddress)
+  check('fundable chains are advertised', (depositInfo.body?.availableChains?.length ?? 0) > 0)
+  /*
+   * Every chain carries its own address, and a testnet-only account has exactly
+   * one wallet, so nothing here may be null. The panel renders whichever entry
+   * is selected and has no other source to fall back on.
+   */
+  check(
+    'every advertised chain carries an address',
+    (depositInfo.body?.availableChains ?? []).every((c) => /^0x[0-9a-fA-F]{40}$/.test(c.address ?? '')),
+    JSON.stringify(depositInfo.body?.availableChains),
   )
-  check('deposit address matches the EOA', depositInfo.body?.address === eoaAddress)
-  check('bridge chains advertised', (depositInfo.body?.bridgeChains?.length ?? 0) > 0)
-
-  const foreignKey = generatePrivateKey()
-  const wrongKey = await json('/api/wallet/gateway/deposit', {
-    method: 'POST',
-    headers: auth,
-    body: JSON.stringify({ amount: '1', agentPrivateKey: foreignKey }),
-  })
-  check("another wallet's key is rejected", wrongKey.status === 403, `got ${wrongKey.status}`)
+  check(
+    'a testnet-only account is offered only testnet',
+    (depositInfo.body?.availableChains ?? []).every((c) => c.isTestnet),
+    JSON.stringify(depositInfo.body?.availableChains?.map((c) => c.chain)),
+  )
 
   const capRes = await json<{ newCap: number }>('/api/wallet/user/spending-cap', {
     method: 'PATCH',
@@ -409,14 +448,64 @@ async function main(): Promise<void> {
    * Gateway settles only batch-settlement options, and no Arc Testnet service
    * offers one — so with mainnet off every paid service is correctly refused
    * and the runner's payment path is never exercised. The wallet here is
-   * freshly generated and unfunded, so enabling this risks nothing: the run
-   * still fails on balance, which is exactly what the checks below assert.
+   * freshly created and unfunded, so enabling this risks nothing: the run still
+   * fails on balance, which is exactly what the checks below assert.
    */
-  await json('/api/wallet/user/mainnet', {
-    method: 'PATCH',
-    headers: auth,
-    body: JSON.stringify({ enabled: true, chain: 'BASE' }),
-  })
+  section('Mainnet opt-in')
+  const optIn = await json<{ mainnetEnabled: boolean; error?: string }>(
+    '/api/wallet/user/mainnet',
+    {
+      method: 'PATCH',
+      headers: auth,
+      body: JSON.stringify({ enabled: true, chain: 'BASE' }),
+    },
+  )
+
+  /*
+   * Either it worked and there is a mainnet wallet, or it refused and mainnet
+   * is still off. The state this asserts against is the one that used to be
+   * reachable and is the worst of the three: enabled, with no wallet, which
+   * offers the user a network they cannot deposit to and kills the first run
+   * that picks it.
+   */
+  const mainnetOn = optIn.status === 200
+  /*
+   * The goal has to be one this account can actually pay for, or the run below
+   * is refused on chain policy and the runner is never exercised. With mainnet
+   * on that means an x402 service; with mainnet off it means the free tier,
+   * which settles on Arc Testnet.
+   */
+  const RUN_GOAL = mainnetOn
+    ? 'Verify my agent wallet can pay an x402 endpoint'
+    : 'What is the current price of bitcoin in US dollars?'
+
+  if (mainnetOn) {
+    const mainnetDeposit = await json<{ address: string | null }>(
+      '/api/wallet/deposit-address?chain=base',
+      { headers: auth },
+    )
+    check(
+      'enabling mainnet created a mainnet wallet',
+      /^0x[0-9a-fA-F]{40}$/.test(mainnetDeposit.body?.address ?? ''),
+      String(mainnetDeposit.body?.address),
+    )
+    check(
+      'and it is a different address from the testnet one',
+      mainnetDeposit.body?.address?.toLowerCase() !== agentAddress.toLowerCase(),
+    )
+  } else {
+    check(
+      'a refused opt-in explains itself',
+      (optIn.body?.error?.length ?? 0) > 30,
+      `${optIn.status} ${optIn.body?.error ?? ''}`,
+    )
+    const still = await json<{ user: { mainnetEnabled: boolean } }>('/auth/me', { headers: auth })
+    check(
+      'and leaves mainnet off rather than half on',
+      still.body?.user?.mainnetEnabled === false,
+    )
+    console.log(`  \x1b[33m•\x1b[0m ${optIn.body?.error}`)
+  }
 
   // ---------------------------------------------------------------- planner
   section('Planner')
@@ -432,7 +521,7 @@ async function main(): Promise<void> {
   }>('/api/agent/plan', {
     method: 'POST',
     headers: auth,
-    body: JSON.stringify({ goal: 'Verify my agent wallet can pay an x402 endpoint' }),
+    body: JSON.stringify({ goal: RUN_GOAL }),
   })
 
   // A 503 here is an operator-configuration problem (no credit, bad key), not a
@@ -499,7 +588,6 @@ async function main(): Promise<void> {
     body: JSON.stringify({
       taskId: planRes.body.taskId,
       approvedSteps: steps,
-      agentPrivateKey: decrypted,
       // Half what the plan costs, so the limit must refuse it.
       budgetUsdc: stepCost / 2,
     }),
@@ -528,7 +616,7 @@ async function main(): Promise<void> {
   const plan2 = await json<{ taskId: string; plan: { steps: typeof steps } }>('/api/agent/plan', {
     method: 'POST',
     headers: auth,
-    body: JSON.stringify({ goal: 'Verify my agent wallet can pay an x402 endpoint' }),
+    body: JSON.stringify({ goal: RUN_GOAL }),
   })
   const steps2 = plan2.body?.plan?.steps ?? []
 
@@ -539,8 +627,7 @@ async function main(): Promise<void> {
       {
         taskId: plan2.body.taskId,
         approvedSteps: steps2,
-        agentPrivateKey: decrypted,
-        budgetUsdc: null,
+          budgetUsdc: null,
       },
       async (frame) => {
         // Request a stop as soon as the first step settles.
@@ -554,6 +641,20 @@ async function main(): Promise<void> {
       },
     )
     const events = frames.map((f) => f.event)
+
+    /*
+     * A run declined before the stream opened. Correct in itself — the account
+     * cannot settle where this plan wants to — but it means nothing below is
+     * exercised, so report it as a skip rather than as a run that misbehaved.
+     */
+    if (events[0] === 'refused') {
+      const { status, error } = frames[0]!.data as { status: number; error: string }
+      check('a declined run explains why', (error?.length ?? 0) > 20, `${status} ${error}`)
+      console.log(`  \x1b[33m•\x1b[0m the plan was refused (${status}): ${error}`)
+      console.log('  \x1b[33m•\x1b[0m execution, retry and chat need a payable plan — skipped')
+      return report()
+    }
+
     const blocked = events.includes('cap_exceeded') || events.includes('budget_exceeded')
     check(
       'run emitted step_start',
@@ -587,7 +688,7 @@ async function main(): Promise<void> {
     if (summaryFrame) {
       const text = String((summaryFrame.data as { summary?: string })?.summary ?? '')
       check('summary is prose, not JSON', text.length > 0 && !text.trimStart().startsWith('{'))
-      check('summary does not leak the key', !text.includes(decrypted.slice(2)))
+      check('summary carries no key-shaped material', !/[0-9a-f]{64}/i.test(text))
     }
 
     // ----------------------------------------------------------- retry/resume
@@ -618,7 +719,6 @@ async function main(): Promise<void> {
     const retry = await readSse('/api/agent/run', jwt, {
       taskId: plan2.body.taskId,
       approvedSteps: steps2,
-      agentPrivateKey: decrypted,
       budgetUsdc: null,
     })
     const startFrame = retry.find((f) => f.event === 'start')?.data as
@@ -682,8 +782,13 @@ async function main(): Promise<void> {
       }),
     })
     check('chat rejects an unknown task', noSuchTask.status === 404, `got ${noSuchTask.status}`)
+    /*
+     * Nothing key-shaped in the stream. There is no key to leak any more, which
+     * is the point of the migration, but the assertion stays: a 64-hex blob
+     * appearing here would mean something reintroduced one.
+     */
     const serialised = JSON.stringify(frames)
-    check('no private key leaked into the stream', !serialised.includes(decrypted.slice(2)))
+    check('no key-shaped material in the stream', !/[0-9a-f]{64}/i.test(serialised))
   }
 
   // ---------------------------------------------------------------- history

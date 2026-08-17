@@ -113,3 +113,48 @@ jobs:
           DB_PATH: ${{ runner.temp }}/ci-cross-package.db
           JWT_SECRET: ci-only-not-a-real-secret
         run: npm run test:cross-package -w @trident/node-backend
+
+      # The seam every other suite misses: what signup writes against what the
+      # routes read. A commit stopped writing users.eoa_address and left three
+      # routes gating on it, so every new account got 409 on its balance, its
+      # deposit address and its first run — with every suite above green. This
+      # boots the real server, seeds a row shaped as signup leaves it, and asks
+      # the routes about it. No credentials: the Circle call is on the far side
+      # of the seam being tested.
+      - name: Account route tests
+        env:
+          DB_PATH: ${{ runner.temp }}/ci-account.db
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: npm run test:account -w @trident/node-backend
+
+      # The full signup path, against a running backend. Without Circle sandbox
+      # credentials it verifies that signup refuses clearly and stops there, so
+      # it is safe to gate merges on as it stands; add CIRCLE_API_KEY,
+      # CIRCLE_ENTITY_SECRET and CIRCLE_WALLET_SET_ID as repository secrets and
+      # the same job starts covering wallet creation, the passphrase gate and a
+      # real run end to end.
+      - name: End-to-end suite
+        env:
+          DB_PATH: ${{ runner.temp }}/ci-e2e.db
+          JWT_SECRET: ci-only-not-a-real-secret
+          PORT: "3001"
+          CIRCLE_API_KEY: ${{ secrets.CIRCLE_API_KEY }}
+          CIRCLE_ENTITY_SECRET: ${{ secrets.CIRCLE_ENTITY_SECRET }}
+          CIRCLE_WALLET_SET_ID: ${{ secrets.CIRCLE_WALLET_SET_ID }}
+        working-directory: apps/node-backend
+        run: |
+          node --experimental-strip-types src/server.ts &
+          SERVER_PID=$!
+          # Fail loudly if it never comes up, rather than running the suite
+          # against nothing and reporting a wall of connection errors.
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3001/health >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:3001/health >/dev/null || { echo "backend did not start"; kill $SERVER_PID; exit 1; }
+          # `|| STATUS=$?` rather than a bare call: the shell runs with -e, so a
+          # failing suite would exit here and leave the server running.
+          STATUS=0
+          npm run test:e2e || STATUS=$?
+          kill $SERVER_PID
+          exit $STATUS

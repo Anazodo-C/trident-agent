@@ -449,39 +449,50 @@ router.patch(
     res.status(400).json({ error: 'enabled must be a boolean' })
     return
   }
-  db.prepare('UPDATE users SET mainnet_enabled = ?, mainnet_chain = ? WHERE id = ?').run(
-    parsed.data.enabled ? 1 : 0,
-    parsed.data.chain ?? 'BASE',
-    user.id,
-  )
+  const before = findUserById(user.id)!
 
   /*
-   * Opting in has to create the wallet it enables.
+   * The flag and the wallet go together, or neither happens.
    *
-   * Signup provisions only the environments the account needed at the time,
-   * which for a testnet-only account is sandbox alone. Flipping this flag
-   * without provisioning left every mainnet payment refusing with "no mainnet
-   * agent wallet yet, finish setting one up in Wallet", pointing at a flow that
-   * does not exist. This is that flow.
+   * An earlier version set the flag first and provisioned afterwards, leaving
+   * the flag on when provisioning could not run or failed. That state looks
+   * enabled and is not: the wallet page offers mainnet, the deposit panel has
+   * no address to show for it, and the first run picks a mainnet chain and dies
+   * partway through with "no mainnet agent wallet yet" — a refusal pointing at
+   * a setup flow the user has already completed. Found by the e2e suite the
+   * moment it was pointed at the current model.
    *
-   * Failure to provision does not undo the opt-in: the flag is the user's
-   * choice, the wallet is our job, and the next attempt retries it.
+   * So the invariant is now: mainnet_enabled implies a mainnet wallet exists.
+   * Provision first, set the flag only on success, and refuse plainly
+   * otherwise. Retrying is pressing the same switch again.
    */
-  const afterFlag = findUserById(user.id)!
-  if (parsed.data.enabled && !afterFlag.circle_wallet_id && circleEnabled('mainnet')) {
+  if (parsed.data.enabled && !before.circle_wallet_id) {
+    if (!circleEnabled('mainnet')) {
+      throw httpError(
+        503,
+        'Mainnet spending cannot be enabled on this server: it has no Circle production ' +
+          'credentials, so no mainnet wallet can be created. Nothing was changed.',
+      )
+    }
     try {
-      const wallet = await provisionWallet('mainnet', walletChainsFor(afterFlag))
+      const wallet = await provisionWallet('mainnet', walletChainsFor(before))
       db.prepare(
         'UPDATE users SET circle_wallet_id = ?, circle_wallet_address = ? WHERE id = ?',
       ).run(wallet.walletId, wallet.address, user.id)
     } catch (err) {
       throw httpError(
         502,
-        `Mainnet is enabled but the wallet could not be created: ${safeErrorMessage(err)}. ` +
-          'Try again from Wallet.',
+        `Could not create your mainnet wallet: ${safeErrorMessage(err)}. Mainnet spending ` +
+          'is still off and nothing was charged. Try the switch again.',
       )
     }
   }
+
+  db.prepare('UPDATE users SET mainnet_enabled = ?, mainnet_chain = ? WHERE id = ?').run(
+    parsed.data.enabled ? 1 : 0,
+    parsed.data.chain ?? 'BASE',
+    user.id,
+  )
 
   const row = findUserById(user.id)!
   res.json({

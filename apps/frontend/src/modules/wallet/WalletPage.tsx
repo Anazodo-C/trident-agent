@@ -114,7 +114,18 @@ export function WalletPage() {
         <WithdrawPanel />
         <GatewayPanel />
         <SpendingCapPanel onSaved={refreshUser} />
-        <MainnetPanel onSaved={refreshUser} />
+        {/*
+          Both, and not only the user record. Enabling mainnet creates a second
+          wallet, and the deposit panel reads its address from the deposit
+          payload — refreshing the user alone left the new network invisible
+          until a page reload.
+        */}
+        <MainnetPanel
+          onSaved={() => {
+            void refreshUser()
+            void refreshAll()
+          }}
+        />
       </div>
 
       <p className="mt-6 text-xs leading-relaxed text-slate-600">
@@ -673,7 +684,8 @@ function MainnetPanel({ onSaved }: { onSaved: () => void }) {
           <p className="mb-3 text-xs leading-relaxed text-[#FFA040]">
             Once enabled, an approved plan spends <strong>real USDC</strong> from your agent
             wallet without further confirmation. Your spending cap and per-run budget stay in
-            force. Fund the wallet on Base before running anything.
+            force. Enabling this creates a <strong>second wallet at a different address</strong>,
+            on mainnet; fund that one on Base from the Deposit panel before running anything.
           </p>
           <div className="flex gap-2">
             <button className="btn-danger flex-1" onClick={() => apply(true)} disabled={busy}>
