@@ -15,6 +15,7 @@ import {
   classifyTransactionState,
   circleChainFor,
   isCircleChain,
+  isInsufficientFunds,
   jsonWithBigints,
   refusalFor,
   CIRCLE_SUPPORTED_CHAINS,
@@ -267,6 +268,45 @@ console.log('\n  what a refusal tells the user to do\n')
    * than an unfamiliar one. */
   const unknown = refusalFor(new Error('contract reverted: Pausable: paused'))
   check('an unknown refusal is not guessed at', /Pausable: paused/.test(unknown.message), true)
+}
+
+/*
+ * A shortfall must stay recognisable as one after the rewording.
+ *
+ * This is the regression the rewording caused. The runner decided whether to
+ * abandon a run by matching /insufficient|balance/ against the message; making
+ * the message actionable removed both words, so a run whose only step failed
+ * for want of funds skipped the fatal path and finished as "done" — green in
+ * History, beside runs that worked.
+ *
+ * Asserted on the flag rather than the prose, because prose is exactly what
+ * proved unable to carry it.
+ */
+{
+  const usdc = refusalFor(new Error('the asset amount owned by the wallet is insufficient'))
+  const gas = refusalFor(new Error('insufficient funds for gas * price + value'))
+  check('a token shortfall is flagged as one', isInsufficientFunds(usdc), true)
+  check('so is a gas shortfall', isInsufficientFunds(gas), true)
+
+  /* The words are gone from the message, which is the whole point, and is why
+   * nothing downstream may go looking for them. */
+  check('and the old wording is genuinely absent', /insufficient|balance/i.test(usdc.message), false)
+
+  /* Not everything is a shortfall. Treating an unrelated failure as one would
+   * abandon a run that another provider could have served. */
+  check(
+    'an unrelated refusal is not flagged',
+    isInsufficientFunds(refusalFor(new Error('contract reverted: Pausable: paused'))),
+    false,
+  )
+  check('nor is a bare error', isInsufficientFunds(new Error('socket hang up')), false)
+
+  /* The flag has to survive being re-thrown, which is where testnetVerification
+   * loses the original error object. */
+  const rethrown = Object.assign(new Error('Testnet verification payment failed: ...'), {
+    insufficientFunds: isInsufficientFunds(usdc),
+  })
+  check('and survives a re-throw that drops the original', isInsufficientFunds(rethrown), true)
 }
 
 /*

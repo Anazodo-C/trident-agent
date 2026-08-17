@@ -478,8 +478,7 @@ export function refusalFor(err: unknown): Error {
   const message = safeErrorMessage(err)
 
   if (/insufficient/i.test(message) && /gas|native/i.test(message)) {
-    return httpError(
-      400,
+    return insufficientFunds(
       'The agent wallet does not hold enough native currency to pay the gas for this ' +
         'transaction. Send a small amount of it to the wallet address shown in Deposit, ' +
         'on the same network. Nothing was charged.',
@@ -487,14 +486,37 @@ export function refusalFor(err: unknown): Error {
   }
 
   if (/insufficient/i.test(message)) {
-    return httpError(
-      400,
+    return insufficientFunds(
       'The agent wallet does not hold enough USDC for this transaction and its fee. Top it ' +
         'up from Deposit, checking the network matches, and try again. Nothing was charged.',
     )
   }
 
   return httpError(400, `This transaction would not succeed: ${message}`)
+}
+
+/**
+ * A shortfall, carried as a flag rather than left to be read back out of prose.
+ *
+ * The runner decides whether to abandon a run on this, and it used to decide by
+ * matching /insufficient|balance/ against the message. Rewording the message
+ * for the user's benefit silently broke that match, and a run whose only step
+ * had failed for want of funds went on to finish as "done". Whether a wallet
+ * was short of money is a fact about the failure, not a property of the English
+ * used to describe it, so it travels as one.
+ */
+export function insufficientFunds(message: string): Error {
+  return httpError(400, message, { reason: INSUFFICIENT_FUNDS })
+}
+
+export const INSUFFICIENT_FUNDS = 'insufficient-funds'
+
+/** Whether this failure, or the one it wraps, was a shortfall. */
+export function isInsufficientFunds(err: unknown): boolean {
+  const details = (err as { details?: Record<string, unknown> } | undefined)?.details
+  if (details?.['reason'] === INSUFFICIENT_FUNDS) return true
+  // Set by whoever re-threw, when the original could not be carried through.
+  return (err as { insufficientFunds?: boolean } | undefined)?.insufficientFunds === true
 }
 
 /**

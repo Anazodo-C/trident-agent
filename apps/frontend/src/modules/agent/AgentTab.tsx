@@ -273,9 +273,28 @@ export function AgentTab() {
         if (typeof data['summary'] === 'string' && id) s.addSummary(id, data['summary'])
         break
       }
-      case 'complete':
-        s.finishRun({ kind: 'complete', message: 'All steps completed.', totalSpent: spent })
+      case 'complete': {
+        /*
+         * "All steps completed" was printed whatever happened, because the
+         * server's count was the number of steps planned rather than the number
+         * that settled. It now sends both, so this can say which.
+         */
+        const settled = Number(data['stepsCompleted'] ?? 0)
+        const planned = Number(data['stepsPlanned'] ?? settled)
+        s.finishRun(
+          settled === planned
+            ? { kind: 'complete', message: 'All steps completed.', totalSpent: spent }
+            : {
+                kind: 'partial',
+                message:
+                  settled === 0
+                    ? `No step completed. ${planned === 1 ? 'The step' : `All ${planned} steps`} failed.`
+                    : `${settled} of ${planned} steps completed. The rest failed.`,
+                totalSpent: spent,
+              },
+        )
         break
+      }
       case 'stopped':
         s.finishRun({ kind: 'stopped', message: 'Agent stopped by you.', totalSpent: spent })
         break

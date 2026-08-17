@@ -13,7 +13,13 @@ import type {
 export type RunPhase = 'idle' | 'planning' | 'awaiting-approval' | 'running' | 'finished'
 
 export interface RunOutcome {
-  kind: 'complete' | 'stopped' | 'budget_exceeded' | 'cap_exceeded' | 'fatal' | 'error'
+  /*
+   * `partial` is a run that reached the end with steps that did not settle.
+   * It used to be reported as `complete`, in green, under the heading "Run
+   * complete" and the words "All steps completed" — including when none of them
+   * had.
+   */
+  kind: 'complete' | 'partial' | 'stopped' | 'budget_exceeded' | 'cap_exceeded' | 'fatal' | 'error'
   message: string
   totalSpent: number
 }

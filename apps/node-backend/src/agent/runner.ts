@@ -11,7 +11,7 @@ import {
 import { BridgeError, bridgeToGatewayBalance } from '../circle/cctpBridge.ts'
 import { canBridgeTo } from '../circle/deployments.ts'
 import { payVanilla } from '../circle/vanillaPayment.ts'
-import type { AgentWallet } from '../circle/circleWallets.ts'
+import { isInsufficientFunds, type AgentWallet } from '../circle/circleWallets.ts'
 import { GatewayBatchPayer } from '../circle/gatewayPayment.ts'
 import { depositToGateway, withdrawFromGateway } from '../circle/gatewayMoves.ts'
 import { KEEPER_PRIVATE_KEY } from '../env.ts'
@@ -72,7 +72,22 @@ function isPolicyRefusal(message: string): boolean {
   )
 }
 
-function isBalanceError(message: string): boolean {
+/**
+ * Did this fail because the wallet was short of money?
+ *
+ * Takes the error, not its message. The message alone was the test until
+ * Circle's refusals were rewritten into something a user could act on, at which
+ * point the words "insufficient" and "balance" left the sentence and this
+ * silently began answering false. A run whose only step had failed for want of
+ * funds then skipped the fatal path and finished as "done", which History
+ * renders in green.
+ *
+ * Our own refusals carry a flag. The regex remains for the ones that come from
+ * viem, the x402 SDK and Gateway, whose wording we do not control and cannot
+ * tag.
+ */
+function isBalanceError(err: unknown, message: string): boolean {
+  if (isInsufficientFunds(err)) return true
   return /insufficient|balance|not enough funds/i.test(message)
 }
 
@@ -1206,7 +1221,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
          * calling it "not reachable right now" both misleads the user and
          * hides a security refusal behind an apology.
          */
-        const reported = isPolicyRefusal(detail) || isBalanceError(detail) || isVerificationFailure(detail)
+        const reported = isPolicyRefusal(detail) || isBalanceError(err, detail) || isVerificationFailure(detail)
           ? detail
           : `${approvedService?.serviceName ?? step.serviceName} is not reachable right now. ` +
             `Nothing else in the catalog could do this step, so it is worth trying again later.`
@@ -1229,7 +1244,7 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
 
         emit(res, 'step_failed', { stepIndex: step.stepIndex, error: reported, totalSpent })
 
-        if (isBalanceError(detail)) {
+        if (isBalanceError(err, detail)) {
           // A free API fails on the Arc Testnet metering payment, not on
           // Gateway — pointing the user at the Gateway panel would send them
           // to top up a balance that was never involved.
@@ -1251,9 +1266,25 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
       }
     }
 
-    emit(res, 'complete', { taskId, totalSpent, stepsCompleted: steps.length })
-    await emitSummary('done')
-    finish('done')
+    /*
+     * What actually settled, not what was attempted.
+     *
+     * `stepsCompleted: steps.length` counted the plan, so a run whose every
+     * step failed reported all of them completed, and `finish('done')` recorded
+     * it green in History beside runs that worked. A user reading that list
+     * cannot tell a run that answered from one that did not.
+     *
+     * Three outcomes rather than two, because "some of it worked" is a real
+     * state and collapsing it either way misreports: called done, it hides
+     * failures the user paid nothing for but still needs to know about; called
+     * failed, it buries results they did pay for.
+     */
+    const settled = results.filter((result) => result.status === 'done').length
+    const outcome = settled === results.length ? 'done' : settled === 0 ? 'failed' : 'partial'
+
+    emit(res, 'complete', { taskId, totalSpent, stepsCompleted: settled, stepsPlanned: steps.length })
+    await emitSummary(outcome)
+    finish(outcome)
   } catch (err) {
     // Headers are already sent, so surface the failure on the stream, not as a status code.
     emit(res, 'error', { taskId, error: safeErrorMessage(err), totalSpent })

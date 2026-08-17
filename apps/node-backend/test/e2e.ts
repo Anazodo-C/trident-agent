@@ -823,8 +823,22 @@ async function main(): Promise<void> {
     'every task that ran reached a terminal status',
     history.body.tasks
       .filter((t) => t.stepsDone > 0)
-      .every((t) => ['done', 'stopped', 'failed'].includes(t.status)),
+      // 'partial' joined the list: a run that reached the end with some steps
+      // unsettled is terminal, and used to be recorded as 'done'.
+      .every((t) => ['done', 'partial', 'stopped', 'failed'].includes(t.status)),
     history.body.tasks.map((t) => `${t.status}:${t.stepsDone}`).join(','),
+  )
+
+  /*
+   * The check that would have caught this. A run whose steps all failed was
+   * recorded 'done' and rendered green in History, indistinguishable from a run
+   * that answered — because the terminal status was hardcoded rather than
+   * derived from what settled.
+   */
+  check(
+    'a task with no settled step is never recorded as done',
+    history.body.tasks.every((t) => !(t.status === 'done' && t.stepCount > 0 && t.stepsDone === 0)),
+    history.body.tasks.map((t) => `${t.status}:${t.stepsDone}/${t.stepCount}`).join(','),
   )
 
   const detail = await json<{ steps: unknown[] }>(`/api/tasks/${planRes.body.taskId}`, {

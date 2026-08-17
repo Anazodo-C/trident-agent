@@ -1,7 +1,7 @@
 import { parseUnits } from 'viem'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import { chainConfig, safeErrorMessage } from './gatewayService.ts'
-import { executeContract, type AgentWallet } from './circleWallets.ts'
+import { executeContract, isInsufficientFunds, type AgentWallet } from './circleWallets.ts'
 import { optional } from '../env.ts'
 
 /**
@@ -71,7 +71,16 @@ export async function payVerification(wallet: AgentWallet): Promise<Verification
       to,
     }
   } catch (err) {
-    throw new Error(`Testnet verification payment failed: ${safeErrorMessage(err)}`)
+    /*
+     * The prefix names which payment failed, since a run has two kinds. The
+     * flag is carried across because this wrapping is where the original error
+     * object stops being available, and the runner needs to know a shortfall
+     * from an outage: one means stop and tell the user to fund the wallet, the
+     * other means try another provider.
+     */
+    throw Object.assign(new Error(`Testnet verification payment failed: ${safeErrorMessage(err)}`), {
+      insufficientFunds: isInsufficientFunds(err),
+    })
   }
 }
 

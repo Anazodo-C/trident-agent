@@ -8,6 +8,9 @@ import type { TaskStepDetail, TaskSummary } from '../../lib/types.ts'
 const STATUS_CLASS: Record<string, string> = {
   done: 'bg-[#00FF88]/10 text-[#00FF88]',
   running: 'bg-[#00D4FF]/10 text-[#00D4FF] animate-pulse',
+  // A run that lost steps. Without its own entry it fell through to the grey
+  // "pending" style, which reads as a run that never started.
+  partial: 'bg-[#FFA040]/10 text-[#FFA040]',
   stopped: 'bg-[#FFA040]/10 text-[#FFA040]',
   failed: 'bg-[#FF4466]/10 text-[#FF4466]',
   pending: 'bg-slate-500/10 text-slate-400',

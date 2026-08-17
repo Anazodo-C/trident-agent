@@ -4,6 +4,9 @@ import { usdc } from '../../lib/format.ts'
 
 const TONE: Record<RunOutcome['kind'], { border: string; text: string }> = {
   complete: { border: 'border-[#00FF88]/40 bg-[#00FF88]/5', text: 'text-[#00FF88]' },
+  // Amber, not green. A run that lost steps is not a run that worked, and the
+  // colour is read before the sentence.
+  partial: { border: 'border-[#FFA040]/40 bg-[#FFA040]/5', text: 'text-[#FFA040]' },
   stopped: { border: 'border-[#FFA040]/40 bg-[#FFA040]/5', text: 'text-[#FFA040]' },
   budget_exceeded: { border: 'border-[#FFA040]/40 bg-[#FFA040]/5', text: 'text-[#FFA040]' },
   cap_exceeded: { border: 'border-[#FFA040]/40 bg-[#FFA040]/5', text: 'text-[#FFA040]' },

@@ -882,6 +882,33 @@ async function main(): Promise<void> {
       String(failure?.data['error'] ?? '').includes('not in the service registry'),
       String(failure?.data['error']),
     )
+
+    /*
+     * How the run is recorded once its only step has failed.
+     *
+     * It used to be recorded 'done', with `stepsCompleted` counting the steps
+     * planned rather than the steps that settled — so a run that answered
+     * nothing sat in History in green, beside runs that did, and the stream
+     * told the user "All steps completed". Both numbers were hardcoded from the
+     * plan, so no amount of failure could change either.
+     */
+    const completeFrame = frames.find((f) => f.event === 'complete')
+    check('the run still reaches a terminal frame', completeFrame !== undefined)
+    check(
+      'nothing is counted as completed',
+      completeFrame?.data['stepsCompleted'] === 0,
+      String(completeFrame?.data['stepsCompleted']),
+    )
+    check(
+      'and the plan size is reported separately',
+      completeFrame?.data['stepsPlanned'] === 1,
+      String(completeFrame?.data['stepsPlanned']),
+    )
+    check(
+      'a run whose every step failed is recorded failed, not done',
+      taskStatus(taskId) === 'failed',
+      taskStatus(taskId),
+    )
   }
 
   // ----------------------------------------------------- unfunded real payment
