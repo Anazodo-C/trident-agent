@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createWalletClient, formatEther, parseEther } from 'viem'
+import { createPublicClient, createWalletClient, formatEther, parseEther } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import db from '../db.ts'
@@ -56,6 +56,15 @@ const SPONSORED: Partial<Record<SupportedChainName, { floor: string; grant: stri
  * drift apart: three top-ups is far more than a legitimate day of use and
  * cheap enough that a stuck loop costs pennies before it stops.
  */
+/**
+ * How long to wait for a grant to be mined before giving up on it.
+ *
+ * A user request is blocked on this, so it cannot be generous. Base and Polygon
+ * both produce blocks in about two seconds; thirty covers a congested one
+ * without holding a deposit open long enough to look broken.
+ */
+const RECEIPT_TIMEOUT_MS = 30_000
+
 const GRANTS_PER_WINDOW = 3
 const WINDOW_SECONDS = 24 * 60 * 60
 
@@ -174,6 +183,21 @@ async function topUp(
     db.prepare(
       'INSERT INTO gas_grants (id, address, chain, amount_wei, tx_hash) VALUES (?, ?, ?, ?, ?)',
     ).run(randomUUID(), address.toLowerCase(), chain, amount.toString(), txHash)
+
+    /*
+     * Wait for it to land, and this is not optional.
+     *
+     * Returning at submission looked harmless and was not: the caller's very
+     * next act is either to re-read the balance or to ask Circle to estimate,
+     * and both happen in the same millisecond. Unmined gas is indistinguishable
+     * from no gas, so the grant went through and the deposit was refused anyway
+     * — which is exactly what happened on the first real use of this.
+     *
+     * Bounded, because a request is waiting on this. A timeout leaves the grant
+     * recorded and in flight; the next attempt finds the balance already there.
+     */
+    const publicClient = createPublicClient({ chain: config.chain, transport: transportFor(chain) })
+    await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: RECEIPT_TIMEOUT_MS })
 
     console.warn(
       '[trident] gas granted:',

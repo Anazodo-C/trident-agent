@@ -9,6 +9,7 @@
  * Run with:  npm run test:gas -w @trident/node-backend
  */
 import { randomUUID } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { parseEther } from 'viem'
 import db from '../src/db.ts'
 import { GAS_GRANT_LIMIT, ensureGas, gasRefusal, sponsorshipFor } from '../src/circle/gasSponsor.ts'
@@ -125,6 +126,37 @@ console.log('\n  the refusal, when nothing could be done\n')
   check('names the chain', /base/i.test(message), true)
   check('gives the address to send to', message.includes('e'.repeat(40)), true)
   check('and says the USDC is safe', /untouched/i.test(message), true)
+}
+
+console.log('\n  a grant is not finished when it is sent\n')
+
+/*
+ * The bug the first real deposit hit.
+ *
+ * topUp returned as soon as the transfer was submitted. The caller's very next
+ * act is to re-read the balance or ask Circle to estimate, both in the same
+ * millisecond, and unmined gas reads exactly like no gas — so the grant went
+ * through and the deposit was refused anyway. Asserted on the source, because
+ * the alternative is a test that spends real money to prove a wait exists.
+ */
+{
+  const source = await readFile(
+    new URL('../src/circle/gasSponsor.ts', import.meta.url),
+    'utf8',
+  )
+  const sendAt = source.indexOf('sendTransaction')
+  const waitAt = source.indexOf('waitForTransactionReceipt')
+  check('the receipt is awaited at all', waitAt > 0, true)
+  check('and after the send, not before', waitAt > sendAt, true)
+
+  /* Bounded, because a user request is blocked on it. An unbounded wait turns a
+   * stuck transaction into a hung deposit. */
+  check('the wait has a timeout', /timeout: RECEIPT_TIMEOUT_MS/.test(source), true)
+
+  /* The ledger write has to precede the wait, or a timeout loses the record and
+   * the cap stops counting a grant that really was sent. */
+  const insertAt = source.indexOf('INSERT INTO gas_grants')
+  check('the grant is recorded before the wait', insertAt < waitAt, true)
 }
 
 db.prepare("DELETE FROM gas_grants WHERE tx_hash = '0xdead'").run()
