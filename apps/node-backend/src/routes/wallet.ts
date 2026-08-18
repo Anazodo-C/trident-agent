@@ -15,6 +15,7 @@ import {
   withContext,
   unifiedGatewayBalance,
   walletUsdcByChain,
+  nativeBalanceFor,
   spendableTotalUsdc,
   transportFor,
 } from '../circle/gatewayService.ts'
@@ -163,6 +164,17 @@ router.all(
     const usdcRaw = usdcRead.status === 'fulfilled' ? usdcRead.value : null
     const nativeRaw = nativeRead.status === 'fulfilled' ? nativeRead.value : null
     const walletUsdc = usdcRaw === null ? null : formatUnitsFixed(usdcRaw, USDC_DECIMALS)
+    /*
+     * Funded, and still unable to spend. Worth saying on the panel rather than
+     * only when a transaction fails: this is the state a user lands in by
+     * following the deposit instructions exactly.
+     */
+    const gasWarning =
+      usdcRaw !== null && usdcRaw > 0n && nativeRaw === 0n
+        ? `This wallet holds USDC but no ${config.chain.nativeCurrency.symbol} on ` +
+          `${chainLabel(chain)}. It pays its own gas, so deposits, withdrawals and payments ` +
+          `will all fail until it has a little. Send some to the address above.`
+        : null
     const rpcWarning =
       usdcRaw === null || nativeRaw === null
         ? `Could not read the ${chainLabel(chain)} balance right now. The figures below are ` +
@@ -265,6 +277,7 @@ router.all(
       gatewayWarning,
       native: nativeRaw === null ? null : formatEther(nativeRaw),
       rpcWarning,
+      gasWarning,
       unreadableChains,
       nativeSymbol: config.chain.nativeCurrency.symbol,
       explorerBase: config.chain.blockExplorers?.default.url ?? null,
@@ -298,6 +311,27 @@ router.post(
     const row = findUserById(user.id)!
     const chain = walletChain(row, parsed.data.chain)
     const wallet = walletForChain(row, chain)
+
+    /*
+     * Gas, before anything else.
+     *
+     * Agent wallets are Circle EOAs, so they pay their own gas and a deposit is
+     * two transactions. A wallet funded with USDC and no native currency can do
+     * neither, and Circle refuses with a sentence about the wallet's asset
+     * amount that reads as "you have no USDC" — advice that sends the user to
+     * deposit more of the thing they already have. Checked here so the refusal
+     * names the right asset.
+     */
+    const gas = await nativeBalanceFor(chain, wallet.address)
+    if (gas === 0n) {
+      const symbol = chainConfig(chain).chain.nativeCurrency.symbol
+      throw httpError(
+        400,
+        `Your agent wallet holds no ${symbol} on ${chainLabel(chain)}, and it pays its own ` +
+          `gas, so it cannot move anything. Send a small amount of ${symbol} to ` +
+          `${wallet.address} on ${chainLabel(chain)} and try again. Your USDC is untouched.`,
+      )
+    }
 
     try {
       const result = await depositToGateway(wallet, chain, parsed.data.amount)

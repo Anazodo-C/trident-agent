@@ -349,6 +349,16 @@ function BalancePanel() {
         page can show, and the user's instinct — deposit again — is the one
         action that costs them money.
       */}
+      {/*
+        The state a user reaches by following the deposit instructions and
+        nothing else: funded with USDC, no gas, and every button failing with a
+        message about USDC. Said before they press anything.
+      */}
+      {balance?.gasWarning && (
+        <p className="mt-3 rounded-lg border border-[#FFA040]/40 bg-[#FFA040]/10 p-2.5 text-[11px] leading-relaxed text-[#FFA040]">
+          {balance.gasWarning}
+        </p>
+      )}
       {balance?.rpcWarning && (
         <p className="mt-3 rounded-lg border border-[#FFA040]/40 bg-[#FFA040]/10 p-2.5 text-[11px] leading-relaxed text-[#FFA040]">
           {balance.rpcWarning}

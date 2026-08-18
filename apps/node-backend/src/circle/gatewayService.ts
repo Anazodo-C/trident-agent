@@ -196,6 +196,26 @@ export async function quoteFromEndpoint(
  * One chain failing must not blank the rest — an RPC hiccup on a chain the user
  * has never used should not make the chain they are paying on look unfunded.
  */
+/**
+ * Native currency held, for gas.
+ *
+ * Agent wallets are Circle EOAs, not smart accounts, so there is no paymaster
+ * and every transaction is paid for out of this balance. A wallet can hold
+ * plenty of USDC and still be unable to move any of it, which reads to the user
+ * as the product being broken: they funded it exactly as instructed, and the
+ * deposit button does nothing.
+ *
+ * Null when the read failed, which is not the same as zero.
+ */
+export async function nativeBalanceFor(
+  chain: SupportedChainName,
+  address: string,
+): Promise<bigint | null> {
+  const config = chainConfig(chain)
+  const client = createPublicClient({ chain: config.chain, transport: transportFor(chain) })
+  return client.getBalance({ address: address as `0x${string}` }).catch(() => null)
+}
+
 export interface WalletUsdcReads {
   /** Only chains that answered. */
   byChain: Map<SupportedChainName, number>

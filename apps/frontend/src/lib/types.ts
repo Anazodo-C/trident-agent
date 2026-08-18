@@ -232,6 +232,8 @@ export interface WalletBalance {
   gatewayWarning: string | null
   /** Set when the chain's own RPC could not be read at all. */
   rpcWarning: string | null
+  /** Set when the wallet holds USDC but no native currency to pay gas with. */
+  gasWarning: string | null
   /** Mainnet chains whose balance could not be read, so the totals are withheld. */
   unreadableChains: string[]
   native: string | null
