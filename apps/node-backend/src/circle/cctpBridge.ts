@@ -11,6 +11,7 @@ import { chainConfig, safeErrorMessage,
   transportFor,
 } from './gatewayService.ts'
 import { DEPLOYMENTS } from './deployments.ts'
+import { dataSuffixOption } from './attribution.ts'
 import { KEEPER_PRIVATE_KEY } from '../env.ts'
 import { executeContract, type AgentWallet } from './circleWallets.ts'
 
@@ -263,10 +264,17 @@ export async function bridgeToGatewayBalance(
 
   /* ------------------------------------------------------------- 3. mint */
   onProgress({ stage: 'minting', detail: toChain })
+  /*
+   * The mint and the sweep below are the two transactions Trident itself
+   * broadcasts in a cross-chain settlement, so they are the two that can carry
+   * the Builder Code. Set on the client rather than per call, so both pick it
+   * up and a third can never be added without it.
+   */
   const keeperWallet = createWalletClient({
     account: keeper,
     chain: dst.config.chain,
     transport: dst.transport,
+    ...dataSuffixOption(),
   })
 
   const mintTxHash = await keeperWallet.writeContract({

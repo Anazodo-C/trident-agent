@@ -240,6 +240,19 @@ export const DB_ENCRYPTION_KEY = optional('DB_ENCRYPTION_KEY')
 export const KEEPER_PRIVATE_KEY = optional('KEEPER_PRIVATE_KEY')
 
 /**
+ * Base Builder Code, for ERC-8021 transaction attribution.
+ *
+ * An identifier claimed from Base that gets appended to the calldata of
+ * transactions this app submits, so the Base Dashboard can credit them to
+ * Trident. Contracts ignore the suffix; only offchain indexers read it.
+ *
+ * An environment variable rather than a constant so testnet and production can
+ * carry different codes, and so an unset value is a supported state: without
+ * it nothing is appended and every transaction is byte-for-byte what it was.
+ */
+export const BUILDER_CODE = optional('BUILDER_CODE')
+
+/**
  * Circle Developer Platform credentials, which together replace holding user
  * private keys at all.
  *

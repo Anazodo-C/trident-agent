@@ -16,6 +16,7 @@ import {
   transportFor,
 } from './gatewayService.ts'
 import { keeperAccount } from './cctpBridge.ts'
+import { dataSuffixOption } from './attribution.ts'
 
 /** The one function a Gateway attestation is redeemed through. */
 const GATEWAY_MINTER_ABI = parseAbi(['function gatewayMint(bytes attestationPayload, bytes signature)'])
@@ -254,7 +255,13 @@ export async function mintGatewayAttestation(
   const config = chainConfig(chain)
   const transport = transportFor(chain)
   const publicClient = createPublicClient({ chain: config.chain, transport })
-  const wallet = createWalletClient({ account: keeper, chain: config.chain, transport })
+  // Keeper-submitted, so it carries the Builder Code like the CCTP mint does.
+  const wallet = createWalletClient({
+    account: keeper,
+    chain: config.chain,
+    transport,
+    ...dataSuffixOption(),
+  })
 
   const hash = await wallet.writeContract({
     address: config.gatewayMinter,

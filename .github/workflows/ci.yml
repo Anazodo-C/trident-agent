@@ -114,6 +114,17 @@ jobs:
           JWT_SECRET: ci-only-not-a-real-secret
         run: npm run test:cross-package -w @trident/node-backend
 
+      # The Builder Code suffix appended to transactions we broadcast. Cheap to
+      # run and worth gating on: with no code configured it must append nothing
+      # at all, because this shipped before the code existed and a stray suffix
+      # would alter the calldata of transactions that move real USDC.
+      - name: Attribution tests
+        env:
+          DB_PATH: ${{ runner.temp }}/ci-attribution.db
+          JWT_SECRET: ci-only-not-a-real-secret
+          BUILDER_CODE: ""
+        run: npm run test:attribution -w @trident/node-backend
+
       # The seam every other suite misses: what signup writes against what the
       # routes read. A commit stopped writing users.eoa_address and left three
       # routes gating on it, so every new account got 409 on its balance, its
