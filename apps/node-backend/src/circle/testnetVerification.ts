@@ -59,6 +59,7 @@ export async function payVerification(wallet: AgentWallet): Promise<Verification
      */
     const { txHash } = await executeContract({
       wallet,
+      chain: VERIFICATION_CHAIN,
       contractAddress: config.usdc,
       abiFunctionSignature: 'transfer(address,uint256)',
       abiParameters: [to, value.toString()],

@@ -125,6 +125,16 @@ jobs:
           BUILDER_CODE: ""
         run: npm run test:attribution -w @trident/node-backend
 
+      # The keeper's gas sponsorship, and specifically its cap. This is a funded
+      # key that any account holder can cause to spend, so the cap is the whole
+      # control and the tests are the refusals rather than the happy path.
+      # Nothing here sends a transaction.
+      - name: Gas sponsor tests
+        env:
+          DB_PATH: ${{ runner.temp }}/ci-gas.db
+          JWT_SECRET: ci-only-not-a-real-secret
+        run: npm run test:gas -w @trident/node-backend
+
       # The seam every other suite misses: what signup writes against what the
       # routes read. A commit stopped writing users.eoa_address and left three
       # routes gating on it, so every new account got 409 on its balance, its

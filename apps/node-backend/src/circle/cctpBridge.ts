@@ -208,6 +208,7 @@ export async function bridgeToGatewayBalance(
      */
     await executeContract({
       wallet,
+      chain: fromChain,
       contractAddress: src.config.usdc,
       abiFunctionSignature: 'approve(address,uint256)',
       abiParameters: [source.cctpRouter, amountAtomic.toString()],
@@ -236,6 +237,7 @@ export async function bridgeToGatewayBalance(
   const maxFee = (amountAtomic * MAX_FEE_BPS) / 10_000n
   const { txHash: burnTxHash } = await executeContract({
     wallet,
+    chain: fromChain,
     contractAddress: source.cctpRouter,
     /*
      * Derived from the ABI, never hand-written. Circle takes a signature

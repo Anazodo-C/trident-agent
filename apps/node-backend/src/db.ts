@@ -185,6 +185,31 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   window_start INTEGER DEFAULT (strftime('%s','now'))
 );
 
+/*
+ * Native currency the keeper has sent to a user's wallet so it can pay its own
+ * gas.
+ *
+ * A ledger rather than a counter, because the cap has to be a rolling window:
+ * a running total would either need resetting on a schedule nothing owns, or
+ * would lock an account out permanently after a busy day. Rows are cheap and a
+ * grant is rare.
+ *
+ * Keyed by address rather than user id: the address is the thing being funded,
+ * and it is what both the balance check and the transfer act on.
+ */
+CREATE TABLE IF NOT EXISTS gas_grants (
+  id          TEXT PRIMARY KEY,
+  address     TEXT NOT NULL,
+  chain       TEXT NOT NULL,
+  -- Wei, as a string. SQLite integers are 64-bit and a wei amount on a chain
+  -- with an expensive native token can exceed that.
+  amount_wei  TEXT NOT NULL,
+  tx_hash     TEXT,
+  created_at  INTEGER DEFAULT (strftime('%s','now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_gas_grants_addr ON gas_grants(address, chain, created_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_tasks_user     ON tasks(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_steps_task     ON task_steps(task_id, step_index);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_steps_unique ON task_steps(task_id, step_index);

@@ -15,6 +15,7 @@ import {
 import { encodeFunctionData, parseAbiItem } from 'viem'
 import { safeErrorMessage } from './gatewayService.ts'
 import { BUILDER_DATA_SUFFIX } from './attribution.ts'
+import { ensureGas } from './gasSponsor.ts'
 
 /**
  * The only place the Circle SDK is touched.
@@ -430,6 +431,15 @@ export async function signTypedDataFor(
 
 export interface ContractCall {
   wallet: AgentWallet
+  /**
+   * The chain this executes on.
+   *
+   * Added because the call could not previously say which network it acted on,
+   * which meant nothing here could check the wallet had gas for it. Circle
+   * infers the chain from the wallet, so this is not sent to Circle; it is for
+   * the checks that happen first.
+   */
+  chain: SupportedChainName
   contractAddress: string
   /** e.g. `approve(address,uint256)`. Preferred over raw calldata, per Circle. */
   abiFunctionSignature: string
@@ -611,6 +621,18 @@ export async function executeContract(
   call: ContractCall,
   opts: { skipEstimate?: boolean } = {},
 ): Promise<{ txHash: string; txId: string }> {
+  /*
+   * Gas before anything else, and before the estimate: an unfunded wallet fails
+   * the estimate, so topping up afterwards would be too late. Silent and free
+   * when the wallet already has some, which is nearly every call.
+   *
+   * Every user transaction goes through this function, so this is the one place
+   * it has to be. Putting it at the call sites would mean a new on-chain
+   * operation could be added without it and nobody would notice until a user
+   * with no gas hit that path.
+   */
+  await ensureGas(call.wallet.address, call.chain)
+
   if (!opts.skipEstimate) await estimateContractCall(call)
 
   let txId: string

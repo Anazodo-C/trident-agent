@@ -78,6 +78,7 @@ export async function depositToGateway(
    */
   const approval = await executeContract({
     wallet,
+    chain,
     contractAddress: config.usdc,
     abiFunctionSignature: 'approve(address,uint256)',
     abiParameters: [config.gatewayWallet, atomic.toString()],
@@ -85,6 +86,7 @@ export async function depositToGateway(
 
   const deposit = await executeContract({
     wallet,
+    chain,
     contractAddress: config.gatewayWallet,
     abiFunctionSignature: 'deposit(address,uint256)',
     abiParameters: [config.usdc, atomic.toString()],

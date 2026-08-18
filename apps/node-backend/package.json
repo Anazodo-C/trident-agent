@@ -22,7 +22,8 @@
     "circle:preflight": "node --experimental-strip-types scripts/circlePreflight.ts",
     "test:cross-package": "CIRCLE_API_KEY= CIRCLE_ENTITY_SECRET= CIRCLE_WALLET_SET_ID= node --experimental-strip-types test/crossPackage.ts",
     "test:account": "CIRCLE_API_KEY= CIRCLE_ENTITY_SECRET= CIRCLE_WALLET_SET_ID= node --experimental-strip-types test/accountRoutes.ts",
-    "test:attribution": "CIRCLE_API_KEY= CIRCLE_ENTITY_SECRET= CIRCLE_WALLET_SET_ID= node --experimental-strip-types test/attribution.ts"
+    "test:attribution": "CIRCLE_API_KEY= CIRCLE_ENTITY_SECRET= CIRCLE_WALLET_SET_ID= node --experimental-strip-types test/attribution.ts",
+    "test:gas": "CIRCLE_API_KEY= CIRCLE_ENTITY_SECRET= CIRCLE_WALLET_SET_ID= node --experimental-strip-types test/gasSponsor.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.72.0",

@@ -29,6 +29,7 @@ import {
   walletForChain,
 } from '../circle/circleWallets.ts'
 import { depositToGateway, withdrawFromGateway } from '../circle/gatewayMoves.ts'
+import { ensureGas, gasRefusal } from '../circle/gasSponsor.ts'
 import type { SupportedChainName } from '@circle-fin/x402-batching/client'
 import type { UserRow } from '../db.ts'
 
@@ -172,8 +173,10 @@ router.all(
     const gasWarning =
       usdcRaw !== null && usdcRaw > 0n && nativeRaw === 0n
         ? `This wallet holds USDC but no ${config.chain.nativeCurrency.symbol} on ` +
-          `${chainLabel(chain)}. It pays its own gas, so deposits, withdrawals and payments ` +
-          `will all fail until it has a little. Send some to the address above.`
+          `${chainLabel(chain)}, which it needs to pay its own gas. Trident normally tops this ` +
+          `up automatically, so seeing it here means that did not happen. Try your ` +
+          `transaction anyway; if it still fails, send a small amount of ` +
+          `${config.chain.nativeCurrency.symbol} to the address above.`
         : null
     const rpcWarning =
       usdcRaw === null || nativeRaw === null
@@ -322,16 +325,17 @@ router.post(
      * deposit more of the thing they already have. Checked here so the refusal
      * names the right asset.
      */
+    /*
+     * Sponsorship gets its turn before the refusal.
+     *
+     * executeContract tops up on its own, but this route checked the balance
+     * first and refused, which would have made the sponsorship unreachable on
+     * the exact path it was built for. Ask for the top-up, then re-read: still
+     * empty means it could not be granted, and the user does need telling.
+     */
+    await ensureGas(wallet.address, chain)
     const gas = await nativeBalanceFor(chain, wallet.address)
-    if (gas === 0n) {
-      const symbol = chainConfig(chain).chain.nativeCurrency.symbol
-      throw httpError(
-        400,
-        `Your agent wallet holds no ${symbol} on ${chainLabel(chain)}, and it pays its own ` +
-          `gas, so it cannot move anything. Send a small amount of ${symbol} to ` +
-          `${wallet.address} on ${chainLabel(chain)} and try again. Your USDC is untouched.`,
-      )
-    }
+    if (gas === 0n) throw gasRefusal(chain, wallet.address)
 
     try {
       const result = await depositToGateway(wallet, chain, parsed.data.amount)
@@ -406,6 +410,7 @@ router.post(
        */
       const { txHash } = await executeContract({
         wallet,
+        chain,
         contractAddress: config.usdc,
         abiFunctionSignature: 'transfer(address,uint256)',
         abiParameters: [parsed.data.toAddress, value.toString()],
