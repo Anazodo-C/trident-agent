@@ -12,7 +12,9 @@ import {
   CIRCLE_WALLET_SET_ID,
   CIRCLE_WALLET_SET_ID_MAINNET,
 } from '../env.ts'
+import { encodeFunctionData, parseAbiItem } from 'viem'
 import { safeErrorMessage } from './gatewayService.ts'
+import { BUILDER_DATA_SUFFIX } from './attribution.ts'
 
 /**
  * The only place the Circle SDK is touched.
@@ -437,6 +439,75 @@ export interface ContractCall {
 }
 
 /**
+ * The call encoded as raw calldata, with the Builder Code appended.
+ *
+ * Circle normally builds the calldata itself from the signature and parameters,
+ * which is the safer arrangement and the one used everywhere until now: fewer
+ * places to get ABI encoding wrong, and the encoding it produces is the one its
+ * own estimate is based on. But an ERC-8021 attribution suffix is bytes trailing
+ * the calldata, and there is no way to ask for one through the ABI form, so a
+ * tagged call has to be encoded here and handed over whole.
+ *
+ * Returns null when no Builder Code is configured, and the caller then keeps the
+ * ABI form untouched. That is deliberate: with attribution off, not one byte of
+ * any transaction changes, so this whole path cannot affect a wallet that has
+ * not opted into it.
+ */
+function attributedCallData(call: ContractCall): `0x${string}` | null {
+  if (!BUILDER_DATA_SUFFIX) return null
+  try {
+    return `${encodeCall(call.abiFunctionSignature, call.abiParameters)}${BUILDER_DATA_SUFFIX.slice(2)}`
+  } catch (err) {
+    /*
+     * Fall back to the ABI form rather than failing the transaction. An
+     * encoding this module could not produce is a bug in the attribution path,
+     * and the payment it is attached to is not the place to surface it: Circle
+     * will encode the same call correctly, and the only thing lost is a
+     * dashboard row.
+     */
+    console.error(
+      '[trident] could not encode calldata for attribution, sending untagged:',
+      JSON.stringify({ signature: call.abiFunctionSignature, error: String(err) }),
+    )
+    return null
+  }
+}
+
+/**
+ * ABI-encode a call from the signature string Circle takes.
+ *
+ * The signature is the same string already passed to Circle, so the selector
+ * cannot drift between the tagged and untagged paths — both are derived from
+ * one source. Parameters arrive as the strings and numbers Circle's JSON API
+ * wants; viem wants the native types, so integers are widened to bigint here
+ * and everything else passes through as written.
+ *
+ * Exported for the test that pins the output against known selectors, because
+ * this is the one place in the attribution work that rewrites what a
+ * transaction actually says.
+ */
+export function encodeCall(signature: string, params: unknown[]): `0x${string}` {
+  const item = parseAbiItem(`function ${signature}`)
+  const inputs = (item as { inputs?: readonly { type: string }[] }).inputs ?? []
+  const args = inputs.map((input, i) => {
+    const value = params[i]
+    // uint8 through uint256 and their signed counterparts. Everything else —
+    // address, bytes, bytes32, string, bool — is already the shape viem wants.
+    if (/^u?int\d*$/.test(input.type)) return BigInt(String(value))
+    return value
+  })
+  /*
+   * Cast because the signature is a runtime string, so viem cannot infer the
+   * argument tuple from it the way it does for a literal ABI. The types it
+   * would infer are the whole reason the coercion above exists; the check that
+   * this is right is the test pinning the output against known selectors.
+   */
+  return encodeFunctionData({ abi: [item], args } as unknown as Parameters<
+    typeof encodeFunctionData
+  >[0])
+}
+
+/**
  * Pre-flight, replacing the `simulateContract` call this used to make.
  *
  * viem let us simulate and refuse to send a call that would revert. Circle's
@@ -450,13 +521,23 @@ export async function estimateContractCall(call: ContractCall): Promise<void> {
   try {
     // Note the shape difference from createContractExecutionTransaction below,
     // which takes walletId at the top level. Estimating nests it under source.
+    /*
+     * Estimated against the same bytes that will be submitted. Estimating the
+     * ABI form and then sending calldata would be estimating a different
+     * transaction, and the suffix costs real gas (16 per non-zero byte).
+     */
+    const callData = attributedCallData(call)
     await circleClient(call.wallet.env).estimateContractExecutionFee({
       source: { walletId: call.wallet.walletId },
       contractAddress: call.contractAddress,
-      abiFunctionSignature: call.abiFunctionSignature,
-      abiParameters: call.abiParameters as unknown[],
+      ...(callData
+        ? { callData }
+        : {
+            abiFunctionSignature: call.abiFunctionSignature,
+            abiParameters: call.abiParameters as unknown[],
+          }),
       ...(call.amount ? { amount: call.amount } : {}),
-    })
+    } as never)
   } catch (err) {
     throw refusalFor(err)
   }
@@ -534,15 +615,21 @@ export async function executeContract(
 
   let txId: string
   try {
+    // The same bytes the estimate above was taken against.
+    const callData = attributedCallData(call)
     const response = await circleClient(call.wallet.env).createContractExecutionTransaction({
       walletId: call.wallet.walletId,
       contractAddress: call.contractAddress,
-      abiFunctionSignature: call.abiFunctionSignature,
-      abiParameters: call.abiParameters as unknown[],
+      ...(callData
+        ? { callData }
+        : {
+            abiFunctionSignature: call.abiFunctionSignature,
+            abiParameters: call.abiParameters as unknown[],
+          }),
       ...(call.amount ? { amount: call.amount } : {}),
       fee: { type: 'level', config: { feeLevel: 'MEDIUM' } },
       idempotencyKey: idempotencyKey(),
-    })
+    } as never)
 
     const id = response.data?.id
     if (!id) throw new Error('Circle returned no transaction id')

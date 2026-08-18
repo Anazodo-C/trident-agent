@@ -10,6 +10,12 @@ import { BUILDER_CODE } from '../env.ts'
  * transaction that moves real USDC — the instruction being executed does not
  * change, only the bytes trailing it.
  *
+ * Covers both the transactions Trident broadcasts through viem (the keeper's
+ * CCTP mint and sweep, and the Gateway attestation mint) and the ones Circle
+ * submits for a user's wallet (Gateway deposits, CCTP burns, withdrawals and
+ * the free-tier meter). The second group needs the calldata built here rather
+ * than by Circle, which is why `encodeCall` in circleWallets.ts exists.
+ *
  * What this cannot cover, and it is the larger half: the x402 payments
  * themselves. Both rails only ever sign; the seller's facilitator broadcasts.
  * There is no transaction of ours to append to, and no field in @x402/core,
