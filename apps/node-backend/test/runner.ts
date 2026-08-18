@@ -33,7 +33,7 @@ import {
   requiredParamsOf,
 } from '../src/circle/registryService.ts'
 import { FREE_API_CATALOG } from '../src/circle/freeApiCatalog.ts'
-import { fromAtomicUsdc, toAtomicUsdc } from '../src/circle/gatewayService.ts'
+import { fromAtomicUsdc, toAtomicUsdc, walletUsdcByChain } from '../src/circle/gatewayService.ts'
 import { __testSyncApprovedSteps } from '../src/routes/agent.ts'
 import type { PlanStep } from '../src/llm/planner.ts'
 import type { ChainPolicy } from '../src/circle/chainPolicy.ts'
@@ -803,6 +803,40 @@ async function main(): Promise<void> {
     check('cap applies without a run budget', !events.includes('step_start'), events.join(','))
     const capFrame = fake.frames().find((f) => f.event === 'cap_exceeded')
     check('cap event reports the cap', capFrame?.data['spendingCapUsdc'] === 0.001)
+  }
+
+  // ------------------------------------------- unreadable balance vs no funds
+  section('An unread balance is not a zero balance')
+  {
+    /*
+     * The distinction that broke a funded wallet in production. walletUsdcByChain
+     * used to drop a chain whose RPC failed, so the funding ladder — which picks
+     * a source by iterating that map — could not see the money and reported "no
+     * chain holds enough to send". The balance panel showed zero for the same
+     * reason. Both are statements about the user's funds that were not true.
+     *
+     * Tested on the shape rather than by breaking a network: the contract is
+     * that a failed read is reported separately and never lands in byChain.
+     */
+    const reads = await walletUsdcByChain(
+      '0x0000000000000000000000000000000000000001',
+      ['base', 'polygon'],
+    )
+    const answered = [...reads.byChain.keys()]
+    check(
+      'every chain is either answered or listed unreadable, never both',
+      answered.every((c) => !reads.unreadable.includes(c)) &&
+        answered.length + reads.unreadable.length === 2,
+      `answered=${answered.join(',')} unreadable=${reads.unreadable.join(',')}`,
+    )
+    check(
+      'an unreadable chain is absent from the balances, not present as zero',
+      reads.unreadable.every((c) => !reads.byChain.has(c)),
+      reads.unreadable.join(','),
+    )
+    if (reads.unreadable.length > 0) {
+      console.log(`  \x1b[33m•\x1b[0m ${reads.unreadable.join(', ')} did not answer during this run`)
+    }
   }
 
   // --------------------------------------------------------------- abort flag

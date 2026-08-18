@@ -209,7 +209,11 @@ export interface WalletBalance {
   isTestnet: boolean
   chainId: number
   usdcAddress: string
-  walletUsdc: string
+  /**
+   * Null when the RPC read failed. Deliberately not coerced to "0": a funded
+   * wallet reading as empty is the one wrong answer a balance must never give.
+   */
+  walletUsdc: string | null
   gatewayUsdc: string | null
   gatewayAvailableUsdc: string | null
   /** The Gateway ledger summed across every mainnet domain. */
@@ -226,7 +230,11 @@ export interface WalletBalance {
   spendableUsdc: string | null
   /** Set when the on-chain read succeeded but the Gateway API call did not. */
   gatewayWarning: string | null
-  native: string
+  /** Set when the chain's own RPC could not be read at all. */
+  rpcWarning: string | null
+  /** Mainnet chains whose balance could not be read, so the totals are withheld. */
+  unreadableChains: string[]
+  native: string | null
   nativeSymbol: string
   explorerBase: string | null
 }

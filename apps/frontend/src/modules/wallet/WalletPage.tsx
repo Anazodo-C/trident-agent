@@ -171,7 +171,9 @@ function BalancePanel() {
    */
   const spendable =
     balance?.spendableUsdc ??
-    (balance && gatewayTotal != null
+    // Only when the wallet side was actually read. Adding a null as zero is how
+    // an unreachable RPC turns into a headline figure that is quietly too low.
+    (balance && gatewayTotal != null && balance.walletUsdc != null
       ? String(Number(balance.walletUsdc) + Number(gatewayTotal))
       : null)
 
@@ -256,7 +258,10 @@ function BalancePanel() {
             */}
             {balance.isTestnet ? (
               <>
-                <Row label="USDC (wallet)" value={usdc(balance.walletUsdc)} />
+                <Row
+                  label="USDC (wallet)"
+                  value={balance.walletUsdc == null ? 'unavailable' : usdc(balance.walletUsdc)}
+                />
                 <Row
                   label="USDC (gateway)"
                   value={balance.gatewayUsdc != null ? usdc(balance.gatewayUsdc) : 'unavailable'}
@@ -279,7 +284,7 @@ function BalancePanel() {
             */}
             <Row
               label={`${balance.nativeSymbol} (native, for gas)`}
-              value={Number.parseFloat(balance.native).toFixed(5)}
+              value={balance.native == null ? 'unavailable' : Number.parseFloat(balance.native).toFixed(5)}
             />
           </dl>
 
@@ -305,7 +310,11 @@ function BalancePanel() {
               <dl className="mt-2 flex flex-col gap-1.5 border-l border-[#1A7FFF]/20 pl-3">
                 <Row
                   label="in your wallet"
-                  value={usdc(balance.walletAcrossChainsUsdc ?? balance.walletUsdc)}
+                  value={
+                    (balance.walletAcrossChainsUsdc ?? balance.walletUsdc) == null
+                      ? 'unavailable'
+                      : usdc(balance.walletAcrossChainsUsdc ?? balance.walletUsdc)
+                  }
                 />
                 <Row label="in Gateway" value={usdc(gatewayTotal ?? '0')} />
                 {perChain.length > 0 && (
@@ -334,6 +343,23 @@ function BalancePanel() {
         </div>
       )}
 
+      {/*
+        Said out loud, and said as our problem. A balance that silently reads
+        zero while the wallet is funded is the single most alarming thing this
+        page can show, and the user's instinct — deposit again — is the one
+        action that costs them money.
+      */}
+      {balance?.rpcWarning && (
+        <p className="mt-3 rounded-lg border border-[#FFA040]/40 bg-[#FFA040]/10 p-2.5 text-[11px] leading-relaxed text-[#FFA040]">
+          {balance.rpcWarning}
+        </p>
+      )}
+      {(balance?.unreadableChains?.length ?? 0) > 0 && (
+        <p className="mt-2 text-[11px] leading-relaxed text-[#FFA040]">
+          Totals are withheld because {balance!.unreadableChains.join(', ')} could not be read.
+          Your funds there are unaffected.
+        </p>
+      )}
       {balance?.gatewayWarning && (
         <p className="mt-4 break-words rounded-lg border border-[#FFA040]/30 bg-[#FFA040]/5 p-2.5 text-[11px] leading-relaxed text-[#FFA040]">
           Gateway balance unavailable: {balance.gatewayWarning}

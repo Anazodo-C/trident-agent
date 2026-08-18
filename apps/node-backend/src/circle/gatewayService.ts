@@ -196,10 +196,26 @@ export async function quoteFromEndpoint(
  * One chain failing must not blank the rest — an RPC hiccup on a chain the user
  * has never used should not make the chain they are paying on look unfunded.
  */
+export interface WalletUsdcReads {
+  /** Only chains that answered. */
+  byChain: Map<SupportedChainName, number>
+  /** Chains whose RPC did not answer, which is not the same as holding zero. */
+  unreadable: SupportedChainName[]
+}
+
+/**
+ * USDC held per chain, and which chains could not be asked.
+ *
+ * The distinction is the point. This used to drop failed reads silently, so a
+ * chain whose RPC was rate-limiting looked exactly like a chain holding
+ * nothing — and the funding ladder, which picks a source by iterating this map,
+ * simply could not see the money. A user with a funded wallet on Base got
+ * "no chain holds enough to send", and their balance read zero.
+ */
 export async function walletUsdcByChain(
   address: string,
   chains: SupportedChainName[],
-): Promise<Map<SupportedChainName, number>> {
+): Promise<WalletUsdcReads> {
   const results = await Promise.allSettled(
     chains.map(async (chain) => {
       const config = CHAIN_CONFIGS[chain]
@@ -219,10 +235,12 @@ export async function walletUsdcByChain(
   )
 
   const byChain = new Map<SupportedChainName, number>()
-  for (const result of results) {
+  const unreadable: SupportedChainName[] = []
+  results.forEach((result, i) => {
     if (result.status === 'fulfilled') byChain.set(result.value[0], result.value[1])
-  }
-  return byChain
+    else unreadable.push(chains[i]!)
+  })
+  return { byChain, unreadable }
 }
 
 const GATEWAY_API_MAINNET = 'https://gateway-api.circle.com/v1'

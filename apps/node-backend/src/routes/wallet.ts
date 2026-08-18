@@ -140,19 +140,34 @@ router.all(
     })
 
     // Wallet USDC + native gas are readable from the address alone — no key needed.
-    const [usdcRaw, nativeRaw] = await Promise.all([
-      publicClient
-        .readContract({
-          address: config.usdc,
-          abi: erc20Abi,
-          functionName: 'balanceOf',
-          args: [address],
-        })
-        .catch(() => 0n),
-      publicClient.getBalance({ address }).catch(() => 0n),
+    const [usdcRead, nativeRead] = await Promise.allSettled([
+      publicClient.readContract({
+        address: config.usdc,
+        abi: erc20Abi,
+        functionName: 'balanceOf',
+        args: [address],
+      }),
+      publicClient.getBalance({ address }),
     ])
 
-    const walletUsdc = formatUnitsFixed(usdcRaw, USDC_DECIMALS)
+    /*
+     * A read that failed is not a balance of zero.
+     *
+     * Both of these were `.catch(() => 0n)`, so an RPC that rate-limited us
+     * rendered a funded wallet as empty, with nothing on screen to say the
+     * number was a guess. That is the worst available answer: a user who has
+     * just deposited sees zero and concludes their money is gone, and the one
+     * thing they might do about it — deposit again — is the thing that would
+     * cost them.
+     */
+    const usdcRaw = usdcRead.status === 'fulfilled' ? usdcRead.value : null
+    const nativeRaw = nativeRead.status === 'fulfilled' ? nativeRead.value : null
+    const walletUsdc = usdcRaw === null ? null : formatUnitsFixed(usdcRaw, USDC_DECIMALS)
+    const rpcWarning =
+      usdcRaw === null || nativeRaw === null
+        ? `Could not read the ${chainLabel(chain)} balance right now. The figures below are ` +
+          'incomplete; this is an RPC problem on our side, not a change to your funds.'
+        : null
 
     /*
      * Read the Gateway balance without the user's key.
@@ -186,6 +201,8 @@ router.all(
      */
     let walletAcrossChainsUsdc: string | null = null
     let spendableUsdc: string | null = null
+    /** Chains whose balance could not be read, so the totals are withheld. */
+    let unreadableChains: string[] = []
 
     {
       try {
@@ -208,8 +225,17 @@ router.all(
          * balance acquires a rounding error, and this figure is what the user
          * reads before deciding whether they can afford a run.
          */
-        const walletByChain = await walletUsdcByChain(address, peers).catch(() => null)
-        const totals = spendableTotalUsdc(walletByChain, gatewaySpendableUsdc)
+        const reads = await walletUsdcByChain(address, peers).catch(() => null)
+        // Only totalled when every chain answered. A sum that quietly omits a
+        // chain understates what the user can spend, and understating it is
+        // what makes the agent refuse a run it could have paid for.
+        const totals =
+          reads && reads.unreadable.length === 0
+            ? spendableTotalUsdc(reads.byChain, gatewaySpendableUsdc)
+            : null
+        if (reads && reads.unreadable.length > 0) {
+          unreadableChains = reads.unreadable.map((c) => chainLabel(c))
+        }
         if (totals) {
           walletAcrossChainsUsdc = totals.walletAcrossChains
           spendableUsdc = totals.spendable
@@ -237,7 +263,9 @@ router.all(
       walletAcrossChainsUsdc,
       spendableUsdc,
       gatewayWarning,
-      native: formatEther(nativeRaw),
+      native: nativeRaw === null ? null : formatEther(nativeRaw),
+      rpcWarning,
+      unreadableChains,
       nativeSymbol: config.chain.nativeCurrency.symbol,
       explorerBase: config.chain.blockExplorers?.default.url ?? null,
     })

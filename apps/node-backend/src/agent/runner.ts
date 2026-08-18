@@ -544,6 +544,14 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
 
     /** Rung 2: the money is already on the right chain, in the wrong pot. */
     if (choice.route === 'deposit') {
+      // Absent means unread, not zero — see unreadableChains. Depositing on a
+      // guess of zero submits a transaction that can only be refused.
+      if (wallet && !wallet.has(target)) {
+        throw new Error(
+          `Could not read your ${target} balance, so the agent cannot move funds into Gateway ` +
+            'there. Nothing was charged. Try again in a moment.',
+        )
+      }
       const held = wallet?.get(target) ?? 0
       const amount = sizeFor(held)
       say(`Moving ${amount} USDC into Gateway on ${target} to pay this`)
@@ -597,6 +605,20 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
     }
 
     if (!source) {
+      /*
+       * Say which of the two this is. "No chain holds enough" is a claim about
+       * the user's balances, and making it while some of those balances could
+       * not be read is how a transient RPC failure gets reported as being out
+       * of money.
+       */
+      if (unreadableChains.length > 0) {
+        throw new Error(
+          `Could not read your balance on ${unreadableChains.join(', ')}, so the agent cannot ` +
+            `tell whether there are funds to move to ${target}. Nothing was charged. This is a ` +
+            'temporary problem reaching the network, not a change to your funds; try again in a ' +
+            'moment.',
+        )
+      }
       throw new Error(
         `Paying on ${target} needs ${needed} USDC moved there, and no chain holds enough to ` +
           'send. Nothing was charged.',
@@ -669,9 +691,19 @@ export async function runTask(options: RunTaskOptions): Promise<void> {
    * wallet can hold Gateway balance on a chain and no wallet USDC there, or the
    * reverse, so the two are read and spent independently.
    */
-  const walletBalances = policy.mainnetEnabled
+  const walletReads = policy.mainnetEnabled
     ? await walletUsdcByChain(walletFor('base').address, GATEWAY_MAINNET_CHAINS)
     : undefined
+  const walletBalances = walletReads?.byChain
+  /*
+   * Chains we could not ask, kept apart from chains holding nothing.
+   *
+   * The ladder picks a source by iterating the balances above, so a chain whose
+   * RPC was rate-limiting was not "empty" to it — it was invisible. A user with
+   * a funded wallet on Base got "no chain holds enough to send", which is a
+   * statement about their money that was not true.
+   */
+  const unreadableChains = walletReads?.unreadable ?? []
 
   // Kept in memory as the run proceeds so the summary is written from the live
   // payloads rather than re-read from the truncated copies in the database.

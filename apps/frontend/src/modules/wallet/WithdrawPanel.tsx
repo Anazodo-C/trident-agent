@@ -27,6 +27,11 @@ export function WithdrawPanel() {
   const requestUnlock = useAgentStore((s) => s.requestUnlock)
 
   const balance = activeChain ? balances[activeChain] : undefined
+  /*
+   * Unknown, not zero. `?? '0'` here would offer "use max" of nothing and warn
+   * that a valid amount is over balance, purely because an RPC did not answer.
+   */
+  const walletUsdcKnown = balance?.walletUsdc != null
   const walletUsdc = Number(balance?.walletUsdc ?? '0')
   const gatewayUsdc = Number(balance?.gatewayUsdc ?? '0')
 
@@ -38,7 +43,7 @@ export function WithdrawPanel() {
   const parsed = Number(amount)
   const amountValid = amount.trim() !== '' && Number.isFinite(parsed) && parsed > 0
   const addressValid = isAddress(toAddress.trim())
-  const overBalance = amountValid && parsed > walletUsdc
+  const overBalance = amountValid && walletUsdcKnown && parsed > walletUsdc
 
   /*
    * Gateway funds are withdrawable, just not directly: they have to come back
@@ -145,14 +150,17 @@ export function WithdrawPanel() {
         />
       </label>
       <p className="mb-4 text-[11px] text-slate-500">
-        {usdc(balance?.walletUsdc ?? '0')} in wallet
-        <button
-          type="button"
-          className="ml-2 text-[#00D4FF] transition-colors hover:text-[#7FE7FF]"
-          onClick={() => setAmount(String(walletUsdc))}
-        >
-          use max
-        </button>
+        {walletUsdcKnown ? `${usdc(balance!.walletUsdc!)} in wallet` : 'balance unavailable'}
+        {/* Hidden rather than offering "use max" of a figure we do not have. */}
+        {walletUsdcKnown && (
+          <button
+            type="button"
+            className="ml-2 text-[#00D4FF] transition-colors hover:text-[#7FE7FF]"
+            onClick={() => setAmount(String(walletUsdc))}
+          >
+            use max
+          </button>
+        )}
       </p>
 
       {overBalance && (
