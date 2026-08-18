@@ -23,6 +23,15 @@
     />
     <meta property="og:image" content="/trident-social.png" />
     <meta name="twitter:card" content="summary_large_image" />
+
+    <!--
+      Ownership proof for the Base app registry. Base fetches this page and
+      looks for the tag, so it has to sit in the served HTML rather than be
+      injected by React: the crawler reads the document, not the rendered app.
+      Static in index.html means it survives every route, including the status
+      subdomain, which shares this shell.
+    -->
+    <meta name="base:app_id" content="6a84b97fabf0a9eb2b3c72fc" />
     <!--
       Fonts are self-hosted from /fonts and declared in index.css. They are
       deliberately not loaded from Google's CDN: that sent every visitor's IP to
