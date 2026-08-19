@@ -568,7 +568,24 @@ export async function estimateContractCall(call: ContractCall): Promise<void> {
 export function refusalFor(err: unknown): Error {
   const message = safeErrorMessage(err)
 
-  if (/insufficient/i.test(message) && /gas|native/i.test(message)) {
+  /*
+   * Logged, because nothing else does.
+   *
+   * These become 400s, and the error handler only logs 5xx, so a user hitting a
+   * payment refusal left no server-side trace at all — the last one had to be
+   * reconstructed from chain state and Circle's transaction list. Circle's own
+   * words are the only account of why a payment did not happen.
+   */
+  console.warn('[trident] circle refused a transaction:', message.replace(/\s+/g, ' ').slice(0, 300))
+
+  /*
+   * "…insufficient token when estimating fee" is Circle's phrasing for a wallet
+   * that cannot pay the gas, not one short of the token being moved. It was
+   * read the other way until a user with 0.87 USDC and a fresh gas grant was
+   * told to go and deposit more USDC. The clause is what disambiguates it:
+   * the complaint is about the fee.
+   */
+  if (/insufficient/i.test(message) && /estimating fee|gas|native/i.test(message)) {
     return insufficientFunds(
       'The agent wallet does not hold enough native currency to pay the gas for this ' +
         'transaction. Send a small amount of it to the wallet address shown in Deposit, ' +

@@ -260,6 +260,18 @@ console.log('\n  what a refusal tells the user to do\n')
   check('and says where to fix it', /Deposit/.test(usdc.message), true)
   check('and confirms nothing was taken', /Nothing was charged/.test(usdc.message), true)
 
+  /*
+   * Circle's exact wording, copied from a real refusal. It contains neither
+   * "gas" nor "native", so the earlier rule read it as a token shortfall and
+   * told a user holding 0.87 USDC to deposit more USDC. What they needed was
+   * gas, and the clause that says so is "when estimating fee".
+   */
+  const circleFee = refusalFor(
+    new Error('Failed to execute this request on EVM due to insufficient token when estimating fee.'),
+  )
+  check('Circle\u2019s fee refusal is read as gas, not USDC', /gas/.test(circleFee.message), true)
+  check('and does not send the user to top up USDC', /enough USDC/.test(circleFee.message), false)
+
   const gas = refusalFor(new Error('insufficient funds for gas * price + value'))
   check('a gas shortfall is told apart from a token one', /gas/.test(gas.message), true)
   check('and does not send the user to top up USDC', /enough USDC/.test(gas.message), false)
