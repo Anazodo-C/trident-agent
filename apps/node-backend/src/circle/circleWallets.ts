@@ -403,6 +403,17 @@ export function walletAddressForChain(
   return walletAddressFor(row, circleEnvFor(chain))
 }
 
+/** The chain a numeric EIP-712 chainId refers to, when we support it. */
+function chainForId(chainId: unknown): SupportedChainName | null {
+  if (typeof chainId !== 'number' && typeof chainId !== 'string') return null
+  const id = Number(chainId)
+  if (!Number.isFinite(id)) return null
+  const match = (Object.keys(CHAIN_CONFIGS) as SupportedChainName[]).find(
+    (c) => CHAIN_CONFIGS[c]?.chain.id === id,
+  )
+  return match && isCircleChain(match) ? match : null
+}
+
 /**
  * The signature an x402 payment is made of.
  *
@@ -417,8 +428,28 @@ export async function signTypedDataFor(
   typedData: TypedDataRequest,
 ): Promise<`0x${string}`> {
   try {
+    /*
+     * Signed by the wallet for the chain the domain names.
+     *
+     * All six of an account's Circle wallets share one address and therefore
+     * one key, so the signature bytes would be identical whichever id is used —
+     * but Circle need not accept a request whose domain chainId disagrees with
+     * the wallet it was sent to, and a payment refused at signing is a payment
+     * that never happens. The domain is the authoritative statement of which
+     * chain this authorisation is for, so it selects the wallet.
+     *
+     * A Gateway burn intent has no chainId at all: its domain is name and
+     * version only, deliberately, because the intent is not bound to a chain.
+     * Those fall back to the stored id, which is correct — any wallet of this
+     * address produces the same signature.
+     */
+    const domainChain = chainForId(typedData.domain?.chainId)
+    const walletId = domainChain
+      ? await circleWalletIdFor(wallet.env, wallet.address, domainChain)
+      : wallet.walletId
+
     const response = await circleClient(wallet.env).signTypedData({
-      walletId: wallet.walletId,
+      walletId,
       data: jsonWithBigints(typedData),
     })
     const signature = response.data?.signature
@@ -427,6 +458,54 @@ export async function signTypedDataFor(
   } catch (err) {
     throw httpError(502, `Could not sign the payment: ${safeErrorMessage(err)}`)
   }
+}
+
+/**
+ * The Circle wallet id for a given chain.
+ *
+ * Circle creates one wallet per blockchain, all sharing an address, and infers
+ * which chain a transaction runs on entirely from the id it is given. We store
+ * a single `circle_wallet_id` per account, so every on-chain operation was
+ * being sent against whichever chain happened to come back first from
+ * `createWallets` — a Base deposit estimated and submitted on Polygon.
+ *
+ * It failed in the most confusing way available. The gas check topped up the
+ * wallet on Base, Circle looked at the same address on Polygon where it holds
+ * no native currency, and refused with "the asset amount owned by the wallet is
+ * insufficient for the transaction" — a sentence about an address that had
+ * both USDC and gas, on the chain the user was actually looking at.
+ *
+ * Resolved from Circle rather than from a column, so accounts created before
+ * this are repaired without a migration: the address and the chain are enough
+ * to find the right wallet. Cached because it never changes for a given pair.
+ */
+const walletIdsByChain = new Map<string, string>()
+
+export async function circleWalletIdFor(
+  env: CircleEnv,
+  address: string,
+  chain: SupportedChainName,
+): Promise<string> {
+  const blockchain = circleChainFor(chain)
+  const key = `${env}:${address.toLowerCase()}:${blockchain}`
+  const cached = walletIdsByChain.get(key)
+  if (cached) return cached
+
+  let id: string | undefined
+  try {
+    const res = await circleClient(env).listWallets({ address, blockchain } as never)
+    id = res.data?.wallets?.[0]?.id
+  } catch (err) {
+    throw httpError(502, `Could not look up the agent wallet on ${chain}: ${safeErrorMessage(err)}`)
+  }
+  if (!id) {
+    throw httpError(
+      409,
+      `This account has no agent wallet on ${chain}. Nothing was charged.`,
+    )
+  }
+  walletIdsByChain.set(key, id)
+  return id
 }
 
 export interface ContractCall {
@@ -538,7 +617,7 @@ export async function estimateContractCall(call: ContractCall): Promise<void> {
      */
     const callData = attributedCallData(call)
     await circleClient(call.wallet.env).estimateContractExecutionFee({
-      source: { walletId: call.wallet.walletId },
+      source: { walletId: await circleWalletIdFor(call.wallet.env, call.wallet.address, call.chain) },
       contractAddress: call.contractAddress,
       ...(callData
         ? { callData }
@@ -657,7 +736,7 @@ export async function executeContract(
     // The same bytes the estimate above was taken against.
     const callData = attributedCallData(call)
     const response = await circleClient(call.wallet.env).createContractExecutionTransaction({
-      walletId: call.wallet.walletId,
+      walletId: await circleWalletIdFor(call.wallet.env, call.wallet.address, call.chain),
       contractAddress: call.contractAddress,
       ...(callData
         ? { callData }

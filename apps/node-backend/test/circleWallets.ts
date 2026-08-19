@@ -20,6 +20,7 @@ import {
   refusalFor,
   CIRCLE_SUPPORTED_CHAINS,
 } from '../src/circle/circleWallets.ts'
+import { readFile } from 'node:fs/promises'
 import { toAtomicUsdc, withContext } from '../src/circle/gatewayService.ts'
 import { parseShortfall } from '../src/circle/gatewayMoves.ts'
 
@@ -241,6 +242,62 @@ check(
   parseShortfall(new Error('available 0.001, required 5.001'), 1_000n),
   null,
 )
+
+console.log('\n  which Circle wallet a chain resolves to\n')
+
+/*
+ * Circle creates one wallet per blockchain, all on the same address, and infers
+ * the chain from the wallet id alone. We store one id per account, so every
+ * on-chain operation went to whichever chain came back first from createWallets
+ * — a Base deposit could be estimated and submitted on Polygon.
+ *
+ * The failure was maximally confusing: the gas check topped up Base, Circle
+ * looked at Polygon where the same address holds no native currency, and
+ * refused with a complaint about an asset the wallet demonstrably had. Asserted
+ * on the source, because proving the lookup itself needs live credentials and
+ * this is the property that must not regress: the id handed to Circle is
+ * derived from the chain, never taken from the stored column.
+ */
+{
+  const source = await readFile(
+    new URL('../src/circle/circleWallets.ts', import.meta.url),
+    'utf8',
+  )
+  const submits = [...source.matchAll(/walletId: ([^,\n]+)/g)].map((m) => m[1]!.trim())
+  /* Both transaction paths — the estimate and the submission — must derive the
+   * id from the chain. Signing is handled separately below. */
+  check(
+    'both transaction paths resolve the id per chain',
+    submits.filter((v) => v.includes('circleWalletIdFor')).length,
+    2,
+  )
+  check(
+    'and none is taken straight from the stored column',
+    submits.some((v) => v === 'call.wallet.walletId'),
+    false,
+  )
+  /* The estimate has to agree with the submission, or the fee is quoted on one
+   * chain and the transaction runs on another. */
+  check(
+    'the estimate resolves it the same way',
+    /source: \{ walletId: await circleWalletIdFor/.test(source),
+    true,
+  )
+
+  /*
+   * Signing too. An EIP-3009 domain names the chain it authorises, and Circle
+   * need not honour a request whose domain disagrees with the wallet it was
+   * sent to — so a payment could be refused at signing for the same reason a
+   * deposit was refused at estimation. A Gateway burn intent carries no
+   * chainId and correctly falls back to the stored id.
+   */
+  check(
+    'signing follows the chain named in the domain',
+    /domainChain\s*\n?\s*\?\s*await circleWalletIdFor/.test(source.replace(/\s+/g, ' '))
+      || /const walletId = domainChain/.test(source),
+    true,
+  )
+}
 
 console.log('\n  what a refusal tells the user to do\n')
 
