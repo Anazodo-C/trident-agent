@@ -7,11 +7,11 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://trident-agent-production.up.railway.app/api/:path*"
+      "destination": "https://trident-agent-production-8544.up.railway.app/api/:path*"
     },
     {
       "source": "/auth/:path*",
-      "destination": "https://trident-agent-production.up.railway.app/auth/:path*"
+      "destination": "https://trident-agent-production-8544.up.railway.app/auth/:path*"
     },
     { "source": "/((?!api/|auth/).*)", "destination": "/index.html" }
   ]

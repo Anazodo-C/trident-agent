@@ -99,35 +99,40 @@ is what proves the server and browser key derivations actually agree.
 
 ### Which remote feeds which platform
 
-The two platforms build from **different GitHub repositories**, and nothing in
-either dashboard is visible from here — this cost an afternoon to recover from
-the GitHub deployments API, so it is written down.
+Both platforms now build from the **same repository and the same branch**, so a
+deploy is one push.
 
 | Platform | Remote | Repository | Watches |
 |---|---|---|---|
 | Vercel (frontend) | `origin` | `Anazodo-C/trident-agent` | **`main`** → Production; any other branch → Preview |
-| Railway (backend) | `zach` | `Zach-47/trident-agent` (a fork) | **`v1`** |
-
-The two platforms watch **different branch names**, which is the part that is
-easy to get wrong. A deploy is two pushes of the same commit:
+| Railway (backend) | `origin` | `Anazodo-C/trident-agent` | **`main`** |
 
 ```bash
-git push zach   v1     # backend  — push first, so the API exists
-git push origin main   # frontend — which is built against it
+git push origin main   # deploys both
 ```
 
-Railway first is not cosmetic. Shipping the frontend alone leaves a page calling
-endpoints its backend does not have yet; the status page in that state loads and
-reads "Status unavailable", which looks like a bug rather than a partial deploy.
+This replaced a split where Railway built from `Zach-47/trident-agent` on `v1`
+while Vercel built from `Anazodo-C/trident-agent` on `main` — two repos, two
+branch names, and a deploy that was two pushes to different remotes. A single
+forgotten push looked exactly like a broken build, and working out which
+platform watched which ref cost an afternoon of reading the GitHub deployments
+API. The fork is no longer used.
 
-`zach` is a fork and receives nothing automatically — every backend deploy is an
-explicit push to it. `zach/main` is unused: Railway never reads it, no build
-input depends on it, and nothing in the repo references it.
+The backend moved to the `trident` project on the `anazodo-c` Railway workspace
+in September 2026, after the previous account's trial expired and took the
+deployment down with it. The volume was not recoverable without reactivating
+that account, so the database was rebuilt from empty; the service catalog
+re-syncs itself from Circle's marketplace on boot, which is most of it.
 
-Both branches were kept identical for a long time, which hid all of this. With
-four refs always pushed together, no observation ever distinguished which branch
-either platform was watching, and a single forgotten push looked like a broken
-build.
+### How the frontend reaches the backend
+
+`vercel.json` rewrites `/api/*` and `/auth/*` to the Railway URL, so the browser
+only ever talks to the Vercel origin and `VITE_API_BASE_URL` stays empty in a
+deployed build. **The backend URL is committed in `vercel.json`**, not set in
+Vercel's dashboard — moving the backend means editing that file and pushing.
+It is also why `GOOGLE_REDIRECT_URI` points at the frontend domain rather than
+at Railway.
+
 
 **Verify the deployment, not the push.** A push can succeed while the platform
 does nothing — a lapsed GitHub token or a paused service is silent from the
