@@ -403,11 +403,31 @@ async function main(): Promise<void> {
         options: { kind: string; totalUsdc: number; minimumCapUsdc: number }[]
       } | null
       costing: { capUsdc: number; primaryUsdc: number }
+      error?: string
     }>('/api/agent/plan', {
       method: 'POST',
       headers: auth,
       body: JSON.stringify({ goal: 'Get the current price of bitcoin in USD' }),
     })
+
+    /*
+     * A key that is set but cannot be used is not the same as no key.
+     *
+     * The planner section below already handles this; this one did not, so an
+     * Anthropic account out of credit reported four failures about the spending
+     * cap — a product guarantee that was never exercised, because no plan came
+     * back to test it against. Four red lines pointing at the wrong subsystem
+     * is worse than one yellow line naming the real problem.
+     */
+    if (capped.status === 503) {
+      check(
+        'an unusable planner says so in an actionable way',
+        typeof capped.body?.error === 'string' && !capped.body.error.includes('Internal server'),
+        JSON.stringify(capped.body),
+      )
+      console.log(`  \x1b[33m•\x1b[0m ${capped.body?.error}`)
+      console.log('  \x1b[33m•\x1b[0m the cap gate needs a plan to refuse \u2014 skipped')
+    } else {
 
     const guidance = capped.body?.budgetGuidance
     check('an over-cap goal is not affordable', capped.body?.affordable === false)
@@ -431,6 +451,7 @@ async function main(): Promise<void> {
       after.body?.user?.spendingCapUsdc === 0.0000001,
       String(after.body?.user?.spendingCapUsdc),
     )
+    }
   } else {
     console.log('  \x1b[33m•\x1b[0m ANTHROPIC_API_KEY not set — skipping cap planning checks')
   }
